@@ -1,0 +1,64 @@
+# ============================================
+# 记忆系统配置 (Memory System Configuration)
+# 参考：Claude-Code / Hermes-Agent / OpenClaw 三层记忆架构
+# ============================================
+
+# ---- 记忆管理器全局配置 ----
+manager:
+  max_context_tokens: 100000          # 上下文窗口最大 Token 预算
+  enable_long_term: true            # 是否启用长期记忆
+  enable_compression: true          # 是否启用上下文压缩
+
+# ---- L1 短期记忆 (Short-term Memory) ----
+short_term:
+  compress_threshold: 0.75          # 触发压缩的阈值（占 max_tokens 比例）
+  protect_first_n: 1                # 保护头部消息数（通常保留系统提示）
+  protect_last_n: 4                 # 保护尾部消息数（保留最近对话）
+
+# ---- L2 中期记忆 (Session Store) ----
+session_store:
+  db_path: "logs/memory_sessions.db"  # SQLite 数据库路径（相对项目根目录）
+  wal_mode: true                     # 是否启用 WAL 模式（提高并发）
+  max_retries: 5                     # 写冲突最大重试次数
+
+# ---- L3 长期记忆 (Long-term Memory) ----
+long_term:
+  memory_dir: "workspace/memory"     # 记忆文件目录
+  enable_vector_memory: true         # 是否启用向量记忆（复用 ChromaDB）
+  vector_collection: "long_term_memory"  # ChromaDB collection 名称
+  
+  # 文件记忆配置
+  user_file: "USER.md"               # 用户画像文件名
+  project_file: "MEMORY.md"          # 项目知识文件名
+  daily_dir: "daily"                 # 每日日志子目录
+  
+  # 记忆召回配置
+  recall_top_k: 5                   # 默认召回数量
+  recall_score_threshold: 0.3       # 召回相似度阈值（0~1）
+  
+  # 记忆上下文注入配置
+  max_memory_context_chars: 1000    # 注入系统提示的最大记忆字符数
+  
+  # 记忆去重配置
+  dedup_threshold: 0.92             # 向量记忆去重相似度阈值（0~1），超过则视为重复
+
+# ---- 上下文压缩配置 (Context Compression) ----
+compression:
+  # 压缩模型配置（默认复用主模型，可指定轻量级模型）
+  # model_name: "DeepSeek-V4-Flash"  # 留空表示复用主模型
+  
+  # 压缩提示词
+  prompt_template: |
+    你是一个对话压缩助手。请将以下对话历史压缩成简洁的摘要，保留所有关键信息。
+
+    【压缩要求】
+    1. 保留所有事实性信息、决策、代码修改、错误修复
+    2. 保留用户明确表达的需求和偏好
+    3. 保留工具调用的关键结果
+    4. 去除冗余的寒暄、重复内容
+    5. 使用第三人称客观描述
+
+    【原始对话】
+    {conversation}
+
+    【摘要】（用中文输出，尽量详细但简洁）:

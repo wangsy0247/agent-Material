@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-material"
+version = "0.1.0"
+description = "材料科学领域 LLM Agent 项目"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-anthropic>=0.3.0",
+    "langchain-chroma>=0.1.0",
+    "langchain-community>=0.3.0",
+    "langchain-text-splitters>=0.3.0",
+    "pymatgen>=2024.0.0",
+    "mp-api>=0.40.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.0.0",
+    # FastAPI 服务层
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sse-starlette>=2.0.0",
+    "python-multipart>=0.0.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

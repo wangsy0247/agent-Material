@@ -1,0 +1,2 @@
+rag_prompt_path: "prompt/rag_prompt.txt"
+sys_prompt_path: "prompt/system_prompt.txt"

@@ -1,0 +1,58 @@
+# MCP (Model Context Protocol) 配置
+# 定义项目中所有 MCP Server 的接入信息
+
+servers:
+  # RAG 知识库 MCP Server（本地 stdio 模式）
+  - name: material_rag
+    command: ["python", "-m", "mcp_servers.tools.rag_mcp_server"]
+    transport: stdio
+    enabled: true
+    description: "材料科学 RAG 知识库检索服务"
+
+  # Materials Project MCP Server（本地 stdio 模式）
+  - name: material_project
+    command: ["python", "-m", "mcp_servers.tools.mp_mcp_server"]
+    transport: stdio
+    enabled: true
+    description: "Materials Project 材料数据库服务"
+
+  # 文件系统 MCP Server（第三方，本地 stdio 模式）
+  - name: filesystem
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/mnt/d/Langchain_study/Agent智能体/Agent Material/workspace"]
+    transport: stdio
+    enabled: false
+    description: "本地文件系统访问"
+
+  # RAG MCP Server（远程 SSE 模式）
+  - name: material_rag_remote
+    url: "http://localhost:8001/sse"
+    transport: sse
+    enabled: false
+    description: "远程 RAG 服务（SSE 模式）"
+
+  # Materials Project MCP Server（远程 SSE 模式）
+  - name: material_project_remote
+    url: "http://localhost:8002/sse"
+    transport: sse
+    enabled: false
+    description: "远程 MP 服务（SSE 模式）"
+
+# MCP Client 全局配置
+client:
+  # SSE 连接超时（秒）
+  timeout: 5.0
+  # 单次工具调用超时（秒）
+  tool_timeout: 30.0
+  # 最大并发连接数
+  max_connections: 10
+
+# 安全设置
+security:
+  # 是否要求用户确认敏感操作
+  confirm_sensitive_ops: true
+  # 敏感操作关键词列表
+  sensitive_keywords:
+    - "download"
+    - "write"
+    - "delete"
+    - "exec"

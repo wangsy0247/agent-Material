@@ -1,0 +1,402 @@
+[
+  {
+    "query": "磷酸铁锂的结构和容量是多少",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "磷酸铁锂的结构和容量是多少",
+    "method": "BM25",
+    "k": 10,
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.0,
+    "ndcg": 0.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "磷酸铁锂的结构和容量是多少",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 0.125,
+    "ndcg": 0.333,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "磷酸铁锂的结构和容量是多少",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      10.125,
+      4.125,
+      1.25,
+      0.5625,
+      -3.1875
+    ]
+  },
+  {
+    "query": "NCM 三元材料安全性问题",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "NCM 三元材料安全性问题",
+    "method": "BM25",
+    "k": 10,
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.0,
+    "ndcg": 0.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "NCM 三元材料安全性问题",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 0.125,
+    "ndcg": 0.333,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "NCM 三元材料安全性问题",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      10.1875,
+      -3.4375,
+      -4.8125,
+      -5.0938,
+      -5.5
+    ]
+  },
+  {
+    "query": "固态电解质中硫化物和氧化物哪个好",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "固态电解质中硫化物和氧化物哪个好",
+    "method": "BM25",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 0.143,
+    "ndcg": 0.345,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "固态电解质中硫化物和氧化物哪个好",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "固态电解质中硫化物和氧化物哪个好",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.4,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      7.3125,
+      5.625,
+      -5.2188,
+      -5.875,
+      -6.3125
+    ]
+  },
+  {
+    "query": "硅负极为什么容量衰减快",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "硅负极为什么容量衰减快",
+    "method": "BM25",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 0.111,
+    "ndcg": 0.315,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "硅负极为什么容量衰减快",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "硅负极为什么容量衰减快",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      10.125,
+      0.5625,
+      -4.8125,
+      -4.8125,
+      -5.125
+    ]
+  },
+  {
+    "query": "宽禁带半导体在电动汽车中的应用",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "宽禁带半导体在电动汽车中的应用",
+    "method": "BM25",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 0.2,
+    "ndcg": 0.409,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "宽禁带半导体在电动汽车中的应用",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "宽禁带半导体在电动汽车中的应用",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.4,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      9.3125,
+      8.9375,
+      -8.875,
+      -9.3125,
+      -9.875
+    ]
+  },
+  {
+    "query": "航空发动机用什么高温材料",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "航空发动机用什么高温材料",
+    "method": "BM25",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 0.5,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "航空发动机用什么高温材料",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 12,
+    "scores": []
+  },
+  {
+    "query": "航空发动机用什么高温材料",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      9.0,
+      -2.0625,
+      -5.4688,
+      -5.5,
+      -7.5312
+    ]
+  },
+  {
+    "query": "铂催化剂太贵，有什么替代方案",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "铂催化剂太贵，有什么替代方案",
+    "method": "BM25",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 0.25,
+    "ndcg": 0.5,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "铂催化剂太贵，有什么替代方案",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.1,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "铂催化剂太贵，有什么替代方案",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.2,
+    "mrr": 1.0,
+    "ndcg": 1.0,
+    "retrieved_count": 5,
+    "scores": [
+      8.0,
+      -5.1875,
+      -6.0625,
+      -6.0938,
+      -6.7812
+    ]
+  },
+  {
+    "query": "电池正极材料有哪些种类",
+    "method": "Vector",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.3,
+    "mrr": 1.0,
+    "ndcg": 0.95,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "电池正极材料有哪些种类",
+    "method": "BM25",
+    "k": 10,
+    "recall": 0.0,
+    "precision": 0.0,
+    "mrr": 0.0,
+    "ndcg": 0.0,
+    "retrieved_count": 10,
+    "scores": []
+  },
+  {
+    "query": "电池正极材料有哪些种类",
+    "method": "Hybrid",
+    "k": 10,
+    "recall": 1.0,
+    "precision": 0.3,
+    "mrr": 0.125,
+    "ndcg": 0.361,
+    "retrieved_count": 13,
+    "scores": []
+  },
+  {
+    "query": "电池正极材料有哪些种类",
+    "method": "Rerank",
+    "k": 5,
+    "recall": 1.0,
+    "precision": 0.6,
+    "mrr": 1.0,
+    "ndcg": 0.924,
+    "retrieved_count": 5,
+    "scores": [
+      5.75,
+      5.3125,
+      4.1875,
+      2.8125,
+      1.25
+    ]
+  }
+]

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>材料科学 LLM Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Markdown 渲染（本地，无需翻墙） -->
+    <script src="/static/vendor/marked/marked.min.js"></script>
+    <!-- 代码高亮（本地，无需翻墙） -->
+    <link rel="stylesheet" href="/static/vendor/highlight.js/styles/github-dark.min.css">
+    <script src="/static/vendor/highlight.js/highlight.min.js"></script>
+    <!-- 常用语言高亮支持（本地，无需翻墙） -->
+    <script src="/static/vendor/highlight.js/languages/python.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/bash.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/json.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/yaml.min.js"></script>
+</head>
+<body>
+    <div class="app">
+        <!-- 遮罩层（移动端） -->
+        <div class="overlay" id="overlay"></div>
+
+        <!-- 左栏：会话管理 -->
+        <aside class="sidebar-left" id="sidebarLeft">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">🔬</span>
+                    <span class="logo-text">材料科学 Agent</span>
+                </div>
+                <button class="btn-new" id="btnNewSession" title="新建会话">
+                    <span>+</span> 新会话
+                </button>
+            </div>
+            <div class="session-list" id="sessionList">
+                <div class="empty-state">暂无会话</div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="memory-status" id="memoryStatus">
+                    <span class="dot"></span>
+                    <span>记忆系统就绪</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 中栏：聊天区 -->
+        <main class="chat-main">
+            <div class="chat-header">
+                <button class="btn-toggle" id="btnToggleLeft" title="切换会话列表">☰</button>
+                <div class="chat-title-wrap">
+                    <span class="chat-title" id="chatTitle">材料科学 Agent</span>
+                    <span class="chat-subtitle" id="chatSubtitle">开始一个新对话</span>
+                </div>
+                <button class="btn-toggle" id="btnToggleRight" title="切换参考资料">📚</button>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="welcome-screen" id="welcomeScreen">
+                    <div class="welcome-icon">🔬</div>
+                    <h1>材料科学 LLM Agent</h1>
+                    <p>基于大语言模型的材料科学智能助手</p>
+                    <div class="welcome-examples">
+                        <div class="example-card" data-text="帮我找关于石墨烯的文献">
+                            <div class="example-icon">📄</div>
+                            <div>文献检索</div>
+                            <small>帮我找关于石墨烯的文献</small>
+                        </div>
+                        <div class="example-card" data-text="MOF 材料的比表面积一般是多少？">
+                            <div class="example-icon">🔍</div>
+                            <div>知识问答</div>
+                            <small>MOF 材料的比表面积一般是多少？</small>
+                        </div>
+                        <div class="example-card" data-text="下载一种稳定的钙钛矿结构">
+                            <div class="example-icon">⬇️</div>
+                            <div>材料下载</div>
+                            <small>下载一种稳定的钙钛矿结构</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-wrap">
+                    <textarea
+                        class="chat-input"
+                        id="chatInput"
+                        placeholder="输入问题，按 Enter 发送，Shift+Enter 换行..."
+                        rows="1"
+                    ></textarea>
+                    <button class="btn-send" id="btnSend" title="发送">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
+            </div>
+        </main>
+
+        <!-- 右栏：参考资料 -->
+        <aside class="sidebar-right" id="sidebarRight">
+            <div class="sidebar-header">
+                <h2>📚 参考资料</h2>
+                <span class="source-count" id="sourceCount"></span>
+            </div>
+            <div class="sources-list" id="sourcesList">
+                <div class="empty-state">
+                    <div class="empty-icon">📖</div>
+                    <div>发送问题后将显示相关文献</div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

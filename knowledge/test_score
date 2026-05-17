@@ -1,0 +1,307 @@
+Query Embedding ←── Embedding 模型 ──→ Doc Embedding
+          ↓                                    ↓
+     1024 维向量                        1024 维向量
+          ↓──────── Cosine Similarity ────────→
+                                score = (a·b) / (|a||b|)
+
+  你项目中的调用链
+  ────────────────
+
+  # vector_store.py
+  vector_retriever = self.vector_store.as_retriever(
+      search_type="similarity_score_threshold",
+      search_kwargs={"k": 10, "score_threshold": 0.3},
+  )
+
+  内部发生了什么？
+
+  # 1. 把 Query 转成向量
+  query_embedding = embedding_model.embed_query("用户问题")
+
+  # 2. Chroma 做 ANN 近似最近邻搜索
+  #    Chroma 默认使用 cosine distance（范围 [0, 2]）
+  #    distance = 0 表示完全相同，distance = 2 表示完全相反
+  results = chroma_collection.query(
+      query_embeddings=[query_embedding],
+      n_results=10
+  )
+
+  # 3. LangChain 把 distance 转成 similarity
+  #    similarity = 1 - distance / 2
+  #    所以 distance=0.5 → similarity=0.75
+
+  ⚠️ 一个关键问题（诊断脚本发现的）
+  ────────────────────────────────
+
+  Chroma 实际返回的是 distance，但你的 score_threshold=0.3 配置存在歧义：
+
+  ┌───────────────────┬────────┬──────────────────────────┐
+  │ 返回的原始值      │ 含义   │ 是否该通过 threshold=0.3 │
+  ├───────────────────┼────────┼──────────────────────────┤
+  │ distance = 0.5    │ 较相似 │ ❌ 0.5 > 0.3，会被过滤掉 │
+  │ similarity = 0.75 │ 较相似 │ ✅ 0.75 > 0.3，应该保留  │
+  └───────────────────┴────────┴──────────────────────────┘
+
+  诊断脚本看到的现象：
+  原始相似度分数：#1 score=0.9568, #2 score=1.0083...
+
+  这些 score > 0.3 的值实际上是 distance！LangChain 的 similarity_search_with_score 直接透传了 distance。但 as_ret
+  riever(search_type="similarity_score_threshold") 内部会再做一层转换...
+
+  实际上更混乱的是：不同版本的 LangChain-Chroma 集成对 score 的处理不一致。有些版本里 similarity_score_threshold
+  的 score_threshold 对比的是转换后的 similarity，有些对比的是原始 distance。
+
+  这解释了为什么你的生产环境经常只返回 1 条文档——大部分文档的 distance 在 0.8~1.2 之间，被错误地过滤掉了。
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Stage 2：BM25 关键词检索
+  ────────────────────────
+
+  原理：基于词频和逆文档频率
+  ──────────────────────────
+
+  $$BM25(q, d) = \sum_{i=1}^{n} IDF(q_i) \cdot \frac{f(q_i, d) \cdot (k_1 + 1)}{f(q_i, d) + k_1 \cdot (1 - b + b \
+  cdot \frac{|d|}{avgdl})}$$
+
+  ┌─────────────┬────────────────────────────────────┐
+  │ 符号        │ 含义                               │
+  ├─────────────┼────────────────────────────────────┤
+  │ $f(q_i, d)$ │ 词 $q_i$ 在文档 $d$ 中的出现频率   │
+  │ $IDF(q_i)$  │ 逆文档频率（越稀有的词权重越高）   │
+  │ $           │ d                                  │
+  │ $avgdl$     │ 平均文档长度                       │
+  │ $k_1, b$    │ 调节参数（默认 $k_1=1.5, b=0.75$） │
+  └─────────────┴────────────────────────────────────┘
+
+  你项目中的实现
+  ──────────────
+
+  from langchain_community.retrievers import BM25Retriever
+
+  bm25 = BM25Retriever.from_documents(all_documents, k=10)
+  docs = bm25.invoke("用户查询")
+
+  BM25 的特点：
+  • ✅ 对精确词匹配很强（如"LiFePO4"、"NCM811"）
+  • ❌ 对语义改写弱（如"高镍三元" vs "NCM"）
+  • ❌ 对长文档会惩罚（因为 $|d|$ 在分母）
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Stage 3：混合检索（RRF 融合）
+  ─────────────────────────────
+
+  原理：Reciprocal Rank Fusion
+  ────────────────────────────
+
+  向量检索和 BM25 各自给出排序，RRF 把它们融合成一个新排序：
+
+  $$RRF_Score(d) = \sum_{r \in R} \frac{1}{k + rank_r(d)}$$
+
+  ┌─────────────┬────────────────────────────────┐
+  │ 符号        │ 含义                           │
+  ├─────────────┼────────────────────────────────┤
+  │ $R$         │ 所有参与融合的检索器集合       │
+  │ $rank_r(d)$ │ 文档 $d$ 在检索器 $r$ 中的排名 │
+  │ $k$         │ 平滑常数（通常取 60）          │
+  └─────────────┴────────────────────────────────┘
+
+  你项目中的实现
+  ──────────────
+
+  from langchain.retrievers import EnsembleRetriever
+
+  hybrid = EnsembleRetriever(
+      retrievers=[vector_retriever, bm25_retriever],
+      weights=[0.7, 0.3],  # 向量 70% + BM25 30%
+  )
+
+  LangChain 的 EnsembleRetriever 内部逻辑：
+
+  def rank_fusion(self, query, retrievers):
+      # 1. 每个检索器返回 Top-K
+      vector_results = vector_retriever.invoke(query)   # [doc_A, doc_B, doc_C]
+      bm25_results = bm25_retriever.invoke(query)       # [doc_B, doc_D, doc_A]
+
+      # 2. 给每个结果按排名打分（RRF 公式）
+      # doc_A: vector_rank=1 → 1/(60+1) = 0.0164
+      #        bm25_rank=3   → 1/(60+3) = 0.0159
+      #        总分 = 0.7*0.0164 + 0.3*0.0159 = 0.0163
+
+      # 3. 按总分降序排列，去重后返回
+
+  注意：你的 weights=[0.7, 0.3] 在 LangChain 的 EnsembleRetriever 中不是直接乘到 RRF 分数上。实际上 EnsembleRetrie
+  ver 有两种模式：
+  • EnsembleRetriever 默认使用 RRF（Reciprocal Rank Fusion）
+  • 有些版本支持 weight 参数来调整各检索器的影响力
+  从源码看，weights 在 RRF 模式下会影响各检索器结果进入候选池的优先级。
+
+  测试中发现的问题
+  ────────────────
+
+  ┌────────────────────────┬────────────┬────────────┬──────────────────┐
+  │ 查询                   │ Vector MRR │ Hybrid MRR │ 现象             │
+  ├────────────────────────┼────────────┼────────────┼──────────────────┤
+  │ 电池正极材料有哪些种类 │ 1.00       │ 0.12       │ 融合后排序变差了 │
+  └────────────────────────┴────────────┴────────────┴──────────────────┘
+
+  根因：向量检索已经把 doc_0, doc_1, doc_2 排在了前 3 位（MRR=1.0），但 RRF 融合后 BM25 把不相关的文档推到了前面，
+  导致 MRR 暴跌到 0.12。
+
+  结论：当向量检索本身已经很准的时候，加入 BM25 反而可能引入噪声。
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Stage 4：CrossEncoder 重排序
+  ────────────────────────────
+
+  原理：Query 和 Doc 做交叉注意力
+  ───────────────────────────────
+
+  输入: [CLS] Query: 硅负极为什么容量衰减快 [SEP] Doc: 硅基负极材料的理论比容量...
+         ↓
+      Transformer (Cross-Attention: Query token 和 Doc token 互相看)
+         ↓
+      [CLS] token → MLP → sigmoid → 0.92 (高度相关)
+
+  与双塔模型（BiEncoder）的区别：
+
+  ┌──────────┬────────────────────────────┬──────────────────────────────────┐
+  │          │ BiEncoder (Embedding)      │ CrossEncoder (Reranker)          │
+  ├──────────┼────────────────────────────┼──────────────────────────────────┤
+  │ 编码方式 │ Query 和 Doc 分别独立编码  │ Query 和 Doc 拼接一起编码        │
+  │ 交互     │ 无交互，只在向量空间比距离 │ 每层 Self-Attention 都互相看     │
+  │ 速度     │ 快（Doc 向量可预计算）     │ 慢（每次打分都要过 Transformer） │
+  │ 精度     │ 低                         │ 高                               │
+  └──────────┴────────────────────────────┴──────────────────────────────────┘
+
+  你项目中的实现
+  ──────────────
+
+  from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+  from langchain.retrievers.document_compressors import CrossEncoderReranker
+
+  cross_encoder = HuggingFaceCrossEncoder(
+      model_name="/mnt/d/models/Qwen3-Reranker-0.6B",
+      model_kwargs={"device": "cpu"},
+  )
+
+  compressor = CrossEncoderReranker(model=cross_encoder, top_n=3)
+
+  # 对混合检索的 10 条结果重新打分，只保留 Top-3
+  reranked_docs = compressor.compress_documents(hybrid_docs, query)
+
+  注意 API 变更：新版本的 HuggingFaceCrossEncoder 使用 score() 方法，而不是 predict()。你项目中的 vector_store.py
+  如果还在用 predict() 会报错。
+
+  打分输出示例
+  ────────────
+
+  Query: "硅负极为什么容量衰减快"
+
+  混合检索召回 10 条 → CrossEncoder 逐条打分：
+
+  doc_4 (硅负极)        score = 8.92   ← 最高分，保留
+  doc_3 (石墨负极)       score = 2.15
+  doc_0 (磷酸铁锂)       score = 1.87
+  doc_5 (硫化物电解质)    score = 0.43
+  ...
+
+  最终返回 Top-3: [doc_4, doc_3, doc_0]
+
+  分数特点：
+  • 没有固定范围（不是 0~1），只是相对大小
+  • 分数差异大表示模型很有信心
+  • 分数都挤在一起表示区分度低（可能需要换模型或调阈值）
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  三、各阶段分数的流动全景图
+  ──────────────────────────
+
+  用户查询 "磷酸铁锂的结构和容量"
+            │
+            ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Stage 1: 向量检索                                           │
+  │  embedding_model.embed_query() → Chroma ANN 搜索             │
+  │  返回: [(doc_0, distance=0.12), (doc_3, distance=0.45)...]  │
+  │  ↓ 转成 similarity = 1 - distance/2                         │
+  │  相似度: [0.94, 0.78, 0.65...]                               │
+  └─────────────────────────────────────────────────────────────┘
+            │
+            ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Stage 2: BM25 检索                                          │
+  │  基于词频打分                                                 │
+  │  返回: [(doc_0, bm25_score=2.3), (doc_1, bm25_score=1.8)]   │
+  │  注意：BM25 分数是任意正数，没有固定上限                       │
+  └─────────────────────────────────────────────────────────────┘
+            │
+            ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Stage 3: RRF 融合 (EnsembleRetriever)                       │
+  │  doc_0: vector_rank=1 → 1/61 = 0.0164                        │
+  │         bm25_rank=2   → 1/62 = 0.0161                        │
+  │         RRF_score = 0.0164 + 0.0161 = 0.0325                 │
+  │  按 RRF_score 排序，去重                                      │
+  └─────────────────────────────────────────────────────────────┘
+            │
+            ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Stage 4: CrossEncoder 重排序                                 │
+  │  输入 10 条，逐条过 Qwen3-Reranker-0.6B                       │
+  │  (query, doc_0) → score = 8.91                               │
+  │  (query, doc_3) → score = 3.24                               │
+  │  (query, doc_1) → score = 1.05                               │
+  │  排序后取 Top-3: [doc_0, doc_3, doc_1]                       │
+  └─────────────────────────────────────────────────────────────┘
+            │
+            ▼
+      送入 LLM 生成回答
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  四、Precision 和 NDCG 的计算
+  ────────────────────────────
+
+  Precision@K
+  ───────────
+
+  $$Precision@K = \frac{\text{前 K 条中命中的相关 doc_id 数}}{K}$$
+
+  NDCG@K（Normalized Discounted Cumulative Gain）
+  ───────────────────────────────────────────────
+
+  # DCG: 排名越靠前，贡献越大
+  DCG = rel_1/1 + rel_2/log2(2) + rel_3/log2(3) + ... + rel_K/log2(K)
+
+  # IDCG: 理想情况下的 DCG（所有相关文档排在最前面）
+  IDCG = 1/1 + 1/log2(2) + 1/log2(3) + ...
+
+  # NDCG = DCG / IDCG
+
+  为什么用 NDCG？
+
+  因为它同时考虑了召回了多少和排得对不对位置。把相关文档排在第 1 位比排在第 10 位得分高。
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  五、一个关键发现：你的 score_threshold 配置有问题
+  ─────────────────────────────────────────────────
+
+  从诊断脚本的输出可以看到：
+
+  原始相似度分数:
+    #1 score=0.9568
+    #2 score=1.0083
+    #3 score=1.0865
+
+  如果这些是 similarity（越大越好），那它们都 < 0.3 的阈值，应该全被过滤掉。但实际上 as_retriever 只返回了 1 条，
+  而手动调用返回了 10 条。
+
+  真相：Chroma 的 similarity_search_with_score 返回的是 cosine distance（越小越好）。LangChain 的 similarity_score
+  _threshold 在某些版本中会错误地把 distance 当 similarity 来比较阈值，导致：
+
+  • distance = 0.95 → 被当成 similarity = 0.95 → 通过 0.3 阈值 ❌
+  • distance = 1.2 → 被当成 similarity = 1.2 → 也通过 0.3 阈值 ❌
+  但 as_retriever 内部又做了另一套转换，导致行为不一致。
