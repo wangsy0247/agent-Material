@@ -78,6 +78,15 @@ async def lifespan(app: FastAPI):
 
     # ===== Shutdown =====
     logger.info("🛑 服务关闭中...")
+
+    # 关闭 MCP 长连接（连接池释放）
+    try:
+        from agent.tools.mcp_tool_manager import close_mcp_connections
+        await close_mcp_connections()
+        logger.info("✅ MCP 连接已关闭")
+    except Exception as e:
+        logger.warning(f"⚠️ MCP 连接关闭失败: {e}")
+
     logger.info("=" * 50)
 
 

@@ -30,20 +30,20 @@ def format_sse_event(event_type: str, content: str | dict | list | None = None) 
 
 
 def _ensure_session(mm: MemoryManager, session_id: str | None) -> str:
-    """确保有活跃会话，自动创建或加载"""
+    """确保有活跃会话，自动创建或加载（方案1：按 session_id 隔离）"""
     if session_id and session_id != "default":
-        # 尝试加载已有会话
+        # 已经在内存池中，直接返回
+        if session_id in mm._session_pool:
+            return session_id
+        # 尝试从 SQLite 加载已有会话
         if mm.load_session(session_id):
             return session_id
         else:
             # 会话不存在，创建新会话
             return mm.create_session(title=f"会话 {session_id[:8]}")
     
-    # 没有指定 session_id，检查是否有当前会话
-    if mm._current_session_id:
-        return mm._current_session_id
-    
-    # 创建新会话
+    # 没有指定 session_id（或传了 "default"），创建新会话
+    # 注意：不再复用全局 _current_session_id，避免并发下会话错乱
     return mm.create_session(title="Agent 对话")
 
 
@@ -123,13 +123,10 @@ async def agent_chat(
         if memory_status:
             yield format_sse_event("status", {"memory": memory_status})
         
-        # 发送上下文统计
+        # 发送上下文统计（从指定会话的短期记忆中获取）
+        session_stats = mm.get_session_stats(active_session_id)
         yield format_sse_event("status", {
-            "context": {
-                "messages_in_history": len(mm.short_term.messages),
-                "total_tokens": mm.short_term.total_tokens,
-                "compression_count": mm.short_term._context.compression_count,
-            }
+            "context": session_stats
         })
         
         full_answer = ""
@@ -145,9 +142,10 @@ async def agent_chat(
                     yield format_sse_event("token", chunk)
             
             # 正常结束
+            done_stats = mm.get_session_stats(active_session_id)
             yield format_sse_event("done", {
                 "session_id": active_session_id,
-                "total_tokens": mm.short_term.total_tokens,
+                "total_tokens": done_stats["total_tokens"],
             })
             logger.info(
                 f"[Agent SSE] 请求完成 | session={active_session_id} | "

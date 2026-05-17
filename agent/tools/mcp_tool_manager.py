@@ -1,10 +1,16 @@
 """
 MCP 工具管理器 — 将外部 MCP Server 的工具集成到 Agent 中
 
+企业模式（阶段1）：SSE 独立服务 + 连接池长连接复用
+
 设计思路：
-    1. 初始化阶段（lifespan startup）：连接各 MCP Server，发现工具元数据
-    2. 运行阶段（Agent 推理）：将 MCP 工具转为 LangChain BaseTool，Agent 通过标准接口调用
-    3. 每次工具调用时创建临时 MCP 连接（简单可靠，无需管理长连接生命周期）
+    1. 初始化阶段（lifespan startup）：连接各 MCP Server，建立长连接并缓存
+    2. 运行阶段（Agent 推理）：复用已有长连接调用工具，避免每次重建连接
+    3. 关闭阶段（lifespan shutdown）：优雅关闭所有长连接
+
+连接策略对比：
+    - 开发模式（stdio + 调用时重连）：每次调用新建子进程，简单但延迟高（~500ms）
+    - 企业模式（sse + 连接池）：长连接复用，延迟低（~10ms），支持独立部署
 
 使用：
     # 在 api_server.py lifespan 中初始化
@@ -13,6 +19,9 @@ MCP 工具管理器 — 将外部 MCP Server 的工具集成到 Agent 中
     # 在 Agent 中获取工具
     from agent.tools.agent_tools import get_all_tools
     tools = get_all_tools()  # 原生工具 + MCP 工具
+
+    # 在 lifespan shutdown 中关闭连接
+    await close_mcp_connections()
 """
 
 from __future__ import annotations
@@ -39,9 +48,10 @@ class MCPToolManager:
     负责从 config/mcp_config.yaml 读取配置，连接启用的 MCP Server，
     将 MCP Tool 转换为 LangChain BaseTool，供 Agent 使用。
 
-    采用"发现时连接、调用时重连"的策略：
-    - discover()：建立临时连接获取工具元数据（名称、描述、参数Schema）
-    - get_tools()：基于元数据创建 LangChain Tool，每次调用时重新建立 MCP 连接
+    采用"长连接复用"策略：
+    - discover()：建立长连接，缓存 MCPClient 实例，获取工具元数据
+    - get_tools()：基于元数据创建 LangChain Tool，调用时复用已有连接
+    - close_all()：应用关闭时优雅释放所有连接
     """
 
     def __init__(self):
@@ -51,12 +61,14 @@ class MCPToolManager:
         self._tool_server_map: dict[str, str] = {}
         # server_name -> 连接参数
         self._connection_params: dict[str, dict] = {}
+        # server_name -> MCPClient 长连接实例（连接池核心）
+        self._clients: dict[str, MCPClient] = {}
 
     async def discover(self) -> None:
         """发现所有启用的 MCP Server 的工具列表。
 
-        读取 config/mcp_config.yaml，连接每个 enabled=true 的 Server，
-        获取工具元数据后断开连接。
+        读取 config/mcp_config.yaml，为每个 enabled=true 的 Server
+        建立长连接并缓存，获取工具元数据后保持连接不关闭。
         """
         config_path = os.path.join(
             os.path.dirname(__file__), "..", "..", "config", "mcp_config.yaml"
@@ -72,22 +84,39 @@ class MCPToolManager:
             transport = server_cfg.get("transport", "stdio")
 
             try:
+                client = MCPClient()
                 if transport == "stdio":
                     cmd = server_cfg["command"]
-                    async with MCPClient.stdio(cmd[0], *cmd[1:]) as client:
-                        self._register_tools(name, client, transport, command=cmd[0], args=cmd[1:])
+                    await client.connect_stdio(cmd[0], *cmd[1:])
+                    self._register_tools(name, client, transport, command=cmd[0], args=cmd[1:])
                 elif transport == "sse":
                     url = server_cfg["url"]
-                    async with MCPClient.sse(url) as client:
-                        self._register_tools(name, client, transport, url=url)
+                    timeout = server_cfg.get("timeout", 5.0)
+                    await client.connect_sse(url, timeout=timeout)
+                    self._register_tools(name, client, transport, url=url)
 
+                # 缓存长连接
+                self._clients[name] = client
                 logger.info(
-                    f"[MCPToolManager] 发现 Server '{name}' | "
+                    f"[MCPToolManager] 已连接 Server '{name}' (transport={transport}) | "
                     f"工具: {[t['name'] for t in self._server_tools.get(name, [])]}"
                 )
 
             except Exception as e:
-                logger.error(f"[MCPToolManager] 发现 Server '{name}' 失败: {e}")
+                logger.error(f"[MCPToolManager] 连接 Server '{name}' 失败: {e}")
+
+    async def close_all(self) -> None:
+        """关闭所有 MCP 长连接，释放资源。
+
+        应在应用 lifespan shutdown 阶段调用，确保优雅退出。
+        """
+        for name, client in list(self._clients.items()):
+            try:
+                await client.close()
+                logger.info(f"[MCPToolManager] 已关闭 Server '{name}' 的连接")
+            except Exception as e:
+                logger.warning(f"[MCPToolManager] 关闭 Server '{name}' 连接失败: {e}")
+        self._clients.clear()
 
     def _register_tools(
         self,
@@ -121,7 +150,7 @@ class MCPToolManager:
         for server_name, tool_metas in self._server_tools.items():
             conn_params = self._connection_params[server_name]
             for meta in tool_metas:
-                lc_tool = self._create_langchain_tool(meta, conn_params)
+                lc_tool = self._create_langchain_tool(meta, conn_params, server_name)
                 tools.append(lc_tool)
         return tools
 
@@ -129,12 +158,20 @@ class MCPToolManager:
         self,
         meta: dict[str, Any],
         conn_params: dict[str, Any],
+        server_name: str,
     ) -> BaseTool:
         """为单个 MCP Tool 创建 LangChain Tool。
 
-        关键设计：_arun 中每次调用都新建 MCP 连接。
-        这虽然有一定开销，但避免了长连接生命周期管理的复杂性，
-        且与 stdio 子进程模式的设计理念一致。
+        关键设计：复用 discover() 阶段建立的长连接（self._clients[server_name]），
+        避免每次调用时重建 MCP 连接，显著降低延迟。
+
+        Args:
+            meta: 工具元数据（name, description, parameters）
+            conn_params: 连接参数（type, url, command, args）
+            server_name: 所属 MCP Server 名称
+
+        Returns:
+            LangChain BaseTool 实例
         """
         name = meta["name"]
         description = meta["description"]
@@ -148,15 +185,14 @@ class MCPToolManager:
             logger.warning(f"[MCPToolManager] 工具 '{name}' 参数模型构建失败: {e}")
 
         async def _arun(**kwargs: Any) -> str:
-            """异步调用：创建临时 MCP 连接并调用工具。"""
-            if conn_params["type"] == "stdio":
-                async with MCPClient.stdio(
-                    conn_params["command"], *conn_params["args"]
-                ) as client:
-                    return await client.call_tool(name, kwargs)
-            else:  # sse
-                async with MCPClient.sse(conn_params["url"]) as client:
-                    return await client.call_tool(name, kwargs)
+            """异步调用：复用已有的长连接。"""
+            client = self._clients.get(server_name)
+            if client is None:
+                raise RuntimeError(
+                    f"MCP Server '{server_name}' 未连接。"
+                    f"请确认服务已启动且 discover() 已执行。"
+                )
+            return await client.call_tool(name, kwargs)
 
         def _run(**kwargs: Any) -> str:
             """同步调用包装。"""
@@ -187,6 +223,14 @@ class MCPToolManager:
                 result.append({**meta, "server": server_name})
         return result
 
+    def get_client(self, server_name: str) -> MCPClient | None:
+        """获取指定 Server 的长连接客户端（用于健康检查等高级操作）。"""
+        return self._clients.get(server_name)
+
+    def is_connected(self, server_name: str) -> bool:
+        """检查指定 Server 是否已建立长连接。"""
+        return server_name in self._clients and self._clients[server_name]._session is not None
+
 
 # ------------------------------------------------------------------
 # 模块级便捷函数
@@ -200,6 +244,7 @@ async def init_mcp_tools() -> list[BaseTool]:
         async def lifespan(app: FastAPI):
             await init_mcp_tools()
             yield
+            await close_mcp_connections()
     """
     global _mcp_tool_manager
     _mcp_tool_manager = MCPToolManager()
@@ -207,6 +252,13 @@ async def init_mcp_tools() -> list[BaseTool]:
     tools = _mcp_tool_manager.get_tools()
     logger.info(f"[MCPToolManager] 共加载 {len(tools)} 个 MCP 工具")
     return tools
+
+
+async def close_mcp_connections() -> None:
+    """关闭所有 MCP 长连接（在应用 lifespan shutdown 中调用）。"""
+    global _mcp_tool_manager
+    if _mcp_tool_manager is not None:
+        await _mcp_tool_manager.close_all()
 
 
 def get_mcp_tools() -> list[BaseTool]:

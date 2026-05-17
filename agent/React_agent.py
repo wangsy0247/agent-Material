@@ -66,21 +66,24 @@ class ReactAgent:
         )
 
     def _ensure_session(self, session_id: str | None = None) -> str:
-        """确保有活跃的会话，自动创建或加载"""
+        """确保有活跃的会话，自动创建或加载
+
+        方案1（session_pool 隔离）：通过 session_id 显式路由到对应的短期记忆，
+        不再依赖全局 _current_session_id。
+        """
         if not self.memory_manager:
             return session_id or "default"
 
-        # 如果指定了 session_id 且与当前不同，尝试加载
-        if session_id and session_id != self.memory_manager._current_session_id:
-            if not self.memory_manager.load_session(session_id):
-                # 加载失败，创建新会话
-                session_id = self.memory_manager.create_session(title=f"会话 {session_id[:8]}")
+        # 如果指定了 session_id，确保它在内存池中
+        if session_id:
+            if session_id not in self.memory_manager._session_pool:
+                if not self.memory_manager.load_session(session_id):
+                    # 加载失败（该 ID 在 SQLite 中也不存在），创建新会话
+                    session_id = self.memory_manager.create_session(title=f"会话 {session_id[:8]}")
+            return session_id
 
-        # 如果没有当前会话，自动创建
-        if not self.memory_manager._current_session_id:
-            session_id = self.memory_manager.create_session(title="Agent 对话")
-
-        return self.memory_manager._current_session_id
+        # 没有指定 session_id，创建新会话
+        return self.memory_manager.create_session(title="Agent 对话")
 
     def excutor_stream(self, query, session_id: str | None = None):
         """执行 Agent 流式推理，集成记忆系统
@@ -96,11 +99,12 @@ class ReactAgent:
         active_session_id = self._ensure_session(session_id)
 
         if self.memory_manager:
-            # 添加用户消息到记忆系统
-            self.memory_manager.add_user_message(query)
+            # 添加用户消息到指定会话的记忆系统
+            self.memory_manager.add_user_message(active_session_id, query)
 
-            # 构建带记忆的完整上下文
+            # 构建带记忆的完整上下文（从指定会话的短期记忆中获取历史）
             context_messages = self.memory_manager.build_context(
+                session_id=active_session_id,
                 query=query,
                 include_memory=True,
             )
@@ -152,9 +156,9 @@ class ReactAgent:
                     full_answer += text
                     yield text.strip() + "\n"
 
-        # 保存助手回复到记忆系统
+        # 保存助手回复到指定会话的记忆系统
         if self.memory_manager and full_answer:
-            self.memory_manager.add_assistant_message(full_answer.strip())
+            self.memory_manager.add_assistant_message(active_session_id, full_answer.strip())
             logger.info(f"[ReactAgent] 对话已保存 | session={active_session_id}")
 
     def excutor(self, query, session_id: str | None = None) -> str:

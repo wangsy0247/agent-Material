@@ -54,8 +54,4 @@ def get_memory_manager() -> MemoryManager:
     - L2 中期记忆：SQLite 会话持久化
     - L3 长期记忆：文件 + 向量检索
     """
-    return MemoryManager(
-        max_context_tokens=8000,
-        enable_long_term=True,
-        enable_compression=True,
-    )
+    return MemoryManager()

@@ -1,25 +1,32 @@
 """
-Agent 工具集合 — 原生 LangChain Tool + MCP 工具
+Agent 工具集合 — 完全解耦架构
 
-提供统一的工具获取接口：
-    - get_native_tools(): 仅返回原生 LangChain 工具
-    - get_all_tools(): 返回原生工具 + MCP 工具（混合模式）
+本地工具（原生 LangChain Tool）：
+    - rag_summary: RAG 检索 + 总结（直接函数调用，不走 MCP）
 
-MCP 工具初始化：
-    需要在应用 lifespan startup 中调用 init_mcp_tools()，
-    否则 get_all_tools() 只会返回原生工具（自动降级）。
+MCP 工具（远程 JSON-RPC）：
+    - mp_download: 下载材料结构（通过 MCP Server）
+    - mp_query: 查询材料属性（通过 MCP Server）
+    - mp_list: 列出下载历史（通过 MCP Server）
+
+解耦原则：
+    1. RAG 能力保留在本地（进程内调用，低延迟）
+    2. Materials Project 能力完全通过 MCP 暴露（独立部署）
+    3. 不再存在功能重复的两套实现
+
+使用：
+    from agent.tools.agent_tools import get_all_tools
+    tools = get_all_tools()  # 本地 RAG + MCP MP
 """
 
 from __future__ import annotations
 
 from langchain_core.tools import BaseTool, tool
 
-from agent.tools.mp_downloader import MaterialsProjectDownloader
 from utils.logger import logger
 
 # 延迟初始化：避免模块导入时就实例化重量级对象
 _rag_service = None
-_mp_downloader = None
 
 
 def _get_rag_service():
@@ -32,48 +39,23 @@ def _get_rag_service():
     return _rag_service
 
 
-def _get_mp_downloader():
-    """懒加载 MaterialsProjectDownloader。"""
-    global _mp_downloader
-    if _mp_downloader is None:
-        _mp_downloader = MaterialsProjectDownloader()
-    return _mp_downloader
-
-
 # ================================================================
-# 原生 LangChain Tools
+# 本地 LangChain Tools（RAG — 进程内直接调用）
 # ================================================================
 
 @tool(description="从向量数据库中检索参考资料并进行总结")
 def rag_summary(query: str) -> str:
+    """从材料科学向量知识库中检索相关文献，并基于检索结果生成综合回答。
+
+    适用于查询材料性质、合成方法、应用场景等专业问题。
+
+    Args:
+        query: 用户查询，如"石墨烯的导电性如何？"
+
+    Returns:
+        基于检索结果生成的综合回答
+    """
     return _get_rag_service().get_summary(query)
-
-
-@tool(
-    description="根据化学式从 Materials Project 数据库下载材料结构（POSCAR）和属性文件"
-)
-def mp_download_tool(formula: str) -> str:
-    """
-    调用 Materials Project 下载工具，检索并保存指定化学式的材料。
-    若该材料已存在于本地历史记录中，会返回重复提示。
-    """
-    return _get_mp_downloader().download(formula)
-
-
-@tool(description="查询指定化学式材料的属性信息，直接从 Materials Project 数据库获取")
-def mp_query_tool(formula: str) -> dict:
-    """
-    直接查询 Materials Project 数据库，获取指定化学式材料的属性信息。
-    """
-    return _get_mp_downloader().query_material_properties(formula)
-
-
-@tool(description="列出本地已从 Materials Project 下载的材料历史记录")
-def mp_list_tool() -> str:
-    """
-    查看本地已下载的 Materials Project 材料列表。
-    """
-    return _get_mp_downloader().list_history()
 
 
 # ================================================================
@@ -81,19 +63,22 @@ def mp_list_tool() -> str:
 # ================================================================
 
 def get_native_tools() -> list[BaseTool]:
-    """获取原生 LangChain 工具列表。
+    """获取本地原生 LangChain 工具列表。
 
     Returns:
-        4 个原生工具：rag_summary, mp_download_tool, mp_query_tool, mp_list_tool
+        本地工具：rag_summary（RAG 检索 + 总结）
     """
-    return [rag_summary, mp_download_tool, mp_query_tool, mp_list_tool]
+    return [rag_summary]
 
 
 def get_all_tools() -> list[BaseTool]:
-    """获取全部工具：原生工具 + MCP 工具。
+    """获取全部工具：本地 RAG 工具 + MCP Materials Project 工具。
+
+    本地工具：rag_summary（进程内直接调用）
+    MCP 工具：mp_download, mp_query, mp_list（通过 MCP Server 远程调用）
 
     如果 MCP 工具已初始化（在 lifespan 中调用了 init_mcp_tools()），
-    则返回混合列表；否则仅返回原生工具（自动降级）。
+    则返回完整列表；否则仅返回本地工具。
 
     Returns:
         BaseTool 列表，可直接传入 create_agent(tools=...)
@@ -105,15 +90,16 @@ def get_all_tools() -> list[BaseTool]:
         mcp_tools = get_mcp_tools()
         tools = tools + mcp_tools
         logger.info(
-            f"[AgentTools] 工具加载完成 | 原生={len(get_native_tools())} "
+            f"[AgentTools] 工具加载完成 | 本地={len(get_native_tools())} "
             f"MCP={len(mcp_tools)} 总计={len(tools)}"
         )
     except RuntimeError:
         logger.warning(
-            "[AgentTools] MCP 工具未初始化，仅使用原生工具。"
+            "[AgentTools] MCP 工具未初始化，仅使用本地 RAG 工具。"
+            "Materials Project 相关功能（下载/查询/列表）将不可用。"
             "请在应用 lifespan startup 中调用 init_mcp_tools() 以启用 MCP 工具。"
         )
     except Exception as e:
-        logger.error(f"[AgentTools] 加载 MCP 工具失败: {e}，回退到原生工具")
+        logger.error(f"[AgentTools] 加载 MCP 工具失败: {e}")
 
     return tools

@@ -245,6 +245,7 @@ class MCPClient:
         self._stdio_ctx = stdio_client(server_params)
         read_stream, write_stream = await self._stdio_ctx.__aenter__()
         self._session = ClientSession(read_stream, write_stream)
+        await self._session.__aenter__()  # 启动后台接收循环
         await self._session.initialize()
         await self._refresh_tools()
 
@@ -255,20 +256,32 @@ class MCPClient:
         self._sse_ctx = sse_client(url, **kwargs)
         read_stream, write_stream = await self._sse_ctx.__aenter__()
         self._session = ClientSession(read_stream, write_stream)
+        await self._session.__aenter__()  # 启动后台接收循环（关键修复）
         await self._session.initialize()
         await self._refresh_tools()
 
     async def close(self) -> None:
-        """关闭连接，清理资源。"""
-        if self._session:
-            await self._session.aclose()
-            self._session = None
+        """关闭连接，清理资源。
+
+        关键设计：只关闭底层传输上下文（_sse_ctx / _stdio_ctx）。
+        这会自然关闭 read_stream / write_stream，ClientSession 的后台接收循环
+        检测到 stream 关闭后会自行退出，无需（也不应）手动调用 session.__aexit__。
+        手动调用 session.__aexit__ 会导致 anyio cancel scope 的 task 绑定冲突。
+        """
         self._tools = None
-        # 关闭底层传输上下文
+        self._session = None
         if hasattr(self, "_stdio_ctx"):
-            await self._stdio_ctx.__aexit__(None, None, None)
+            try:
+                await self._stdio_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            delattr(self, "_stdio_ctx")
         if hasattr(self, "_sse_ctx"):
-            await self._sse_ctx.__aexit__(None, None, None)
+            try:
+                await self._sse_ctx.__aexit__(None, None, None)
+            except Exception:
+                pass
+            delattr(self, "_sse_ctx")
         logger.info("[MCP Client] 连接已关闭")
 
     # ------------------------------------------------------------------

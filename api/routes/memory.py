@@ -60,8 +60,8 @@ async def load_session(session_id: str, mm: MemoryManager = Depends(get_memory_m
 
 @router.post("/sessions/{session_id}/end", response_model=BaseResponse, summary="结束会话")
 async def end_session(session_id: str, mm: MemoryManager = Depends(get_memory_manager)):
-    """结束当前会话并保存，触发自动记忆提取"""
-    await mm.end_session(reason="user_close")
+    """结束指定会话并保存，触发自动记忆提取"""
+    await mm.end_session(session_id=session_id, reason="user_close")
     return BaseResponse(code=200, message="会话已结束")
 
 
