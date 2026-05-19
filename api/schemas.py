@@ -35,6 +35,13 @@ class AgentChatResponse(BaseModel):
     session_id: str = Field(..., description="会话ID")
 
 
+class AgentApprovalRequest(BaseModel):
+    """HITL 审批请求"""
+    session_id: str = Field(..., description="会话ID（与中断时一致）")
+    action: Literal["approve", "reject"] = Field(..., description="审批动作")
+    comment: str | None = Field(default=None, description="审批备注/拒绝原因")
+
+
 # ==================== RAG 相关模型 ====================
 
 class RAGQueryRequest(BaseModel):
@@ -75,16 +82,17 @@ class RAGQueryResponse(BaseModel):
 class SSEEvent(BaseModel):
     """SSE 事件通用结构"""
     type: Literal[
-        "start",           # 开始处理
-        "status",          # 状态更新
-        "thinking",        # Agent 思考过程
-        "tool_call",       # 工具调用
-        "tool_result",     # 工具返回结果
-        "token",           # 大模型生成 token
-        "answer",          # 完整答案片段
-        "sources",         # RAG 引用来源
-        "error",           # 错误
-        "done",            # 正常完成
+        "start",              # 开始处理
+        "status",             # 状态更新
+        "thinking",           # Agent 思考过程
+        "tool_call",          # 工具调用
+        "tool_result",        # 工具返回结果
+        "token",              # 大模型生成 token
+        "answer",             # 完整答案片段
+        "sources",            # RAG 引用来源
+        "approval_required",  # HITL 敏感操作需人工确认
+        "error",              # 错误
+        "done",               # 正常完成
     ] = Field(..., description="事件类型")
     content: str | dict | list | None = Field(default=None, description="事件内容")
     timestamp: float | None = Field(default=None, description="时间戳")

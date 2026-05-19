@@ -1,0 +1,16 @@
+{
+    "Formula": "SrTiO3",
+    "MP_ID": "mp-4651",
+    "Number of Atoms": 20,
+    "Volume (Å³)": 239.25,
+    "Lattice a,b,c (Å)": "5.522, 5.522, 7.845",
+    "Angles α,β,γ (°)": "90.0, 90.0, 90.0",
+    "Crystal System": "Tetragonal",
+    "Space Group": "I4/mcm",
+    "Density (g/cm³)": 5.094,
+    "Band Gap (eV)": 1.849,
+    "Is Magnetic": false,
+    "Formation Energy (eV/atom)": -3.552,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": 168.22
+}

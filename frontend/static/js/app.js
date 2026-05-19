@@ -18,6 +18,7 @@ const state = {
     isSwitchingSession: false,
     sources: [],
     abortController: null,
+    pendingApproval: null,  // { session_id, tool_calls, message }
 };
 
 // ============================================
@@ -41,6 +42,12 @@ const dom = {
     sourceCount: $('sourceCount'),
     welcomeScreen: $('welcomeScreen'),
     memoryStatus: $('memoryStatus'),
+    approvalPanel: $('approvalPanel'),
+    approvalDesc: $('approvalDesc'),
+    approvalDetail: $('approvalDetail'),
+    btnApprove: $('btnApprove'),
+    btnReject: $('btnReject'),
+    chatInputArea: document.querySelector('.chat-input-area'),
 };
 
 // ============================================
@@ -90,13 +97,62 @@ const api = {
     },
 
     // Agent 对话（SSE）
-    chatStream(question, sessionId, onEvent) {
+    chatStream(question, sessionId, onEvent, signal) {
         const body = JSON.stringify({ question, session_id: sessionId || 'default', stream: true });
         return new Promise((resolve, reject) => {
             fetch(`${API_BASE}/agent/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body,
+                signal,
+            })
+                .then((res) => {
+                    if (!res.ok) {
+                        res.text().then((t) => reject(new Error(t)));
+                        return;
+                    }
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+
+                    const read = () => {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                resolve();
+                                return;
+                            }
+                            buffer += decoder.decode(value, { stream: true });
+                            const lines = buffer.split('\n\n');
+                            buffer = lines.pop() || '';
+
+                            for (const chunk of lines) {
+                                const line = chunk.trim();
+                                if (!line.startsWith('data:')) continue;
+                                try {
+                                    const data = JSON.parse(line.slice(5).trim());
+                                    onEvent(data);
+                                } catch (e) {
+                                    console.warn('SSE parse error:', line, e);
+                                }
+                            }
+                            read();
+                        }).catch(reject);
+                    };
+                    read();
+                })
+                .catch(reject);
+        });
+    },
+
+    // HITL 审批恢复（SSE）
+    approveStream(sessionId, action, comment, onEvent, signal) {
+        const body = JSON.stringify({ session_id: sessionId, action, comment: comment || '' });
+        return new Promise((resolve, reject) => {
+            fetch(`${API_BASE}/agent/approve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body,
+                signal,
             })
                 .then((res) => {
                     if (!res.ok) {
@@ -231,10 +287,19 @@ async function switchSession(sessionId) {
     state.isSwitchingSession = true;
 
     try {
+        // 如果正在流式输出或等待审批，先清理状态
+        if ((state.isStreaming || state.pendingApproval) && state.abortController) {
+            state.abortController.abort();
+        }
+        state.isStreaming = false;
+        state.pendingApproval = null;
+        dom.btnSend.disabled = false;
+        hideApprovalPanel();
+
         // 1. 后端加载会话（恢复短期记忆）
         await api.loadSession(sessionId);
         state.currentSessionId = sessionId;
-        renderSessionList();
+        await loadSessions(); // 刷新列表以获取最新的消息计数和时间
         clearChat();
         closeSidebars();
 
@@ -384,6 +449,202 @@ function scrollToBottom() {
 }
 
 // ============================================
+// HITL 审批面板
+// ============================================
+let _approvalMsgId = null;
+
+function showApprovalPanel(data) {
+    const toolCalls = data.tool_calls || [];
+    const message = data.message || 'Agent 请求执行敏感操作，请确认是否允许。';
+
+    // ---- 1. 更新顶部审批面板（备选） ----
+    dom.approvalDesc.textContent = message;
+    let detailHtml = '';
+    if (toolCalls.length > 0) {
+        detailHtml = toolCalls.map((tc, i) => {
+            const name = tc.name || tc.function?.name || '未知工具';
+            const args = tc.arguments || tc.function?.arguments || tc.args || '{}';
+            let argsStr = '';
+            try {
+                argsStr = typeof args === 'string' ? args : JSON.stringify(args, null, 2);
+            } catch {
+                argsStr = String(args);
+            }
+            return `工具 #${i + 1}: ${name}\n参数:\n${argsStr}`;
+        }).join('\n\n');
+    } else {
+        detailHtml = '（未获取到工具调用详情）';
+    }
+    dom.approvalDetail.textContent = detailHtml;
+    dom.approvalPanel.style.display = 'block';
+    dom.chatInputArea = dom.chatInputArea || document.querySelector('.chat-input-area');
+    if (dom.chatInputArea) dom.chatInputArea.classList.add('pending-approval');
+    dom.btnApprove.disabled = false;
+    dom.btnReject.disabled = false;
+
+    // ---- 2. 在消息流中插入可交互的审批气泡（确保用户一定能看到） ----
+    _approvalMsgId = 'msg-approval-' + Date.now();
+    const toolsHtml = toolCalls.map((tc) => {
+        const name = tc.name || '未知工具';
+        const argsStr = JSON.stringify(tc.args || tc.arguments || {}, null, 2);
+        return `<div class="approval-tool-item"><code>${name}</code><pre>${escapeHtml(argsStr)}</pre></div>`;
+    }).join('');
+
+    const html = `
+        <div class="message assistant approval-message" id="${_approvalMsgId}">
+            <div class="message-avatar">⚠️</div>
+            <div class="message-content-wrap">
+                <div class="message-content">
+                    <div class="approval-bubble">
+                        <div class="approval-bubble-title">🔒 敏感操作需要确认</div>
+                        <div class="approval-bubble-desc">${escapeHtml(message)}</div>
+                        <div class="approval-bubble-tools">${toolsHtml}</div>
+                        <div class="approval-bubble-actions">
+                            <button class="btn-bubble-approve" data-action="approve">✓ 确认执行</button>
+                            <button class="btn-bubble-reject" data-action="reject">✕ 拒绝</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    dom.chatMessages.insertAdjacentHTML('beforeend', html);
+    scrollToBottom();
+
+    // 绑定气泡内按钮事件
+    const msgEl = document.getElementById(_approvalMsgId);
+    if (msgEl) {
+        msgEl.querySelectorAll('button[data-action]').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                const action = e.target.dataset.action;
+                // 禁用按钮防止重复点击
+                msgEl.querySelectorAll('button[data-action]').forEach((b) => b.disabled = true);
+                handleApproval(action);
+            });
+        });
+    }
+}
+
+function hideApprovalPanel() {
+    dom.approvalPanel.style.display = 'none';
+    if (dom.chatInputArea) dom.chatInputArea.classList.remove('pending-approval');
+    dom.btnApprove.disabled = false;
+    dom.btnReject.disabled = false;
+
+    // 隐藏消息流中的审批气泡（可选：保留历史记录，仅禁用按钮）
+    if (_approvalMsgId) {
+        const msgEl = document.getElementById(_approvalMsgId);
+        if (msgEl) {
+            msgEl.querySelectorAll('button[data-action]').forEach((b) => {
+                b.disabled = true;
+                b.style.opacity = '0.5';
+            });
+        }
+        _approvalMsgId = null;
+    }
+}
+
+async function handleApproval(action) {
+    if (!state.pendingApproval) return;
+
+    const { session_id } = state.pendingApproval;
+    const comment = action === 'approve' ? '用户确认执行' : '用户拒绝执行';
+
+    // 禁用按钮防止重复点击
+    dom.btnApprove.disabled = true;
+    dom.btnReject.disabled = true;
+
+    // 隐藏审批面板
+    hideApprovalPanel();
+
+    // 在聊天区显示用户的选择
+    const actionText = action === 'approve' ? '✓ 已确认执行该操作' : '✕ 已拒绝执行该操作';
+    appendStatusMessage(actionText);
+
+    // 显示新的助手占位（继续等待后续输出）
+    const assistantId = appendAssistantPlaceholder();
+    let fullAnswer = '';
+    let thinkingText = '';
+
+    state.abortController = new AbortController();
+
+    try {
+        await api.approveStream(session_id, action, comment, (event) => {
+            switch (event.type) {
+                case 'start': {
+                    break;
+                }
+                case 'status': {
+                    const status = event.content;
+                    if (status?.memory) {
+                        const info = status.memory.join(' · ');
+                        dom.memoryStatus.innerHTML = `<span class="dot"></span><span>${info}</span>`;
+                    }
+                    break;
+                }
+                case 'thinking': {
+                    thinkingText += event.content || '';
+                    break;
+                }
+                case 'token': {
+                    const token = event.content || '';
+                    fullAnswer += token;
+                    updateAssistantMessage(assistantId, fullAnswer, false);
+                    break;
+                }
+                case 'sources': {
+                    const sources = Array.isArray(event.content) ? event.content : [];
+                    renderSources(sources);
+                    break;
+                }
+                case 'approval_required': {
+                    // 再次遇到审批（理论上不太可能）
+                    state.pendingApproval = event.content;
+                    showApprovalPanel(event.content);
+                    break;
+                }
+                case 'error': {
+                    const err = event.content?.message || '未知错误';
+                    updateAssistantMessage(assistantId, `❌ 错误: ${err}`, true);
+                    break;
+                }
+                case 'done': {
+                    updateAssistantMessage(assistantId, fullAnswer, true);
+                    if (thinkingText) {
+                        const contentEl = document.querySelector(`#${assistantId} .message-content`);
+                        if (contentEl) {
+                            contentEl.insertAdjacentHTML('afterbegin', `
+                                <details class="thinking-box">
+                                    <summary>💡 思考过程</summary>
+                                    <pre>${escapeHtml(thinkingText)}</pre>
+                                </details>
+                            `);
+                        }
+                    }
+                    loadSessions();
+                    break;
+                }
+            }
+        }, state.abortController.signal);
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.log('审批恢复已中止');
+            updateAssistantMessage(assistantId, '⏹️ 操作已中断', true);
+        } else {
+            console.error('审批恢复失败:', e);
+            updateAssistantMessage(assistantId, `❌ 恢复失败: ${e.message}`, true);
+        }
+        loadSessions();
+    } finally {
+        state.isStreaming = false;
+        state.pendingApproval = null;
+        dom.btnSend.disabled = false;
+        state.abortController = null;
+        scrollToBottom();
+    }
+}
+
+// ============================================
 // 参考资料
 // ============================================
 function renderSources(sources) {
@@ -413,6 +674,12 @@ function renderSources(sources) {
 async function sendMessage() {
     const text = dom.chatInput.value.trim();
     if (!text || state.isStreaming) return;
+
+    // 如果存在待审批的操作，提示用户先处理
+    if (state.pendingApproval) {
+        appendStatusMessage('⏳ 请先处理上方的敏感操作确认请求');
+        return;
+    }
 
     // 隐藏欢迎界面
     if (dom.welcomeScreen) dom.welcomeScreen.style.display = 'none';
@@ -446,6 +713,8 @@ async function sendMessage() {
     const assistantId = appendAssistantPlaceholder();
     let fullAnswer = '';
     let thinkingText = '';
+
+    state.abortController = new AbortController();
 
     try {
         await api.chatStream(text, state.currentSessionId, (event) => {
@@ -490,6 +759,14 @@ async function sendMessage() {
                     updateAssistantMessage(assistantId, `❌ 错误: ${err}`, true);
                     break;
                 }
+                case 'approval_required': {
+                    // HITL 中断：保存审批状态并显示审批面板
+                    state.pendingApproval = event.content;
+                    showApprovalPanel(event.content);
+                    // 将思考中占位替换为提示信息
+                    updateAssistantMessage(assistantId, '⏳ 等待人工确认...', true);
+                    break;
+                }
                 case 'done': {
                     // 最终渲染 Markdown
                     updateAssistantMessage(assistantId, fullAnswer, true);
@@ -505,16 +782,29 @@ async function sendMessage() {
                             `);
                         }
                     }
+                    // 刷新会话列表，更新消息计数和时间
+                    loadSessions();
                     break;
                 }
             }
         });
     } catch (e) {
-        console.error('对话失败:', e);
-        updateAssistantMessage(assistantId, `❌ 请求失败: ${e.message}`, true);
+        if (e.name === 'AbortError') {
+            console.log('对话已中止');
+            updateAssistantMessage(assistantId, '⏹️ 对话已中断', true);
+        } else {
+            console.error('对话失败:', e);
+            updateAssistantMessage(assistantId, `❌ 请求失败: ${e.message}`, true);
+        }
+        // 刷新会话列表（即使失败也要更新时间显示）
+        loadSessions();
     } finally {
-        state.isStreaming = false;
-        dom.btnSend.disabled = false;
+        // 如果触发了审批，保持 streaming 状态直到用户处理
+        if (!state.pendingApproval) {
+            state.isStreaming = false;
+            dom.btnSend.disabled = false;
+        }
+        state.abortController = null;
         scrollToBottom();
     }
 }
@@ -577,6 +867,14 @@ function bindEvents() {
             sendMessage();
         });
     });
+
+    // HITL 审批按钮
+    if (dom.btnApprove) {
+        dom.btnApprove.addEventListener('click', () => handleApproval('approve'));
+    }
+    if (dom.btnReject) {
+        dom.btnReject.addEventListener('click', () => handleApproval('reject'));
+    }
 }
 
 // ============================================

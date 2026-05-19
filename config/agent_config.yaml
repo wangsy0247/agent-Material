@@ -1,3 +1,16 @@
 chat_model_name: "DeepSeek-V4-Flash"
 max_tokens: 8192
 external_data_path: "workspace/material_expression.txt"
+
+# MP 工具运行模式: "local"(进程内直连) ｜ "mcp"(远程 MCP Server)
+mp_tool_mode: "mcp"
+
+# MCP 模式下的 Server 列表（支持同时连接多个）
+mcp_servers:
+  # - transport: "stdio"                     
+  #   command: ["python", "-m", "mp_material_server"]
+  #   name: "material"
+
+  - transport: "sse"
+    url: "http://127.0.0.1:8002/sse"
+    name: "material-project"

@@ -46,11 +46,14 @@
 ├── nginx.conf                 # Nginx 反向代理配置（生产环境可选）
 │
 ├── agent/                     # Agent 核心
-│   ├── React_agent.py         # ReAct Agent 封装（记忆集成、流式/非流式执行）
+│   ├── React_agent.py         # ReAct Agent 封装（LangGraph StateGraph、记忆集成、流式/非流式执行）
+│   ├── graph/
+│   │   ├── __init__.py
+│   │   └── agent_graph.py     # LangGraph StateGraph 定义（节点、条件边、HITL、防死循环）
 │   └── tools/
 │       ├── agent_tools.py     # 原生 LangChain Tool 定义 + MCP 工具聚合
 │       ├── mcp_tool_manager.py # MCP 工具发现、转换、调用管理
-│       ├── middleware.py      # Agent 中间件（工具监控、模型前日志）
+│       ├── middleware.py      # Agent 节点级日志（替代原 LangChain 中间件）
 │       └── mp_downloader.py   # Materials Project 下载/查询/历史记录
 │
 ├── api/                       # FastAPI 路由层
@@ -307,7 +310,46 @@ def _get_rag_service():
 1. 系统提示（原始提示 + 长期记忆上下文：用户画像 + 项目知识 + 相关记忆召回）
 2. 对话历史（短期记忆中的消息，已做压缩保护）
 
-### 7.3 MCP 架构
+### 7.3 LangGraph Agent 状态机
+
+Agent 核心已从 `langchain.agents.create_agent` 迁移为显式 `LangGraph StateGraph`：
+
+```
+entry -> memory_node -> agent_node -> should_continue
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              │                         │                         │
+        iteration>10               has tool_calls?           无 tool_calls
+              │                         │                         │
+              ▼                         ▼                         ▼
+         finalize                human_approval_node          finalize
+                                         │
+                                  ┌──────┴──────┐
+                                 批准           拒绝
+                                  │             │
+                                  ▼             ▼
+                               tool_node  -> agent_node
+                                  │
+                                  └────────-> agent_node
+```
+
+**节点说明**：
+
+| 节点 | 职责 |
+|------|------|
+| `memory_node` | 从 `MemoryManager` 组装完整上下文（系统提示 + 长期记忆 + 对话历史） |
+| `agent_node` | 调用 `chat_model.bind_tools(tools).ainvoke()`，迭代计数 +1 |
+| `human_approval_node` | 检测敏感操作（`mp_download` 等），需要时调用 `interrupt()` 挂起 |
+| `tool_node` | 使用 `langgraph.prebuilt.ToolNode` 并行执行工具，内置日志监控 |
+| `finalize_node` | 提取最终答案，超过 10 轮时附加截断提示 |
+
+**关键机制**：
+- **防死循环**：`iteration_count > 10` 时 `should_continue` 强制路由到 `finalize_node`
+- **HITL 恢复**：`human_approval_node` 拒绝时生成拒绝 `ToolMessage`，直接回到 `agent_node` 重新推理；批准时继续到 `tool_node` 执行
+- **Checkpointer**：使用 `MemorySaver` 保存 graph 状态，支持 `Command(resume=...)` 恢复中断执行
+- **Thread 隔离**：每次新调用使用唯一 `thread_id`（`{session_id}_{random}`），避免 checkpointer 消息累积导致 system message 重复
+
+### 7.4 MCP 架构
 
 - **Client**：`mcp_servers/client.py` 封装 `stdio` 和 `sse` 两种传输模式，支持上下文管理器自动管理连接生命周期。
 - **Server**：`mcp_servers/server.py` 提供 `BaseMCPServer` 基类，可快速注册 Tool/Resource/Prompt，支持独立运行（stdio/sse）或嵌入 FastAPI。
@@ -356,7 +398,7 @@ def _get_rag_service():
 ### 9.3 MCP 安全
 
 - `config/mcp_config.yaml` 中定义了敏感操作关键词列表（`download`、`write`、`delete`、`exec`）。
-- `confirm_sensitive_ops: true` 为预留配置，当前实现中敏感操作确认逻辑需根据业务需求在 Agent 层补充。
+- Agent 层已实现 HITL（Human-in-the-loop）敏感操作审批：`human_approval_node` 会在执行敏感工具（如 `mp_download`）前调用 `interrupt()` 挂起执行，前端收到 `approval_required` SSE 事件后需调用 `/api/v1/agent/approve` 恢复。
 - 文件系统 MCP Server (`filesystem`) 默认 `enabled: false`，启用前请确认挂载路径范围。
 
 ### 9.4 输入安全

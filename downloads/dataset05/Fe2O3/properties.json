@@ -1,0 +1,16 @@
+{
+    "Formula": "Fe2O3",
+    "MP_ID": "mp-19770",
+    "Number of Atoms": 30,
+    "Volume (Å³)": 309.286,
+    "Lattice a,b,c (Å)": "5.092, 5.092, 13.774",
+    "Angles α,β,γ (°)": "90.0, 90.0, 120.0",
+    "Crystal System": "Trigonal",
+    "Space Group": "R-3c",
+    "Density (g/cm³)": 5.143,
+    "Band Gap (eV)": 0.0,
+    "Is Magnetic": true,
+    "Formation Energy (eV/atom)": -1.707,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": "未知"
+}

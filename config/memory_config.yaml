@@ -5,7 +5,7 @@
 
 # ---- 记忆管理器全局配置 ----
 manager:
-  max_context_tokens: 100000          # 上下文窗口最大 Token 预算
+  max_context_tokens: 2000000          # 上下文窗口最大 Token 预算
   enable_long_term: true            # 是否启用长期记忆
   enable_compression: true          # 是否启用上下文压缩
 

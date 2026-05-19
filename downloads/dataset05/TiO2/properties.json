@@ -1,0 +1,16 @@
+{
+    "Formula": "TiO2",
+    "MP_ID": "mp-390",
+    "Number of Atoms": 12,
+    "Volume (Å³)": 137.568,
+    "Lattice a,b,c (Å)": "3.783, 3.783, 9.615",
+    "Angles α,β,γ (°)": "90.0, 90.0, 90.0",
+    "Crystal System": "Tetragonal",
+    "Space Group": "I4_1/amd",
+    "Density (g/cm³)": 3.856,
+    "Band Gap (eV)": 2.059,
+    "Is Magnetic": false,
+    "Formation Energy (eV/atom)": -3.508,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": 184.25
+}

@@ -79,6 +79,26 @@
                 </div>
             </div>
 
+            <!-- 审批面板（HITL 敏感操作确认） -->
+            <div class="approval-panel" id="approvalPanel" style="display: none;">
+                <div class="approval-content">
+                    <div class="approval-icon">⚠️</div>
+                    <div class="approval-info">
+                        <div class="approval-title">敏感操作需要确认</div>
+                        <div class="approval-desc" id="approvalDesc">Agent 请求执行一项敏感操作，请确认是否允许。</div>
+                        <div class="approval-detail" id="approvalDetail"></div>
+                    </div>
+                    <div class="approval-actions">
+                        <button class="btn-approval btn-reject" id="btnReject" title="拒绝执行">
+                            <span>✕</span> 拒绝
+                        </button>
+                        <button class="btn-approval btn-approve" id="btnApprove" title="确认执行">
+                            <span>✓</span> 确认
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="chat-input-area">
                 <div class="input-wrap">
                     <textarea

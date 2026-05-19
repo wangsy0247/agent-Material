@@ -773,6 +773,241 @@ html, body {
 }
 
 /* ============================================
+   审批面板（HITL）
+   ============================================ */
+.approval-panel {
+    position: sticky;
+    bottom: 0;
+    z-index: 50;
+    background: rgba(210, 153, 34, 0.15);
+    border-top: 2px solid var(--warning);
+    padding: 16px 20px;
+    animation: slideUp 0.3s ease, pulseBorder 2s infinite;
+    backdrop-filter: blur(4px);
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseBorder {
+    0%, 100% { border-top-color: var(--warning); }
+    50% { border-top-color: rgba(210, 153, 34, 0.6); }
+}
+
+.approval-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.approval-icon {
+    font-size: 22px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.approval-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.approval-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--warning);
+    margin-bottom: 4px;
+}
+
+.approval-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.approval-detail {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: "SFMono-Regular", Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.approval-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.btn-approval {
+    padding: 8px 16px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.2s;
+}
+
+.btn-approval span {
+    font-size: 14px;
+}
+
+.btn-approve {
+    background: var(--success);
+    color: #fff;
+}
+
+.btn-approve:hover {
+    background: #4ae666;
+}
+
+.btn-approve:disabled {
+    background: var(--bg-hover);
+    cursor: not-allowed;
+}
+
+.btn-reject {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-reject:hover {
+    background: rgba(248, 81, 73, 0.2);
+    border-color: rgba(248, 81, 73, 0.4);
+    color: var(--error);
+}
+
+.btn-reject:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ---- 消息流内嵌审批气泡 ---- */
+.approval-message .message-content {
+    background: rgba(210, 153, 34, 0.1) !important;
+    border: 1px solid rgba(210, 153, 34, 0.4) !important;
+}
+
+.approval-bubble {
+    padding: 4px 0;
+}
+
+.approval-bubble-title {
+    font-weight: 600;
+    color: var(--warning);
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.approval-bubble-desc {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+}
+
+.approval-bubble-tools {
+    margin-bottom: 12px;
+}
+
+.approval-tool-item {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    font-size: 12px;
+}
+
+.approval-tool-item code {
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    padding: 0;
+}
+
+.approval-tool-item pre {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+.approval-bubble-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.btn-bubble-approve,
+.btn-bubble-reject {
+    padding: 8px 18px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex: 1;
+}
+
+.btn-bubble-approve {
+    background: var(--success);
+    color: #fff;
+}
+
+.btn-bubble-approve:hover {
+    background: #4ae666;
+}
+
+.btn-bubble-approve:disabled {
+    background: var(--bg-hover);
+    cursor: not-allowed;
+}
+
+.btn-bubble-reject {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-bubble-reject:hover {
+    background: rgba(248, 81, 73, 0.2);
+    border-color: rgba(248, 81, 73, 0.4);
+    color: var(--error);
+}
+
+.btn-bubble-reject:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* 等待审批时输入区遮罩 */
+.chat-input-area.pending-approval .input-wrap {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* ============================================
    响应式（移动端）
    ============================================ */
 @media (max-width: 1024px) {

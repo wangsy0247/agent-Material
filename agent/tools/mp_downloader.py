@@ -7,11 +7,13 @@ from langchain_core.tools import tool
 from mp_api.client import MPRester
 from pydantic import BaseModel, Field
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from dotenv import load_dotenv
 
 from utils.config_handler import agent_config, mp_config
 from utils.logger import logger
 from utils.path_tools import get_abs_path
 
+load_dotenv()
 
 class MaterialsProjectDownloader:
     """封装 Materials Project 材料下载、去重与记录逻辑。"""
@@ -84,45 +86,41 @@ class MaterialsProjectDownloader:
         try:
             mpr = MPRester(self.api_key)
 
-            # 1. 检索匹配化学式的所有材料
-            docs = mpr.materials.search(
-                formula=formula, fields=["material_id", "structure"]
+            # 1. 一次性批量获取所有匹配材料的摘要，按形成能排序（避免 N+1 查询）
+            summary_fields = [
+                "material_id",
+                "formation_energy_per_atom",
+                "energy_above_hull",
+                "band_gap",
+                "density",
+                "symmetry",
+                "is_magnetic",
+                "bulk_modulus",
+            ]
+            summary_docs = list(mpr.materials.summary.search(
+                formula=formula, fields=summary_fields
+            ))
+            if not summary_docs:
+                return None
+
+            # 按形成能从低到高排序（最稳定在前）
+            def _formation_energy(s):
+                return s.formation_energy_per_atom if s.formation_energy_per_atom is not None else float("inf")
+            summary_docs.sort(key=_formation_energy)
+            best_summary = summary_docs[0]
+
+            # 2. 仅获取最稳定材料的结构（避免拉取全部 300+ 结构数据）
+            structure_docs = mpr.materials.search(
+                material_ids=[best_summary.material_id],
+                fields=["material_id", "structure"],
             )
-            if not docs:
+            if not structure_docs:
                 return None
 
-            # 2. 获取详细摘要并按形成能排序
-            material_list = []
-            for doc in docs:
-                summary_docs = mpr.materials.summary.search(
-                    material_ids=[doc.material_id],
-                    fields=[
-                        "formation_energy_per_atom",
-                        "energy_above_hull",
-                        "band_gap",
-                        "density",
-                        "symmetry",
-                        "is_magnetic",
-                        "bulk_modulus",
-                    ],
-                )
-                if summary_docs:
-                    s_doc = summary_docs[0]
-                    energy = (
-                        s_doc.formation_energy_per_atom
-                        if s_doc.formation_energy_per_atom is not None
-                        else float("inf")
-                    )
-                    material_list.append((doc, s_doc, energy))
-
-            if not material_list:
-                return None
-
-            material_list_sorted = sorted(material_list, key=lambda x: x[2])
-            best_doc, best_summary, best_energy = material_list_sorted[0]
-
+            best_doc = structure_docs[0]
             mp_id = best_doc.material_id
             structure = best_doc.structure
+            best_energy = best_summary.formation_energy_per_atom
 
             # 3. 提取晶体结构信息
             sga = SpacegroupAnalyzer(structure)

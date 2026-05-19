@@ -2,6 +2,7 @@
 记忆系统路由：会话管理、记忆召回、记忆操作
 """
 
+from typing import TYPE_CHECKING
 from fastapi import APIRouter, Depends, HTTPException
 from api.schemas import (
     SessionCreateRequest,
@@ -14,8 +15,10 @@ from api.schemas import (
     BaseResponse,
 )
 from api.dependencies import get_memory_manager
-from memory.manager import MemoryManager
 from utils.logger import logger
+
+if TYPE_CHECKING:
+    from memory.manager import MemoryManager
 
 router = APIRouter(prefix="/memory", tags=["记忆系统"])
 
@@ -23,14 +26,14 @@ router = APIRouter(prefix="/memory", tags=["记忆系统"])
 # ==================== 会话管理 ====================
 
 @router.post("/sessions", response_model=BaseResponse, summary="创建新会话")
-async def create_session(request: SessionCreateRequest, mm: MemoryManager = Depends(get_memory_manager)):
+async def create_session(request: SessionCreateRequest, mm: "MemoryManager" = Depends(get_memory_manager)):
     """创建一个新的对话会话"""
     session_id = mm.create_session(title=request.title, source=request.source)
     return BaseResponse(code=200, message="会话创建成功", data={"session_id": session_id})
 
 
 @router.get("/sessions", response_model=SessionListResponse, summary="列出会话")
-async def list_sessions(limit: int = 20, mm: MemoryManager = Depends(get_memory_manager)):
+async def list_sessions(limit: int = 20, mm: "MemoryManager" = Depends(get_memory_manager)):
     """获取会话列表（按更新时间倒序）"""
     sessions = mm.list_sessions(limit=limit)
     data = []
@@ -50,7 +53,7 @@ async def list_sessions(limit: int = 20, mm: MemoryManager = Depends(get_memory_
 
 
 @router.post("/sessions/{session_id}/load", response_model=BaseResponse, summary="加载会话")
-async def load_session(session_id: str, mm: MemoryManager = Depends(get_memory_manager)):
+async def load_session(session_id: str, mm: "MemoryManager" = Depends(get_memory_manager)):
     """加载指定会话，恢复对话历史"""
     success = mm.load_session(session_id)
     if not success:
@@ -59,14 +62,14 @@ async def load_session(session_id: str, mm: MemoryManager = Depends(get_memory_m
 
 
 @router.post("/sessions/{session_id}/end", response_model=BaseResponse, summary="结束会话")
-async def end_session(session_id: str, mm: MemoryManager = Depends(get_memory_manager)):
+async def end_session(session_id: str, mm: "MemoryManager" = Depends(get_memory_manager)):
     """结束指定会话并保存，触发自动记忆提取"""
     await mm.end_session(session_id=session_id, reason="user_close")
     return BaseResponse(code=200, message="会话已结束")
 
 
 @router.delete("/sessions/{session_id}", response_model=BaseResponse, summary="删除会话")
-async def delete_session(session_id: str, mm: MemoryManager = Depends(get_memory_manager)):
+async def delete_session(session_id: str, mm: "MemoryManager" = Depends(get_memory_manager)):
     """删除会话及其所有消息"""
     success = mm.delete_session(session_id)
     if not success:
@@ -75,7 +78,7 @@ async def delete_session(session_id: str, mm: MemoryManager = Depends(get_memory
 
 
 @router.get("/sessions/{session_id}/messages", response_model=BaseResponse, summary="获取会话消息")
-async def get_session_messages(session_id: str, mm: MemoryManager = Depends(get_memory_manager)):
+async def get_session_messages(session_id: str, mm: "MemoryManager" = Depends(get_memory_manager)):
     """获取指定会话的完整消息历史"""
     messages = mm.session_store.get_messages(session_id)
     return BaseResponse(
@@ -96,7 +99,7 @@ async def get_session_messages(session_id: str, mm: MemoryManager = Depends(get_
 # ==================== 记忆操作 ====================
 
 @router.post("/recall", response_model=MemoryRecallResponse, summary="召回记忆")
-async def recall_memory(request: MemoryRecallRequest, mm: MemoryManager = Depends(get_memory_manager)):
+async def recall_memory(request: MemoryRecallRequest, mm: "MemoryManager" = Depends(get_memory_manager)):
     """根据查询召回相关长期记忆"""
     entries = mm.recall_memory(request.query, top_k=request.top_k)
     
@@ -118,7 +121,7 @@ async def recall_memory(request: MemoryRecallRequest, mm: MemoryManager = Depend
 
 
 @router.get("/stats", response_model=MemoryStatsResponse, summary="记忆统计")
-async def memory_stats(mm: MemoryManager = Depends(get_memory_manager)):
+async def memory_stats(mm: "MemoryManager" = Depends(get_memory_manager)):
     """获取记忆系统统计信息"""
     stats = mm.get_stats()
     return MemoryStatsResponse(code=200, message="获取成功", data=stats)

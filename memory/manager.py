@@ -26,9 +26,9 @@ from utils.logger import logger
 _MANAGER_CFG: dict[str, Any] = memory_config.get("manager", {})
 _LONG_TERM_CFG: dict[str, Any] = memory_config.get("long_term", {})
 
-DEFAULT_MAX_CONTEXT_TOKENS: int = _MANAGER_CFG.get("max_context_tokens", 8000)
-DEFAULT_ENABLE_LONG_TERM: bool = _MANAGER_CFG.get("enable_long_term", True)
-DEFAULT_ENABLE_COMPRESSION: bool = _MANAGER_CFG.get("enable_compression", True)
+DEFAULT_MAX_CONTEXT_TOKENS: int = _MANAGER_CFG.get("max_context_tokens")
+DEFAULT_ENABLE_LONG_TERM: bool = _MANAGER_CFG.get("enable_long_term")
+DEFAULT_ENABLE_COMPRESSION: bool = _MANAGER_CFG.get("enable_compression")
 
 
 class MemoryManager:

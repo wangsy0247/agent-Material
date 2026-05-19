@@ -19,16 +19,20 @@ API 文档：
 
 import os
 import sys
-from pathlib import Path
+
+import numpy  # noqa: F401
+
+from utils.path_tools import get_project_path
+from dotenv import load_dotenv
+
+load_dotenv() 
 
 # 确保项目根目录在 Python 路径中（兼容多种启动方式）
-PROJECT_ROOT = Path(__file__).parent.resolve()
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = get_project_path()
 
-# 从环境变量读取端口，默认 8000（WSL 下可自由切换避免冲突）
-API_PORT = int(os.environ.get("AGENT_API_PORT", 8000))
-API_HOST = os.environ.get("AGENT_API_HOST", "0.0.0.0")
+# 从环境变量读取端口（WSL 下可自由切换避免冲突）
+API_PORT = int(os.environ.get("AGENT_API_PORT"))
+API_HOST = os.environ.get("AGENT_API_HOST")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,31 +66,46 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 材料科学 LLM Agent API 服务启动中...")
     logger.info(f"📁 项目根目录: {PROJECT_ROOT}")
 
-    # 初始化 MCP 工具（连接配置中启用的 MCP Server）
-    try:
-        from agent.tools.mcp_tool_manager import init_mcp_tools
-        mcp_tools = await init_mcp_tools()
-        logger.info(f"✅ MCP 工具初始化完成 | 共 {len(mcp_tools)} 个")
-    except Exception as e:
-        logger.warning(f"⚠️ MCP 工具初始化失败: {e} | Agent 将仅使用原生工具")
+    from utils.config_handler import agent_config
 
-    # 延迟加载关键组件（首次请求时才会真正初始化）
-    logger.info("⏳ Agent 和 RAG 组件将在首次请求时懒加载")
+    # MCP 模式：连接多个远程 MCP Server
+    mp_tool_mode = agent_config.get("mp_tool_mode", "local")
+    if mp_tool_mode == "mcp":
+        servers = agent_config.get("mcp_servers", [])
+        if servers:
+            logger.info(f"🔗 初始化 {len(servers)} 个 MCP Server 连接...")
+            try:
+                from agent.tools.mcp_adapter import init_mcp_tools
+                tools = await init_mcp_tools(servers)
+                logger.info(f"✅ MCP 连接完成 | 远程工具={[t.name for t in tools]}")
+            except Exception as e:
+                logger.warning(f"⚠️ MCP 连接失败: {e} | Agent 将回退到本地模式")
+        else:
+            logger.warning("⚠️ MCP 模式已启用但未配置 mcp_servers，回退到本地模式")
+    else:
+        logger.info("🔧 MP 工具模式: 本地直连")
+
+    # 预热 RAG 组件（主线程加载，确保在请求到来前完成）
+    logger.info("⏳ 预热 RAG 组件（reranker / BM25）...")
+    try:
+        from agent.tools.agent_tools import _get_rag_service
+        _get_rag_service()
+        logger.info("✅ RAG 组件预热完成")
+    except Exception as e:
+        logger.warning(f"⚠️ RAG 组件预热失败: {e} | 将在首次请求时懒加载")
 
     logger.info("=" * 50)
     yield
 
     # ===== Shutdown =====
     logger.info("🛑 服务关闭中...")
-
-    # 关闭 MCP 长连接（连接池释放）
-    try:
-        from agent.tools.mcp_tool_manager import close_mcp_connections
-        await close_mcp_connections()
-        logger.info("✅ MCP 连接已关闭")
-    except Exception as e:
-        logger.warning(f"⚠️ MCP 连接关闭失败: {e}")
-
+    if mp_tool_mode == "mcp":
+        try:
+            from agent.tools.mcp_adapter import close_mcp
+            await close_mcp()
+            logger.info("✅ MCP 连接已关闭")
+        except Exception as e:
+            logger.warning(f"⚠️ MCP 关闭失败: {e}")
     logger.info("=" * 50)
 
 
@@ -176,12 +195,16 @@ async def api_info():
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # 开发模式启动（生产环境建议使用 gunicorn + uvicorn.workers.UvicornWorker）
+
+    # 热重载开关（默认关闭）
+    # 注意：WSL + PyTorch/ONNX/ChromaDB 环境下，reload=True 可能导致多进程 fork 时的
+    # Segmentation Fault。如需热重载，请设置环境变量 AGENT_API_RELOAD=true
+    RELOAD = os.environ.get("AGENT_API_RELOAD", "false").lower() == "true"
+
     uvicorn.run(
         "api_server:app",
         host=API_HOST,
         port=API_PORT,
-        reload=True,  # 开发模式热重载
+        reload=RELOAD,
         log_level="info",
     )

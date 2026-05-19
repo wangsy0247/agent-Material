@@ -18,10 +18,10 @@ from utils.logger import logger
 # ---- 配置读取 ----
 _SHORT_TERM_CFG: dict = memory_config.get("short_term", {})
 
-DEFAULT_MAX_TOKENS: int = memory_config.get("manager", {}).get("max_context_tokens", 8000)
-DEFAULT_COMPRESS_THRESHOLD: float = _SHORT_TERM_CFG.get("compress_threshold", 0.75)
-DEFAULT_PROTECT_FIRST_N: int = _SHORT_TERM_CFG.get("protect_first_n", 1)
-DEFAULT_PROTECT_LAST_N: int = _SHORT_TERM_CFG.get("protect_last_n", 4)
+DEFAULT_MAX_TOKENS: int = memory_config.get("manager", {}).get("max_context_tokens")
+DEFAULT_COMPRESS_THRESHOLD: float = _SHORT_TERM_CFG.get("compress_threshold")
+DEFAULT_PROTECT_FIRST_N: int = _SHORT_TERM_CFG.get("protect_first_n")
+DEFAULT_PROTECT_LAST_N: int = _SHORT_TERM_CFG.get("protect_last_n")
 
 # 可压缩区域最小消息数
 MIN_COMPRESSIBLE_MESSAGES: int = 3
