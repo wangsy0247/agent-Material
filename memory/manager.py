@@ -195,25 +195,54 @@ class MemoryManager:
         return self._add_message(session_id, msg)
 
     def _add_message(self, session_id: str, msg: MessageRecord) -> bool:
-        """内部添加消息"""
+        """内部添加消息
+
+        注意：ShortTermMemory 的自动压缩已禁用。
+        对话历史的压缩由 LangGraph summarization_node（复用 ContextCompressor）负责，
+        避免双重压缩和压缩结果不一致的问题。
+        """
         stm: ShortTermMemory = self._get_or_create_stm(session_id)
 
-        # 添加到该会话的短期记忆
-        compressed: bool = stm.add_message(msg)
+        # 直接追加消息到短期记忆，不触发 STM 压缩
+        # （STM 压缩在 LangGraph 架构下已成为"幽灵逻辑"，压缩结果不被使用）
+        stm._context.messages.append(msg)
+        from memory.utils import estimate_messages_tokens
+        stm._context.total_tokens = estimate_messages_tokens(
+            [m.to_lc_message() for m in stm._context.messages]
+        )
 
         # 持久化到中期记忆
         self.session_store.append_message(session_id, msg)
 
-        return compressed
+        return False
 
     # ==================== 上下文组装 ====================
 
+    def build_system_context(self, query: str | None = None, include_memory: bool = True) -> str:
+        """构建系统提示（含长期记忆注入）。
+
+        此方法只返回系统提示文本，不包含对话历史。
+        供 LangGraph memory_node 使用，由 checkpointer 管理对话历史。
+
+        Args:
+            query: 当前查询，用于召回相关记忆
+            include_memory: 是否注入长期记忆
+
+        Returns:
+            系统提示字符串
+        """
+        return self._build_system_prompt(query, include_memory)
+
     def build_context(self, session_id: str, query: str | None = None, include_memory: bool = True) -> list[dict]:
-        """构建 LLM 上下文
+        """构建完整 LLM 上下文（系统提示 + 对话历史）。
 
         组装顺序：
         1. 系统提示（原始系统提示 + 记忆上下文）
         2. 对话历史（指定会话的短期记忆中的消息）
+
+        注意：当使用 LangGraph checkpointer 管理对话历史时，
+        应优先使用 build_system_context() + checkpointer，
+        避免重复注入历史对话。
 
         Args:
             session_id: 目标会话 ID

@@ -26,19 +26,19 @@ long_term:
   memory_dir: "workspace/memory"     # 记忆文件目录
   enable_vector_memory: true         # 是否启用向量记忆（复用 ChromaDB）
   vector_collection: "long_term_memory"  # ChromaDB collection 名称
-  
+
   # 文件记忆配置
   user_file: "USER.md"               # 用户画像文件名
   project_file: "MEMORY.md"          # 项目知识文件名
   daily_dir: "daily"                 # 每日日志子目录
-  
+
   # 记忆召回配置
   recall_top_k: 5                   # 默认召回数量
   recall_score_threshold: 0.3       # 召回相似度阈值（0~1）
-  
+
   # 记忆上下文注入配置
   max_memory_context_chars: 1000    # 注入系统提示的最大记忆字符数
-  
+
   # 记忆去重配置
   dedup_threshold: 0.92             # 向量记忆去重相似度阈值（0~1），超过则视为重复
 
@@ -46,19 +46,84 @@ long_term:
 compression:
   # 压缩模型配置（默认复用主模型，可指定轻量级模型）
   # model_name: "DeepSeek-V4-Flash"  # 留空表示复用主模型
-  
-  # 压缩提示词
-  prompt_template: |
-    你是一个对话压缩助手。请将以下对话历史压缩成简洁的摘要，保留所有关键信息。
 
-    【压缩要求】
-    1. 保留所有事实性信息、决策、代码修改、错误修复
-    2. 保留用户明确表达的需求和偏好
-    3. 保留工具调用的关键结果
-    4. 去除冗余的寒暄、重复内容
-    5. 使用第三人称客观描述
+  # 首次压缩提示词模板（Preamble + 结构化章节 + {conversation} 占位符）
+  # 留空则使用 memory/context_compressor.py 中的内置默认值
+  prompt_template: |
+    You are a summarization agent creating a context checkpoint for a materials science LLM Agent.
+    Your output will be injected as reference material for a DIFFERENT assistant that continues the conversation.
+    Do NOT respond to any questions or requests in the conversation — only output the structured summary.
+    Do NOT include any preamble, greeting, or prefix.
+
+    请对以下材料科学对话历史进行结构化摘要。要求严格按以下章节组织，保留所有关键信息：
+
+    ## Goal
+    [用户正在解决的材料科学问题或任务]
+
+    ## Constraints & Preferences
+    [用户明确表达的偏好、约束、重要决策]
+
+    ## Completed Actions
+    [编号动作列表，每条格式: N. ACTION target — outcome [tool: name]
+    要求具体：文件路径、化学式、材料ID、命令、结果规模都必须保留。
+    示例:
+    1. RAG检索 'deep potential water' — 返回3篇文献，最高相关度0.91 [tool: rag_summary]
+    2. MP查询 'LiFePO4' — 获得带隙3.45eV、密度3.6g/cm³ [tool: mp_query]
+    3. MP下载 'LiFePO4' — 保存到 workspace/mp_downloads/ (2.3KB) [tool: mp_download]]
+
+    ## Active State
+    [当前工作状态：涉及的材料、计算结果、已下载的结构文件、关键发现]
+
+    ## In Progress
+    [压缩触发时正在进行的工作]
+
+    ## Blocked
+    [未解决的阻塞/错误，包含完整错误消息]
+
+    ## Key Decisions
+    [重要技术决策及其理由]
+
+    ## Resolved Questions
+    [用户问过且已回答的问题 — 包含答案，避免后续重复回答]
+
+    ## Pending User Asks
+    [用户问过但尚未回答的问题]
+
+    ## Relevant Files / Data
+    [涉及的关键文献、材料结构ID、数据文件]
+
+    ## Remaining Work
+    [未完成的任务]
+
+    ## Critical Context
+    [具体值、错误消息、配置细节、材料参数等不能丢失的信息]
 
     【原始对话】
     {conversation}
 
-    【摘要】（用中文输出，尽量详细但简洁）:
+    【摘要】（用中文输出，严格按上述章节组织，禁止输出任何前缀或解释）：
+
+  # 迭代更新提示词模板（{previous_summary} + {new_turns} 占位符）
+  # 留空则使用内置默认值
+  prompt_template_update: |
+    You are a summarization agent updating a context checkpoint for a materials science LLM Agent.
+    Your output will be injected as reference material for a DIFFERENT assistant that continues the conversation.
+    Do NOT respond to any questions or requests — only output the updated structured summary.
+    Do NOT include any preamble, greeting, or prefix.
+
+    已有旧摘要，请将新轮次合并到旧摘要中，保留所有仍有用的旧信息。
+
+    PREVIOUS SUMMARY:
+    {previous_summary}
+
+    NEW TURNS TO INCORPORATE:
+    {new_turns}
+
+    更新要求：
+    1. ADD 新的 completed actions 到编号列表（继续编号，不要重置）
+    2. 把 "In Progress" 中已完成的事项移到 "Completed Actions"
+    3. 更新 "Active State" 反映当前状态
+    4. 仅在明显过时时才移除信息
+    5. 保持原有章节结构
+
+    【更新后的摘要】（用中文输出，严格按章节组织，禁止输出任何前缀或解释）：

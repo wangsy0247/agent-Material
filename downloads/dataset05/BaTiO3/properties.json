@@ -1,0 +1,16 @@
+{
+    "Formula": "BaTiO3",
+    "MP_ID": "mp-5777",
+    "Number of Atoms": 10,
+    "Volume (Å³)": 131.146,
+    "Lattice a,b,c (Å)": "5.725, 5.751, 3.983",
+    "Angles α,β,γ (°)": "90.0, 90.0, 90.0",
+    "Crystal System": "Orthorhombic",
+    "Space Group": "Amm2",
+    "Density (g/cm³)": 5.905,
+    "Band Gap (eV)": 2.293,
+    "Is Magnetic": false,
+    "Formation Energy (eV/atom)": -3.492,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": 97.87
+}

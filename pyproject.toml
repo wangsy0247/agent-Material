@@ -23,12 +23,15 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "sentence-transformers>=3.0.0",
     "mcp",
+    "langchain-mcp-adapters>=0.2.0",
     "python-dotenv",
     # FastAPI 服务层
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "sse-starlette>=2.0.0",
     "python-multipart>=0.0.9",
+    # 可选：LangGraph 持久化 checkpointer（企业环境推荐 PostgreSQL）
+    # "langgraph-checkpoint-postgres>=2.0.0",
 ]
 
 [tool.pytest.ini_options]

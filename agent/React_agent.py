@@ -2,11 +2,12 @@
 ReAct Agent - 基于 LangGraph StateGraph 的状态机实现
 
 核心改进：
-1. 替换 create_agent 为显式 StateGraph（memory -> agent -> human_approval -> tools）
+1. 替换 create_agent 为显式 StateGraph（memory -> summarization -> agent -> human_approval -> tools）
 2. 条件边控制循环与终止（should_continue + iteration_count 上限）
 3. Human-in-the-loop：敏感操作前挂起等待人工确认
-4. 保留三层记忆系统集成（MemoryManager 注入）
-5. 支持 stream / invoke 双模式
+4. 长期记忆系统集成（memory_node 注入 USER.md / 项目知识）
+5. LangGraph checkpointer 管理对话轮次内记忆（固定 thread_id = session_id）
+6. 支持 stream / invoke 双模式
 
 工具来源：
     - 本地工具：rag_summary, mp_download, mp_query, mp_list
@@ -15,9 +16,7 @@ ReAct Agent - 基于 LangGraph StateGraph 的状态机实现
 
 from __future__ import annotations
 
-import uuid
-
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
@@ -60,15 +59,12 @@ class ReactAgent:
             f"工具名={[t.name for t in tools]}"
         )
 
-        # 编译 LangGraph 状态机（替代 create_agent）
+        # 编译 LangGraph 状态机
         self.graph = build_agent_graph(
             chat_model=chat_model,
             tools=tools,
             memory_manager=memory_manager,
         )
-
-        # HITL thread_id 映射：session_id -> thread_id（用于恢复中断的执行）
-        self._hitl_threads: dict[str, str] = {}
 
     def _ensure_session(self, session_id: str | None = None) -> str:
         """确保有活跃的会话，自动创建或加载。"""
@@ -108,6 +104,12 @@ class ReactAgent:
     async def excutor_stream(self, query, session_id: str | None = None):
         """执行 Agent 流式推理，集成记忆系统与 HITL。
 
+        设计变更（固定 thread_id）：
+        - thread_id 固定为 session_id，同一 session 的所有请求共享同一个 LangGraph thread
+        - LangGraph checkpointer 自动管理对话轮次内的消息历史
+        - 每次调用只传入当前 query 的 HumanMessage，不再组装完整历史
+        - HITL 中断状态由持久化 checkpointer 保存，恢复时直接使用 session_id
+
         Args:
             query: 用户问题
             session_id: 会话ID，为 None 时自动创建/复用当前会话
@@ -117,11 +119,14 @@ class ReactAgent:
         """
         active_session_id = self._ensure_session(session_id)
 
+        # 将用户消息保存到记忆系统（长期/中期记忆）
         if self.memory_manager:
             self.memory_manager.add_user_message(active_session_id, query)
 
+        # 初始状态：只包含当前 query（HumanMessage）
+        # LangGraph checkpointer 会自动加载该 thread 的历史状态
         initial_state = {
-            "messages": [],
+            "messages": [HumanMessage(content=query)],
             "memory_context": "",
             "tool_calls": [],
             "iteration_count": 0,
@@ -131,8 +136,8 @@ class ReactAgent:
             "final_answer": "",
         }
 
-        # 每次调用使用新的 thread_id，避免 checkpointer 累积旧消息导致 system message 重复
-        thread_id = f"{active_session_id}_{uuid.uuid4().hex[:8]}"
+        # 固定 thread_id = session_id
+        thread_id = active_session_id
 
         config = {
             "configurable": {"thread_id": thread_id},
@@ -148,7 +153,6 @@ class ReactAgent:
         async for chunk in self.graph.astream(
             initial_state, config, stream_mode="updates"
         ):
-            # 解析节点更新
             if not isinstance(chunk, dict):
                 continue
 
@@ -160,8 +164,6 @@ class ReactAgent:
                     f"[ReactAgent] HITL 中断 | session={active_session_id} | "
                     f"tools={interrupt_value.get('tool_calls', [])}"
                 )
-                # 记录 thread_id 供后续恢复使用
-                self._hitl_threads[active_session_id] = thread_id
                 yield {
                     "type": "approval_required",
                     "session_id": active_session_id,
@@ -170,7 +172,7 @@ class ReactAgent:
                 }
                 return
 
-            # 只处理 agent 节点生成的新消息（避免重复输出历史消息）
+            # 只处理 agent 节点生成的新消息
             agent_update = chunk.get("agent")
             if agent_update:
                 for msg in agent_update.get("messages", []):
@@ -188,19 +190,11 @@ class ReactAgent:
             logger.info(f"[ReactAgent] 对话已保存 | session={active_session_id}")
 
     async def excutor(self, query, session_id: str | None = None) -> str | dict:
-        """执行 Agent 非流式推理，返回完整回答或 HITL 事件。
-
-        Args:
-            query: 用户问题
-            session_id: 会话ID
-
-        Returns:
-            完整回答文本，或 HITL approval_required 事件字典
-        """
+        """执行 Agent 非流式推理，返回完整回答或 HITL 事件。"""
         chunks = []
         async for chunk in self.excutor_stream(query, session_id):
             if isinstance(chunk, dict):
-                return chunk  # HITL 事件
+                return chunk
             chunks.append(chunk)
         return "".join(chunks)
 
@@ -215,6 +209,10 @@ class ReactAgent:
     ):
         """恢复被 HITL 挂起的 Agent 执行（流式）。
 
+        设计变更：
+        - 不再依赖内存中的 _hitl_threads 映射
+        - 直接使用 session_id 作为 thread_id，从持久化 checkpointer 恢复状态
+
         Args:
             session_id: 会话ID（与中断时一致）
             approval_result: {"action": "approve" | "reject", "comment": str}
@@ -222,9 +220,7 @@ class ReactAgent:
         Yields:
             文本片段或新的 HITL 事件字典
         """
-        thread_id = self._hitl_threads.pop(session_id, None)
-        if not thread_id:
-            raise ValueError(f"未找到 session {session_id} 的 HITL 中断记录，可能已超时或已处理")
+        thread_id = session_id
 
         config = {
             "configurable": {"thread_id": thread_id},

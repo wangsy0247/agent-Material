@@ -2,15 +2,51 @@ chat_model_name: "DeepSeek-V4-Flash"
 max_tokens: 8192
 external_data_path: "workspace/material_expression.txt"
 
+# ---- Checkpointer 配置（LangGraph 状态持久化） ----
+checkpointer:
+  type: "memory"  # 可选: postgres | memory
+  # postgres 配置（当 type=postgres 时生效，需安装 langgraph-checkpoint-postgres）
+  postgres:
+    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://user:pass@localhost:5432/langgraph}"
+
+# ---- Summarization 配置（长对话压缩） ----
+summarization:
+  enabled: true
+  message_threshold: 20      # 消息数超过此阈值触发 summarization
+  max_tokens: 4000           # 摘要生成最大 token 数
+  preserve_last_n: 6         # 压缩时保留最近 N 条消息
+
 # MP 工具运行模式: "local"(进程内直连) ｜ "mcp"(远程 MCP Server)
 mp_tool_mode: "mcp"
 
+# 敏感操作关键词列表（用于 HITL 人工审批匹配）
+# 同时支持精确匹配和前缀化工具的后缀匹配
+sensitive_keywords:
+  - "mp_download"
+
+# MCP 全局配置
+mcp_global:
+  max_reconnect_attempts: 5
+  initial_backoff_ms: 1000
+  max_backoff_ms: 30000
+  health_check_interval: 30
+  tool_description_max_length: 2048
+  max_inline_result_chars: 100000  # 工具结果超过此阈值自动落盘到文件
+
 # MCP 模式下的 Server 列表（支持同时连接多个）
 mcp_servers:
-  # - transport: "stdio"                     
-  #   command: ["python", "-m", "mp_material_server"]
-  #   name: "material"
-
   - transport: "sse"
     url: "http://127.0.0.1:8002/sse"
     name: "material-project"
+    enabled: false             
+    timeout: 60                # 单次工具调用超时（秒）
+    health_check_interval: 30  # 心跳间隔（秒）
+
+  # stdio 模式示例
+  - transport: "stdio"
+    command: ["python", "-m", "mp_material_server"]
+    name: "material-stdio"
+    enabled: true
+    env:                       # 可覆盖/扩展环境变量
+      MP_API_KEY: "lWo7oaVlFmSNs48f10qeGpHIykwo2VSa"
+    cwd: "workspace"

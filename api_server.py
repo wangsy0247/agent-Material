@@ -17,6 +17,7 @@ API 文档：
     http://localhost:8000/redoc       # ReDoc
 """
 
+import asyncio
 import os
 import sys
 
@@ -52,6 +53,53 @@ from api.routes import agent, rag, system, memory
 from utils.logger import logger
 
 
+# ==================== MCP 健康检查后台任务 ====================
+
+async def _mcp_health_monitor() -> None:
+    """定期检查 MCP 连接健康，不健康则触发重连。"""
+    await asyncio.sleep(5)  # 启动后稍等片刻再开始检查
+
+    while True:
+        try:
+            from agent.tools.mcp_adapter import _adapters
+            from utils.config_handler import agent_config
+
+            servers_cfg = {
+                cfg.get("name", ""): cfg
+                for cfg in agent_config.get("mcp_servers", [])
+            }
+
+            for name, conn in list(_adapters.items()):
+                # 跳过已禁用的 server
+                cfg = servers_cfg.get(name)
+                if cfg is not None and not cfg.get("enabled", True):
+                    continue
+
+                healthy = await conn._check_health()
+                if not healthy and cfg is not None:
+                    success = await conn.reconnect(cfg)
+                    if not success and conn._reconnect_attempts >= conn.max_reconnect_attempts:
+                        logger.warning(
+                            f"[MCPHealth] '{name}' 已达最大重连次数，"
+                            f"已标记为离线 | 最后错误: {conn._last_error}"
+                        )
+
+            # 默认每 30 秒检查一次（可从配置读取）
+            interval = 30
+            try:
+                from utils.config_handler import agent_config
+                interval = agent_config.get("mcp_global", {}).get("health_check_interval", 30)
+            except Exception:
+                pass
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            logger.info("[MCPHealth] 健康检查任务已取消")
+            raise
+        except Exception as e:
+            logger.error(f"[MCPHealth] 健康检查循环异常: {e}")
+            await asyncio.sleep(30)
+
+
 # ==================== 生命周期管理 ====================
 
 @asynccontextmanager
@@ -70,6 +118,8 @@ async def lifespan(app: FastAPI):
 
     # MCP 模式：连接多个远程 MCP Server
     mp_tool_mode = agent_config.get("mp_tool_mode", "local")
+    _mcp_health_task: asyncio.Task | None = None
+
     if mp_tool_mode == "mcp":
         servers = agent_config.get("mcp_servers", [])
         if servers:
@@ -78,6 +128,12 @@ async def lifespan(app: FastAPI):
                 from agent.tools.mcp_adapter import init_mcp_tools
                 tools = await init_mcp_tools(servers)
                 logger.info(f"✅ MCP 连接完成 | 远程工具={[t.name for t in tools]}")
+
+                # 启动 MCP 健康检查后台任务
+                _mcp_health_task = asyncio.create_task(
+                    _mcp_health_monitor(), name="mcp-health-monitor"
+                )
+                logger.info("🩺 MCP 健康检查后台任务已启动")
             except Exception as e:
                 logger.warning(f"⚠️ MCP 连接失败: {e} | Agent 将回退到本地模式")
         else:
@@ -99,6 +155,14 @@ async def lifespan(app: FastAPI):
 
     # ===== Shutdown =====
     logger.info("🛑 服务关闭中...")
+    if _mcp_health_task is not None and not _mcp_health_task.done():
+        _mcp_health_task.cancel()
+        try:
+            await _mcp_health_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("✅ MCP 健康检查任务已取消")
+
     if mp_tool_mode == "mcp":
         try:
             from agent.tools.mcp_adapter import close_mcp

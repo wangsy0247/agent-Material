@@ -132,7 +132,13 @@ class ShortTermMemory:
 
         # 可压缩区域是否足够大
         compressible: int = len(self._context.messages) - self.protect_first_n - self.protect_last_n
-        return compressible >= MIN_COMPRESSIBLE_MESSAGES
+        if compressible < MIN_COMPRESSIBLE_MESSAGES:
+            return False
+
+        # 委托压缩器进行反颠簸和冷却检查
+        self._ensure_compressor()
+        threshold_tokens: int = int(self.max_tokens * self.compress_threshold)
+        return self._compressor.should_compress(self._context.total_tokens, threshold_tokens)
 
     def _compress_context(self) -> None:
         """执行上下文压缩"""
@@ -171,6 +177,8 @@ class ShortTermMemory:
     def clear(self) -> None:
         """清空短期记忆"""
         self._context = ContextWindow(max_tokens=self.max_tokens)
+        if self._compressor is not None:
+            self._compressor.reset()
         logger.info("[ShortTermMemory] 上下文已清空")
 
     def fork(self) -> "ShortTermMemory":
@@ -184,6 +192,12 @@ class ShortTermMemory:
         new_stm._context.messages = self._context.messages.copy()
         new_stm._context.total_tokens = self._context.total_tokens
         new_stm._context.compression_count = self._context.compression_count
+        # 复制压缩器状态（如有）
+        if self._compressor is not None:
+            from memory.context_compressor import ContextCompressor
+            new_stm._compressor = ContextCompressor(model=self._compressor.model)
+            new_stm._compressor._previous_summary = self._compressor._previous_summary
+            new_stm._compressor._ineffective_count = self._compressor._ineffective_count
         return new_stm
 
     def to_dict(self) -> dict:
