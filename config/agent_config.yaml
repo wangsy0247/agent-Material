@@ -4,10 +4,10 @@ external_data_path: "workspace/material_expression.txt"
 
 # ---- Checkpointer 配置（LangGraph 状态持久化） ----
 checkpointer:
-  type: "memory"  # 可选: postgres | memory
+  type: "postgres"  # 可选: postgres | memory
   # postgres 配置（当 type=postgres 时生效，需安装 langgraph-checkpoint-postgres）
   postgres:
-    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://user:pass@localhost:5432/langgraph}"
+    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://langgraph:wsy@localhost:5432/langgraph}"
 
 # ---- Summarization 配置（长对话压缩） ----
 summarization:
