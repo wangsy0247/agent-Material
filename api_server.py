@@ -49,7 +49,7 @@ try:
 except ImportError:
     FASTAPI_OFFLINE_AVAILABLE = False
 
-from api.routes import agent, rag, system, memory
+from api.routes import agent, rag, system, memory, auth
 from utils.logger import logger
 
 
@@ -222,6 +222,7 @@ app.include_router(agent.router, prefix=API_PREFIX)
 app.include_router(rag.router, prefix=API_PREFIX)
 app.include_router(system.router, prefix=API_PREFIX)
 app.include_router(memory.router, prefix=API_PREFIX)
+app.include_router(auth.router, prefix=API_PREFIX)
 
 
 # ==================== 静态文件 & 前端页面 ====================
@@ -251,6 +252,8 @@ async def api_info():
             "memory_recall": "/api/v1/memory/recall",
             "health": "/api/v1/system/health",
             "stats": "/api/v1/system/rag/stats",
+            "auth_login": "/api/v1/auth/login",
+            "auth_register": "/api/v1/auth/register",
         },
     }
 

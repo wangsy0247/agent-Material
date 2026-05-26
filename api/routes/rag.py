@@ -15,7 +15,8 @@ from api.schemas import (
     DocumentSource,
     SSEEvent,
 )
-from api.dependencies import get_rag_service
+from api.dependencies import get_rag_service, get_current_user
+from api.auth_schemas import UserInfo
 from utils.logger import logger
 
 router = APIRouter(prefix="/rag", tags=["RAG 知识库"])
@@ -57,18 +58,26 @@ def _build_context_with_sources(docs: list) -> tuple[str, list[DocumentSource]]:
 
 
 @router.post("/retrieve", response_model=RAGRetrieveResponse, summary="检索相关文档")
-async def rag_retrieve(request: RAGRetrieveRequest, rag_service=Depends(get_rag_service)):
+async def rag_retrieve(
+    request: RAGRetrieveRequest,
+    current_user: UserInfo = Depends(get_current_user),
+    rag_service=Depends(get_rag_service),
+):
     """
     仅执行文档检索，返回相关文档列表（非流式）
     
     适用于需要在前端展示"参考了哪些资料"的场景
     """
+    import time
+    start = time.time()
     try:
-        logger.info(f"[RAG Retrieve] 查询: {request.question[:50]}...")
+        logger.info(f"[RAG Retrieve] 用户={current_user.user_id} | 查询: {request.question[:50]}...")
         
         docs = rag_service.retriever_docx(request.question)
+        elapsed = time.time() - start
         
         if not docs:
+            logger.info(f"[RAG Retrieve] 未检索到文档 | 耗时: {elapsed:.2f}s")
             return RAGRetrieveResponse(
                 code=200,
                 message="未检索到相关文档",
@@ -78,6 +87,7 @@ async def rag_retrieve(request: RAGRetrieveRequest, rag_service=Depends(get_rag_
         
         _, sources = _build_context_with_sources(docs)
         
+        logger.info(f"[RAG Retrieve] 检索完成 | 返回 {len(sources)} 条 | 总耗时: {elapsed:.2f}s")
         return RAGRetrieveResponse(
             code=200,
             message=f"检索到 {len(sources)} 条相关文档",
@@ -86,12 +96,16 @@ async def rag_retrieve(request: RAGRetrieveRequest, rag_service=Depends(get_rag_
         )
         
     except Exception as e:
-        logger.error(f"[RAG Retrieve] 失败: {e}")
+        logger.error(f"[RAG Retrieve] 失败 | 耗时: {time.time() - start:.2f}s | 错误: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/query", summary="RAG 问答（SSE 流式）")
-async def rag_query(request: RAGQueryRequest, rag_service=Depends(get_rag_service)):
+async def rag_query(
+    request: RAGQueryRequest,
+    current_user: UserInfo = Depends(get_current_user),
+    rag_service=Depends(get_rag_service),
+):
     """
     RAG 知识库问答，支持 SSE 流式输出
     
@@ -112,7 +126,10 @@ async def rag_query(request: RAGQueryRequest, rag_service=Depends(get_rag_servic
     ```javascript
     const response = await fetch('/api/v1/rag/query', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+        },
         body: JSON.stringify({question: '石墨烯的性质', stream: true})
     });
     const reader = response.body.getReader();
@@ -121,6 +138,8 @@ async def rag_query(request: RAGQueryRequest, rag_service=Depends(get_rag_servic
     """
     if not request.question or not request.question.strip():
         raise HTTPException(status_code=400, detail="问题不能为空")
+    
+    logger.info(f"[RAG Query] 用户={current_user.user_id} | 查询: {request.question[:50]}...")
     
     # 非流式模式
     if not request.stream:
@@ -139,7 +158,9 @@ async def rag_query(request: RAGQueryRequest, rag_service=Depends(get_rag_servic
     
     # 流式模式：SSE
     async def event_stream():
-        logger.info(f"[RAG SSE] 新请求 | question={request.question[:50]}...")
+        import time
+        start = time.time()
+        logger.info(f"[RAG SSE] 用户={current_user.user_id} | question={request.question[:50]}...")
         
         yield format_sse_event("start")
         
@@ -147,7 +168,10 @@ async def rag_query(request: RAGQueryRequest, rag_service=Depends(get_rag_servic
             # 1. 检索阶段
             yield format_sse_event("status", "正在检索相关文献...")
             
+            t0 = time.time()
             docs = rag_service.retriever_docx(request.question)
+            retrieve_time = time.time() - t0
+            logger.info(f"[RAG SSE] 检索完成 | 文档数={len(docs)} | 耗时={retrieve_time:.2f}s")
             
             if not docs:
                 yield format_sse_event(
@@ -168,17 +192,24 @@ async def rag_query(request: RAGQueryRequest, rag_service=Depends(get_rag_servic
             # 3. 生成阶段
             yield format_sse_event("status", "正在生成答案...")
             
+            t0 = time.time()
             for chunk in rag_service.chain.stream(
                 {"input": request.question, "context": context}
             ):
                 if chunk:
                     yield format_sse_event("token", chunk)
+            gen_time = time.time() - t0
             
+            total_time = time.time() - start
             yield format_sse_event("done")
-            logger.info(f"[RAG SSE] 请求完成 | sources={len(sources)}")
+            logger.info(
+                f"[RAG SSE] 请求完成 | user={current_user.user_id} | "
+                f"sources={len(sources)} | 检索={retrieve_time:.2f}s | "
+                f"生成={gen_time:.2f}s | 总耗时={total_time:.2f}s"
+            )
             
         except Exception as e:
-            logger.error(f"[RAG SSE] 请求失败: {e}")
+            logger.error(f"[RAG SSE] 请求失败 | 耗时={time.time() - start:.2f}s | 错误: {e}")
             yield format_sse_event("error", {"message": str(e), "type": type(e).__name__})
             yield format_sse_event("done")
     

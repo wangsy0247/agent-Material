@@ -1,0 +1,27 @@
+# ============================================
+# 认证模块配置 (Authentication Configuration)
+# ============================================
+
+# JWT 密钥（生产环境必须修改！）
+# 可通过环境变量 AUTH_SECRET_KEY 覆盖
+secret_key: "your-super-secret-jwt-key-change-this-in-production"
+
+# Token 过期时间（分钟）
+access_token_expire_minutes: 60
+
+# 刷新 Token 过期时间（天）
+refresh_token_expire_days: 7
+
+# 密码哈希算法
+algorithm: "HS256"
+
+# 是否允许匿名访问（向后兼容模式）
+# true:  未携带 Token 的请求使用 user_id="anonymous"
+# false: 所有请求必须携带有效 Token
+allow_anonymous: false
+
+# 默认管理员账号（首次启动时自动创建，留空则跳过）
+default_admin:
+  username: "admin"
+  password: "admin123"  # 生产环境必须修改
+  email: "admin@example.com"

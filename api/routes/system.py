@@ -5,7 +5,8 @@
 import time
 from fastapi import APIRouter, Depends
 from api.schemas import HealthResponse, RAGStatsResponse
-from api.dependencies import get_rag_service
+from api.dependencies import get_rag_service, get_current_user
+from api.auth_schemas import UserInfo
 
 router = APIRouter(prefix="/system", tags=["系统管理"])
 
@@ -15,7 +16,7 @@ START_TIME = time.time()
 
 @router.get("/health", response_model=HealthResponse, summary="健康检查")
 async def health_check():
-    """检查服务是否正常运行"""
+    """检查服务是否正常运行（公开访问，无需认证）"""
     uptime = time.time() - START_TIME
     return HealthResponse(
         code=200,
@@ -29,8 +30,11 @@ async def health_check():
 
 
 @router.get("/rag/stats", response_model=RAGStatsResponse, summary="RAG 统计信息")
-async def rag_stats(rag_service=Depends(get_rag_service)):
-    """获取 RAG 向量库的统计信息"""
+async def rag_stats(
+    current_user: UserInfo = Depends(get_current_user),
+    rag_service=Depends(get_rag_service),
+):
+    """获取 RAG 向量库的统计信息（需认证）"""
     try:
         doc_count = rag_service.vector_store.get_document_count()
         return RAGStatsResponse(

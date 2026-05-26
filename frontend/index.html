@@ -133,6 +133,49 @@
         </aside>
     </div>
 
+    <!-- 认证模态框 -->
+    <div class="auth-overlay" id="authOverlay" style="display: none;">
+        <div class="auth-modal">
+            <h2>🔬 材料科学 Agent</h2>
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="tabLogin" data-tab="login">登录</button>
+                <button class="auth-tab" id="tabRegister" data-tab="register">注册</button>
+            </div>
+
+            <!-- 登录表单 -->
+            <form class="auth-form" id="loginForm">
+                <div class="auth-input-group">
+                    <label>用户名</label>
+                    <input type="text" class="auth-input" id="loginUsername" placeholder="请输入用户名" required>
+                </div>
+                <div class="auth-input-group">
+                    <label>密码</label>
+                    <input type="password" class="auth-input" id="loginPassword" placeholder="请输入密码" required>
+                </div>
+                <div class="auth-error" id="loginError"></div>
+                <button type="submit" class="auth-btn" id="loginBtn">登录</button>
+            </form>
+
+            <!-- 注册表单 -->
+            <form class="auth-form hidden" id="registerForm">
+                <div class="auth-input-group">
+                    <label>用户名</label>
+                    <input type="text" class="auth-input" id="registerUsername" placeholder="3-50 位字符" required minlength="3" maxlength="50">
+                </div>
+                <div class="auth-input-group">
+                    <label>邮箱（可选）</label>
+                    <input type="email" class="auth-input" id="registerEmail" placeholder="example@mail.com">
+                </div>
+                <div class="auth-input-group">
+                    <label>密码</label>
+                    <input type="password" class="auth-input" id="registerPassword" placeholder="至少 6 位" required minlength="6">
+                </div>
+                <div class="auth-error" id="registerError"></div>
+                <button type="submit" class="auth-btn" id="registerBtn">注册</button>
+            </form>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>

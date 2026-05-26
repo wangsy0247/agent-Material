@@ -30,6 +30,10 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "sse-starlette>=2.0.0",
     "python-multipart>=0.0.9",
+    # 认证模块
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0.0",
+    "email-validator>=2.0.0",
     # 可选：LangGraph 持久化 checkpointer（企业环境推荐 PostgreSQL）
     # "langgraph-checkpoint-postgres>=2.0.0",
 ]

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from agent.React_agent import ReactAgent
     from rag.rag_service import RagService
     from memory.manager import MemoryManager
+    from api.auth_schemas import UserInfo
 
 
 @lru_cache(maxsize=1)
@@ -30,16 +31,20 @@ def get_agent() -> "ReactAgent":
 
 
 @lru_cache(maxsize=1)
-def get_agent_with_memory() -> "ReactAgent":
-    """获取集成记忆系统的 Agent 实例
+def get_agent_with_memory(user_id: str | None = None) -> "ReactAgent":
+    """获取集成记忆系统的 Agent 实例（按用户隔离）
 
     自动将 MemoryManager 注入 Agent，实现：
     - 对话历史自动保存
     - 长期记忆注入系统提示
     - Token 超限自动压缩
+
+    Args:
+        user_id: 用户ID（多租户隔离），None 时使用 default
     """
     from agent.React_agent import ReactAgent
     mm = get_memory_manager()
+    # 注意：Agent 内部需要通过 session_id 和 user_id 协同实现隔离
     return ReactAgent(memory_manager=mm)
 
 
@@ -62,6 +67,13 @@ def get_memory_manager() -> "MemoryManager":
     - L1 短期记忆：对话上下文窗口管理
     - L2 中期记忆：SQLite 会话持久化
     - L3 长期记忆：文件 + 向量检索
+
+    注意：MemoryManager 内部按 user_id 隔离数据，
+    但实例本身是全局共享的（通过方法参数传入 user_id 实现隔离）。
     """
     from memory.manager import MemoryManager
     return MemoryManager()
+
+
+# ---- 认证依赖 ----
+from api.auth import get_current_user

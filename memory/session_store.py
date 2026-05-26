@@ -3,8 +3,8 @@
 
 参考 Hermes-Agent 设计：
 - SQLite + WAL 模式，支持多读者单写者
-- sessions 表存储会话元数据
-- messages 表存储完整消息历史
+- sessions 表存储会话元数据（按 user_id 隔离）
+- messages 表存储完整消息历史（按 user_id 隔离）
 - 应用级重试处理写冲突
 
 配置来源：config/memory_config.yaml -> session_store
@@ -41,6 +41,7 @@ class SessionStore:
     1. WAL 模式提高并发性能
     2. 应用级重试处理写冲突
     3. 自动列迁移（声明式）
+    4. 按 user_id 隔离会话数据
     """
 
     def __init__(self, db_path: str | None = None):
@@ -66,7 +67,7 @@ class SessionStore:
         return self._local.conn
 
     def _init_db(self) -> None:
-        """初始化数据库 Schema"""
+        """初始化数据库 Schema（含向后兼容的列迁移）"""
         with self._lock:
             conn: sqlite3.Connection = sqlite3.connect(self.db_path)
 
@@ -79,6 +80,7 @@ class SessionStore:
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
+                    user_id TEXT DEFAULT 'default',
                     title TEXT,
                     created_at REAL,
                     updated_at REAL,
@@ -99,6 +101,7 @@ class SessionStore:
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT,
+                    user_id TEXT DEFAULT 'default',
                     role TEXT,
                     content TEXT,
                     tool_call_id TEXT,
@@ -111,15 +114,30 @@ class SessionStore:
                 """
             )
 
+            # 向后兼容：如果旧表没有 user_id 列，自动添加
+            self._ensure_column(conn, "sessions", "user_id", "TEXT DEFAULT 'default'")
+            self._ensure_column(conn, "messages", "user_id", "TEXT DEFAULT 'default'")
+
             # 索引
             conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_time ON messages(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_user ON messages(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(is_active)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at)")
 
             conn.commit()
             conn.close()
             logger.info(f"[SessionStore] 数据库初始化完成: {self.db_path}")
+
+    def _ensure_column(
+        self, conn: sqlite3.Connection, table: str, column: str, col_type: str
+    ) -> None:
+        """确保表中有指定列（向后兼容迁移）"""
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        columns = [row[1] for row in cursor.fetchall()]
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+            logger.info(f"[SessionStore] 迁移: {table} 表添加 {column} 列")
 
     def _retry_execute(self, func, *args, **kwargs):
         """带重试的数据库操作
@@ -143,6 +161,7 @@ class SessionStore:
     def create_session(
         self,
         session_id: str,
+        user_id: str = "default",
         title: str | None = None,
         source: str = "api",
         metadata: dict | None = None,
@@ -151,6 +170,7 @@ class SessionStore:
         now: float = time.time()
         info: SessionInfo = SessionInfo(
             session_id=session_id,
+            user_id=user_id,
             title=title or f"会话 {session_id[:8]}",
             created_at=now,
             updated_at=now,
@@ -163,11 +183,12 @@ class SessionStore:
             conn.execute(
                 """
                 INSERT INTO sessions
-                (session_id, title, created_at, updated_at, source, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (session_id, user_id, title, created_at, updated_at, source, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     info.session_id,
+                    info.user_id,
                     info.title,
                     info.created_at,
                     info.updated_at,
@@ -178,21 +199,33 @@ class SessionStore:
             conn.commit()
 
         self._retry_execute(_insert)
-        logger.info(f"[SessionStore] 创建会话: {session_id}")
+        logger.info(f"[SessionStore] 创建会话: {session_id} | user={user_id}")
         return info
 
-    def get_session(self, session_id: str) -> SessionInfo | None:
-        """获取会话信息"""
+    def get_session(self, session_id: str, user_id: str | None = None) -> SessionInfo | None:
+        """获取会话信息
+
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID（提供时校验归属，None 时仅按 session_id 查询）
+        """
         conn: sqlite3.Connection = self._get_conn()
-        row: sqlite3.Row | None = conn.execute(
-            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
-        ).fetchone()
+        if user_id is not None:
+            row: sqlite3.Row | None = conn.execute(
+                "SELECT * FROM sessions WHERE session_id = ? AND user_id = ?",
+                (session_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
 
         if not row:
             return None
 
         return SessionInfo(
             session_id=row["session_id"],
+            user_id=row["user_id"] or "default",
             title=row["title"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -207,17 +240,18 @@ class SessionStore:
 
     def list_sessions(
         self,
+        user_id: str = "default",
         limit: int = 50,
         offset: int = 0,
         active_only: bool = False,
     ) -> list[SessionInfo]:
-        """列出会话列表"""
+        """列出指定用户的会话列表"""
         conn: sqlite3.Connection = self._get_conn()
 
-        sql: str = "SELECT * FROM sessions"
-        params: list = []
+        sql: str = "SELECT * FROM sessions WHERE user_id = ?"
+        params: list = [user_id]
         if active_only:
-            sql += " WHERE is_active = 1"
+            sql += " AND is_active = 1"
         sql += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
@@ -228,6 +262,7 @@ class SessionStore:
             results.append(
                 SessionInfo(
                     session_id=row["session_id"],
+                    user_id=row["user_id"] or "default",
                     title=row["title"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
@@ -242,8 +277,13 @@ class SessionStore:
             )
         return results
 
-    def update_session(self, session_id: str, **kwargs) -> bool:
-        """更新会话信息"""
+    def update_session(self, session_id: str, user_id: str | None = None, **kwargs) -> bool:
+        """更新会话信息
+
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID（提供时增加归属校验）
+        """
         allowed: set[str] = {
             "title",
             "is_active",
@@ -262,37 +302,65 @@ class SessionStore:
             updates["metadata"] = json.dumps(updates["metadata"])
 
         fields: str = ", ".join(f"{k} = ?" for k in updates.keys())
-        values: list = list(updates.values()) + [session_id]
+        values: list = list(updates.values())
+        values.append(session_id)
 
         def _update() -> None:
             conn: sqlite3.Connection = self._get_conn()
-            conn.execute(f"UPDATE sessions SET {fields} WHERE session_id = ?", values)
+            if user_id is not None:
+                conn.execute(
+                    f"UPDATE sessions SET {fields} WHERE session_id = ? AND user_id = ?",
+                    values + [user_id],
+                )
+            else:
+                conn.execute(f"UPDATE sessions SET {fields} WHERE session_id = ?", values)
             conn.commit()
 
         self._retry_execute(_update)
         return True
 
-    def end_session(self, session_id: str, reason: str = "user_close") -> None:
-        """结束会话"""
-        self.update_session(session_id, is_active=False, end_reason=reason)
+    def end_session(self, session_id: str, user_id: str | None = None, reason: str = "user_close") -> None:
+        """结束指定会话"""
+        self.update_session(session_id, user_id=user_id, is_active=False, end_reason=reason)
         logger.info(f"[SessionStore] 结束会话: {session_id}, 原因: {reason}")
 
-    def delete_session(self, session_id: str) -> bool:
-        """删除会话及所有消息"""
+    def delete_session(self, session_id: str, user_id: str | None = None) -> bool:
+        """删除会话及所有消息（带用户归属校验）"""
+        deleted = False
 
         def _delete() -> None:
+            nonlocal deleted
             conn: sqlite3.Connection = self._get_conn()
-            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            if user_id is not None:
+                # 先校验归属
+                row = conn.execute(
+                    "SELECT 1 FROM sessions WHERE session_id = ? AND user_id = ?",
+                    (session_id, user_id),
+                ).fetchone()
+                if not row:
+                    deleted = False
+                    return  # 不属于该用户，静默跳过
+                conn.execute(
+                    "DELETE FROM messages WHERE session_id = ? AND user_id = ?",
+                    (session_id, user_id),
+                )
+                conn.execute(
+                    "DELETE FROM sessions WHERE session_id = ? AND user_id = ?",
+                    (session_id, user_id),
+                )
+            else:
+                conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+                conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             conn.commit()
+            deleted = True
 
         self._retry_execute(_delete)
-        logger.info(f"[SessionStore] 删除会话: {session_id}")
-        return True
+        logger.info(f"[SessionStore] 删除会话: {session_id} | success={deleted}")
+        return deleted
 
     # ==================== 消息操作 ====================
 
-    def append_message(self, session_id: str, msg: MessageRecord) -> bool:
+    def append_message(self, session_id: str, msg: MessageRecord, user_id: str = "default") -> bool:
         """追加消息到会话"""
 
         def _insert() -> None:
@@ -300,11 +368,12 @@ class SessionStore:
             conn.execute(
                 """
                 INSERT INTO messages
-                (session_id, role, content, tool_call_id, tool_calls, name, timestamp, token_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (session_id, user_id, role, content, tool_call_id, tool_calls, name, timestamp, token_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
+                    user_id,
                     msg.role,
                     msg.content,
                     msg.tool_call_id,
@@ -349,18 +418,35 @@ class SessionStore:
     def get_messages(
         self,
         session_id: str,
+        user_id: str | None = None,
         limit: int = 1000,
         offset: int = 0,
     ) -> list[MessageRecord]:
-        """获取会话消息列表"""
+        """获取会话消息列表
+
+        Args:
+            session_id: 会话ID
+            user_id: 用户ID（提供时校验归属）
+        """
         conn: sqlite3.Connection = self._get_conn()
-        rows: list[sqlite3.Row] = conn.execute(
-            """
-            SELECT * FROM messages WHERE session_id = ?
-            ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?
-            """,
-            (session_id, limit, offset),
-        ).fetchall()
+        if user_id is not None:
+            rows: list[sqlite3.Row] = conn.execute(
+                """
+                SELECT m.* FROM messages m
+                JOIN sessions s ON m.session_id = s.session_id
+                WHERE m.session_id = ? AND s.user_id = ?
+                ORDER BY m.timestamp ASC, m.id ASC LIMIT ? OFFSET ?
+                """,
+                (session_id, user_id, limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM messages WHERE session_id = ?
+                ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?
+                """,
+                (session_id, limit, offset),
+            ).fetchall()
 
         results: list[MessageRecord] = []
         for row in rows:
@@ -380,14 +466,15 @@ class SessionStore:
     def search_messages(
         self,
         query: str,
+        user_id: str = "default",
         session_id: str | None = None,
         limit: int = 20,
     ) -> list[dict]:
         """简单关键词搜索消息（LIKE 匹配，生产环境可升级为 FTS5）"""
         conn: sqlite3.Connection = self._get_conn()
 
-        sql: str = "SELECT * FROM messages WHERE content LIKE ?"
-        params: list = [f"%{query}%"]
+        sql: str = "SELECT * FROM messages WHERE user_id = ? AND content LIKE ?"
+        params: list = [user_id, f"%{query}%"]
 
         if session_id:
             sql += " AND session_id = ?"

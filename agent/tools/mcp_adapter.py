@@ -339,6 +339,11 @@ async def init_mcp_tools(servers: list[dict]) -> list[BaseTool]:
                 # 使用全局字典维护 tool_name -> server_name 映射
                 # StructuredTool 是 Pydantic BaseModel，不允许动态添加字段
                 _tool_server_map[lc_tool.name] = conn.name
+
+                # 包装工具调用：添加耗时日志和超时保护
+                tool_timeout = cfg.get("timeout", 60)
+                _wrap_tool_with_logging(lc_tool, timeout=tool_timeout)
+
                 _mcp_tools.append(lc_tool)
                 total += 1
 
@@ -364,6 +369,44 @@ async def close_mcp() -> None:
     _adapters.clear()
     _mcp_tools.clear()
     _tool_server_map.clear()
+
+
+def _wrap_tool_with_logging(tool: BaseTool, timeout: int = 60) -> None:
+    """为 MCP 工具包装耗时日志和超时保护。
+
+    直接修改 tool 的 ainvoke 方法，在调用前后打印日志。
+    """
+    import time
+    from functools import wraps
+
+    original_ainvoke = tool.ainvoke
+
+    @wraps(original_ainvoke)
+    async def wrapped_ainvoke(input, config=None, **kwargs):
+        t0 = time.time()
+        tool_name = tool.name
+        logger.info(f"[MCP] 开始调用工具: {tool_name} | 参数: {str(input)[:200]}")
+        try:
+            # 使用 asyncio.wait_for 添加超时
+            result = await asyncio.wait_for(
+                original_ainvoke(input, config=config, **kwargs),
+                timeout=timeout,
+            )
+            elapsed = time.time() - t0
+            result_preview = str(result)[:150] if result else "(空)"
+            logger.info(f"[MCP] 工具调用完成: {tool_name} | 耗时={elapsed:.2f}s | 结果={result_preview}")
+            return result
+        except asyncio.TimeoutError:
+            elapsed = time.time() - t0
+            logger.error(f"[MCP] 工具调用超时: {tool_name} | 耗时={elapsed:.2f}s | 超过 {timeout}s 限制")
+            raise TimeoutError(f"MCP 工具 '{tool_name}' 调用超时（{timeout}s），请检查网络或 MCP Server 状态")
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.error(f"[MCP] 工具调用失败: {tool_name} | 耗时={elapsed:.2f}s | 错误: {e}")
+            raise
+
+    # 直接替换方法
+    tool.ainvoke = wrapped_ainvoke
 
 
 def get_mcp_tools() -> list[BaseTool]:

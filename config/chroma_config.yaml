@@ -14,9 +14,14 @@ document_directory: data
 allow_type: [".pdf", ".txt", ".md", ".docx", ".pptx"]
 
 # 检索配置
-k: 10                    # 向量/BM25 检索返回数量
-score_threshold: 0.1     # 向量相似度阈值（0~1，越高越严格）
+k: 5                     # 向量/BM25 检索返回数量（减小以减少重排序负担）
+score_threshold: 0.3     # 向量相似度阈值（提高以过滤低质量文档）
 top_n: 3                 # 重排序后返回数量
+max_rerank_docs: 8       # 进入重排序器的最大文档数（截断保护）
+
+# 重排序开关（CPU 上 0.6B 模型推理很慢，如无 GPU 建议关闭）
+enable_reranker: true
+reranker_batch_size: 8   # CrossEncoder batch size（越大 CPU/GPU 利用率越高）
 reranker_model: "/mnt/d/models/Qwen3-Reranker-0.6B"  # 重排序模型（本地路径）
 bm25_weight: 0.5         # BM25 检索权重
 vector_weight: 0.5       # 向量检索权重

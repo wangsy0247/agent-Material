@@ -1,8 +1,8 @@
 """
-Agent 路由：支持 SSE 流式对话 + HITL + 三层记忆系统集成
+Agent 路由：支持 SSE 流式对话 + HITL + 三层记忆系统集成（按用户隔离）
 
 记忆集成设计：
-1. 自动创建/加载会话（根据 session_id）
+1. 自动创建/加载会话（根据 session_id + user_id）
 2. 用户消息自动保存到短期记忆 + SQLite
 3. Agent 调用时注入长期记忆（USER.md / MEMORY.md）到系统提示
 4. 助手回复自动保存到记忆系统
@@ -25,7 +25,8 @@ from api.schemas import (
     AgentApprovalRequest,
     SSEEvent,
 )
-from api.dependencies import get_agent_with_memory, get_memory_manager
+from api.dependencies import get_agent_with_memory, get_memory_manager, get_current_user
+from api.auth_schemas import UserInfo
 from utils.logger import logger
 
 if TYPE_CHECKING:
@@ -41,27 +42,28 @@ def format_sse_event(event_type: str, content: str | dict | list | None = None) 
     return f"data: {event.model_dump_json()}\n\n"
 
 
-def _ensure_session(mm: "MemoryManager", session_id: str | None) -> str:
-    """确保有活跃会话，自动创建或加载（方案1：按 session_id 隔离）"""
+def _ensure_session(mm: "MemoryManager", session_id: str | None, user_id: str) -> str:
+    """确保有活跃会话，自动创建或加载（按 user_id 隔离）"""
     if session_id and session_id != "default":
         # 已经在内存池中，更新活跃状态后直接返回
-        if session_id in mm._session_pool:
-            mm.session_store.update_session(session_id, is_active=True, end_reason=None)
+        if (user_id, session_id) in mm._session_pool:
+            mm.session_store.update_session(session_id, user_id=user_id, is_active=True, end_reason=None)
             return session_id
         # 尝试从 SQLite 加载已有会话
-        if mm.load_session(session_id):
+        if mm.load_session(session_id, user_id=user_id):
             return session_id
         else:
             # 会话不存在，创建新会话
-            return mm.create_session(title=f"会话 {session_id[:8]}")
+            return mm.create_session(user_id=user_id, title=f"会话 {session_id[:8]}")
 
     # 没有指定 session_id（或传了 "default"），创建新会话
-    return mm.create_session(title="Agent 对话")
+    return mm.create_session(user_id=user_id, title="Agent 对话")
 
 
 @router.post("/chat", summary="Agent 对话（SSE 流式 + 记忆集成）")
 async def agent_chat(
     request: AgentChatRequest,
+    current_user: UserInfo = Depends(get_current_user),
     agent: "ReactAgent" = Depends(get_agent_with_memory),
     mm: "MemoryManager" = Depends(get_memory_manager),
 ):
@@ -69,7 +71,7 @@ async def agent_chat(
     与材料科学 Agent 进行对话，支持 SSE 流式输出 + 三层记忆系统 + HITL
 
     **记忆集成说明：**
-    - 自动创建/管理会话（根据 session_id）
+    - 自动创建/管理会话（根据 session_id，按用户隔离）
     - 长期记忆（USER.md / MEMORY.md）自动注入系统提示
     - 对话历史自动保存到 SQLite
     - Token 超限时自动压缩上下文
@@ -92,23 +94,27 @@ async def agent_chat(
     if not request.question or not request.question.strip():
         raise HTTPException(status_code=400, detail="问题不能为空")
 
+    user_id = current_user.user_id
+
     # 确保会话
-    active_session_id = _ensure_session(mm, request.session_id)
+    active_session_id = _ensure_session(mm, request.session_id, user_id)
 
     # 非流式模式：直接返回完整结果
     if not request.stream:
         try:
             # 注入记忆状态信息
             memory_info = []
-            if mm.long_term:
-                if mm.long_term.user_file.exists():
+            lt = mm._get_long_term(user_id)
+            if lt:
+                if lt.user_file.exists():
                     memory_info.append("已加载用户画像")
-                if mm.long_term.project_file.exists():
+                if lt.project_file.exists():
                     memory_info.append("已加载项目知识")
 
             result = await agent.excutor(
                 request.question,
                 session_id=active_session_id,
+                user_id=user_id,
             )
 
             # HITL 中断返回事件字典
@@ -131,7 +137,7 @@ async def agent_chat(
     async def event_stream():
         """生成 SSE 事件流"""
         logger.info(
-            f"[Agent SSE] 新请求 | session={active_session_id} | "
+            f"[Agent SSE] 新请求 | user={user_id} | session={active_session_id} | "
             f"question={request.question[:50]}..."
         )
 
@@ -140,16 +146,17 @@ async def agent_chat(
 
         # 发送记忆注入状态
         memory_status = []
-        if mm.long_term:
-            if mm.long_term.user_file.exists():
+        lt = mm._get_long_term(user_id)
+        if lt:
+            if lt.user_file.exists():
                 memory_status.append("用户画像已加载")
-            if mm.long_term.project_file.exists():
+            if lt.project_file.exists():
                 memory_status.append("项目知识已加载")
         if memory_status:
             yield format_sse_event("status", {"memory": memory_status})
 
         # 发送上下文统计（从指定会话的短期记忆中获取）
-        session_stats = mm.get_session_stats(active_session_id)
+        session_stats = mm.get_session_stats(active_session_id, user_id=user_id)
         yield format_sse_event("status", {"context": session_stats})
 
         full_answer = ""
@@ -159,6 +166,7 @@ async def agent_chat(
             async for chunk in agent.excutor_stream(
                 request.question,
                 session_id=active_session_id,
+                user_id=user_id,
             ):
                 if isinstance(chunk, dict):
                     # HITL 中断事件
@@ -170,18 +178,18 @@ async def agent_chat(
                     yield format_sse_event("token", chunk)
 
             # 正常结束
-            done_stats = mm.get_session_stats(active_session_id)
+            done_stats = mm.get_session_stats(active_session_id, user_id=user_id)
             yield format_sse_event("done", {
                 "session_id": active_session_id,
                 "total_tokens": done_stats["total_tokens"],
             })
             logger.info(
-                f"[Agent SSE] 请求完成 | session={active_session_id} | "
+                f"[Agent SSE] 请求完成 | user={user_id} | session={active_session_id} | "
                 f"answer_len={len(full_answer)}"
             )
 
         except Exception as e:
-            logger.error(f"[Agent SSE] 请求失败 | session={active_session_id} | error={e}")
+            logger.error(f"[Agent SSE] 请求失败 | user={user_id} | session={active_session_id} | error={e}")
             yield format_sse_event("error", {"message": str(e), "type": type(e).__name__})
             yield format_sse_event("done")
 
@@ -199,6 +207,7 @@ async def agent_chat(
 @router.post("/approve", summary="恢复被 HITL 挂起的 Agent 执行")
 async def agent_approve(
     request: AgentApprovalRequest,
+    current_user: UserInfo = Depends(get_current_user),
     agent: "ReactAgent" = Depends(get_agent_with_memory),
 ):
     """
@@ -222,11 +231,13 @@ async def agent_approve(
         "comment": request.comment or "",
     }
 
+    user_id = current_user.user_id
+    session_id = request.session_id
+
     # 流式恢复
     async def event_stream():
-        session_id = request.session_id
         logger.info(
-            f"[Agent Approve] HITL 恢复 | session={session_id} | "
+            f"[Agent Approve] HITL 恢复 | user={user_id} | session={session_id} | "
             f"action={request.action}"
         )
 
@@ -235,7 +246,7 @@ async def agent_approve(
         full_answer = ""
 
         try:
-            async for chunk in agent.resume_stream(session_id, approval_result):
+            async for chunk in agent.resume_stream(session_id, approval_result, user_id=user_id):
                 if isinstance(chunk, dict):
                     # 再次遇到 HITL（理论上不太可能）
                     yield format_sse_event("approval_required", chunk)
@@ -246,13 +257,13 @@ async def agent_approve(
 
             yield format_sse_event("done", {"session_id": session_id})
             logger.info(
-                f"[Agent Approve] 恢复完成 | session={session_id} | "
+                f"[Agent Approve] 恢复完成 | user={user_id} | session={session_id} | "
                 f"answer_len={len(full_answer)}"
             )
 
         except Exception as e:
             logger.error(
-                f"[Agent Approve] 恢复失败 | session={session_id} | error={e}"
+                f"[Agent Approve] 恢复失败 | user={user_id} | session={session_id} | error={e}"
             )
             yield format_sse_event("error", {"message": str(e), "type": type(e).__name__})
             yield format_sse_event("done")

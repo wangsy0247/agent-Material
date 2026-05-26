@@ -65,6 +65,8 @@ class ChromaSimilarityThresholdRetriever(BaseRetriever):
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun | None = None
     ) -> list[Document]:
+        import time
+        start = time.time()
         # 获取原始 distance（Chroma 的 similarity_search_with_score 返回 distance）
         docs_with_scores = self.vector_store.similarity_search_with_score(query, k=self.k)
 
@@ -83,7 +85,35 @@ class ChromaSimilarityThresholdRetriever(BaseRetriever):
             )
             results.append(docs_with_scores[0][0])
 
+        elapsed = time.time() - start
+        logger.debug(f"[ChromaRetriever] 向量检索完成 | 返回 {len(results)} 条 | 耗时 {elapsed:.3f}s")
         return results
+
+
+class TopKRetriever(BaseRetriever):
+    """文档数量截断检索器包装器。
+
+    用于在混合检索器和重排序器之间截断文档数量，
+    避免过多低质量文档进入耗时的 CrossEncoder 重排序阶段。
+    """
+    model_config = ConfigDict(extra="allow")
+
+    def __init__(self, base_retriever: BaseRetriever, max_docs: int = 8, **kwargs):
+        super().__init__(**kwargs)
+        self.base_retriever = base_retriever
+        self.max_docs = max_docs
+
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun | None = None
+    ) -> list[Document]:
+        docs = self.base_retriever.invoke(query)
+        if len(docs) > self.max_docs:
+            logger.info(
+                f"[TopKRetriever] 截断文档数: {len(docs)} → {self.max_docs} "
+                f"(减少重排序负担)"
+            )
+            return docs[:self.max_docs]
+        return docs
 
 # 可选依赖：BM25
 try:
@@ -205,8 +235,15 @@ class VectorStore:
             self._hybrid_retriever = vector_retriever
             logger.info("仅使用向量检索器（BM25 未启用）")
 
-        # 4. CrossEncoder 重排序器：对混合检索结果精排
-        if RERANKER_AVAILABLE:
+        # 3.5 截断包装器：限制传给重排序器的最大文档数（避免 CPU 推理过载）
+        max_rerank_docs = chroma_config.get("max_rerank_docs", 8)
+        truncated_retriever = TopKRetriever(
+            base_retriever=self._hybrid_retriever, max_docs=max_rerank_docs
+        )
+
+        # 4. CrossEncoder 重排序器：对截断后的结果精排
+        enable_reranker = chroma_config.get("enable_reranker", True)
+        if enable_reranker and RERANKER_AVAILABLE:
             try:
                 model_path = chroma_config.get(
                     "reranker_model", "BAAI/bge-reranker-base"
@@ -229,7 +266,8 @@ class VectorStore:
                 logger.info(f"重排序模型使用设备: {device}")
 
                 cross_encoder = HuggingFaceCrossEncoder(
-                    model_name=model_path, model_kwargs={"device": device}
+                    model_name=model_path,
+                    model_kwargs={"device": device},
                 )
 
                 # 兼容性处理：旧版 LangChain CrossEncoderReranker 可能调用 predict()
@@ -242,13 +280,19 @@ class VectorStore:
                     model=cross_encoder, top_n=chroma_config.get("top_n", 3)
                 )
                 self._compression_retriever = ContextualCompressionRetriever(
-                    base_compressor=compressor, base_retriever=self._hybrid_retriever
+                    base_compressor=compressor, base_retriever=truncated_retriever
                 )
-                logger.info("重排序器初始化成功")
+                logger.info(
+                    f"重排序器初始化成功 | 最大重排序文档数: {max_rerank_docs}"
+                )
             except Exception as e:
                 logger.error(f"重排序器初始化失败: {e}")
                 self._compression_retriever = None
         else:
+            if not enable_reranker:
+                logger.info("重排序器已禁用（enable_reranker=false），使用混合检索结果直接返回")
+            elif not RERANKER_AVAILABLE:
+                logger.warning("重排序依赖未安装，跳过重排序")
             self._compression_retriever = None
 
     def get_retriever(self):

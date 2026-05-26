@@ -1,9 +1,9 @@
 """
-长期记忆 - 跨会话知识存储与召回
+长期记忆 - 跨会话知识存储与召回（按 user_id 隔离）
 
 参考 OpenClaw + Hermes-Agent 设计：
-- 显式文件分层：USER.md / MEMORY.md
-- 复用现有 ChromaDB 做向量索引
+- 显式文件分层：{user_id}/USER.md / {user_id}/MEMORY.md
+- 复用现有 ChromaDB 做向量索引（按 user_id metadata 过滤）
 - 自动记忆提取（对话结束后）
 
 配置来源：config/memory_config.yaml -> long_term
@@ -42,32 +42,35 @@ COSINE_DISTANCE_TO_SIMILARITY: float = 0.5
 
 
 class LongTermMemory:
-    """长期记忆管理器
+    """长期记忆管理器（按 user_id 隔离）
 
     存储方式：
-    1. 文件记忆：USER.md（用户画像）、MEMORY.md（项目知识）
-    2. 向量记忆：通过 ChromaDB 存储结构化记忆条目
+    1. 文件记忆：{memory_dir}/{user_id}/USER.md（用户画像）、MEMORY.md（项目知识）
+    2. 向量记忆：通过 ChromaDB 存储结构化记忆条目（带 user_id metadata）
     """
 
-    def __init__(self, memory_dir: str | None = None):
+    def __init__(self, user_id: str = "default", memory_dir: str | None = None):
         """初始化长期记忆
 
         Args:
-            memory_dir: 记忆文件目录，None 时读取配置
+            user_id: 用户ID，用于数据隔离
+            memory_dir: 记忆根目录，None 时读取配置
         """
+        self.user_id: str = user_id
         self.memory_dir: Path = Path(memory_dir) if memory_dir else Path(get_abs_path(DEFAULT_MEMORY_DIR))
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.user_memory_dir: Path = self.memory_dir / user_id
+        self.user_memory_dir.mkdir(parents=True, exist_ok=True)
 
-        self.user_file: Path = self.memory_dir / USER_FILE_NAME
-        self.project_file: Path = self.memory_dir / PROJECT_FILE_NAME
-        self.daily_dir: Path = self.memory_dir / DAILY_DIR_NAME
+        self.user_file: Path = self.user_memory_dir / USER_FILE_NAME
+        self.project_file: Path = self.user_memory_dir / PROJECT_FILE_NAME
+        self.daily_dir: Path = self.user_memory_dir / DAILY_DIR_NAME
         self.daily_dir.mkdir(exist_ok=True)
 
         # 向量存储（复用现有 ChromaDB，使用独立 collection）
         self._vector_store = None
         self._enable_vector: bool = DEFAULT_ENABLE_VECTOR
 
-        logger.info(f"[LongTermMemory] 初始化 | 目录: {self.memory_dir}")
+        logger.info(f"[LongTermMemory] 初始化 | user={user_id} | 目录: {self.user_memory_dir}")
 
     # ==================== 文件记忆读写 ====================
 
@@ -178,7 +181,7 @@ class LongTermMemory:
         logger.info("[LongTermMemory] 向量存储初始化完成")
 
     def add_memory_entry(self, entry: MemoryEntry, dedup_threshold: float | None = None) -> bool:
-        """添加记忆条目到向量存储（带自动去重）
+        """添加记忆条目到向量存储（带自动去重，按 user_id 隔离）
 
         Args:
             entry: 记忆条目
@@ -193,12 +196,12 @@ class LongTermMemory:
         threshold: float = dedup_threshold if dedup_threshold is not None else DEFAULT_DEDUP_THRESHOLD
         self._ensure_vector_store()
 
-        # ---- 去重检查：用内容本身查询同类别记忆 ----
+        # ---- 去重检查：用内容本身查询同类别、同用户记忆 ----
         try:
             dup_results: list[tuple[Document, float]] = self._vector_store.similarity_search_with_score(
                 entry.content,
                 k=1,
-                filter={"category": entry.category},
+                filter={"$and": [{"category": entry.category}, {"user_id": self.user_id}]},
             )
             if dup_results:
                 _, score = dup_results[0]
@@ -215,6 +218,7 @@ class LongTermMemory:
         doc: Document = Document(
             page_content=entry.content,
             metadata={
+                "user_id": self.user_id,
                 "category": entry.category,
                 "source_session_id": entry.source_session_id,
                 "created_at": entry.created_at,
@@ -233,10 +237,10 @@ class LongTermMemory:
         category: str | None = None,
         top_k: int | None = None,
     ) -> list[MemoryEntry]:
-        """召回相关记忆
+        """召回相关记忆（按 user_id 过滤）
 
         混合检索：
-        1. 向量相似度搜索
+        1. 向量相似度搜索（带 user_id 过滤）
         2. 关键词过滤（category）
 
         Args:
@@ -253,9 +257,13 @@ class LongTermMemory:
         self._ensure_vector_store()
         top_k = top_k or DEFAULT_RECALL_TOP_K
 
+        # 构建过滤条件：必须匹配当前 user_id
+        filter_dict = {"user_id": self.user_id}
         try:
             results: list[tuple[Document, float]] = self._vector_store.similarity_search_with_score(
-                query, k=top_k * 2
+                query,
+                k=top_k * 4,  # 多取一些，过滤后可能不够
+                filter=filter_dict,
             )
         except Exception as e:
             logger.warning(f"[LongTermMemory] 向量检索失败: {e}")
@@ -263,6 +271,10 @@ class LongTermMemory:
 
         entries: list[MemoryEntry] = []
         for doc, score in results:
+            # 校验 user_id（双重保险）
+            if doc.metadata.get("user_id") != self.user_id:
+                continue
+
             # 如果有 category 过滤
             if category and doc.metadata.get("category") != category:
                 continue

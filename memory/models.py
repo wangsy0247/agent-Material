@@ -46,6 +46,7 @@ class MessageRecord(BaseModel):
 class SessionInfo(BaseModel):
     """会话元数据"""
     session_id: str = Field(..., description="会话唯一ID")
+    user_id: str = Field(default="default", description="所属用户ID")
     title: str | None = Field(default=None, description="会话标题")
     created_at: float = Field(default_factory=lambda: __import__("time").time(), description="创建时间")
     updated_at: float = Field(default_factory=lambda: __import__("time").time(), description="最后更新时间")

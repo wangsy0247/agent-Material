@@ -66,24 +66,25 @@ class ReactAgent:
             memory_manager=memory_manager,
         )
 
-    def _ensure_session(self, session_id: str | None = None) -> str:
+    def _ensure_session(self, session_id: str | None = None, user_id: str = "default") -> str:
         """确保有活跃的会话，自动创建或加载。"""
         if not self.memory_manager:
             return session_id or "default"
 
         if session_id:
-            if session_id not in self.memory_manager._session_pool:
-                if not self.memory_manager.load_session(session_id):
+            pool_key = (user_id, session_id)
+            if pool_key not in self.memory_manager._session_pool:
+                if not self.memory_manager.load_session(session_id, user_id=user_id):
                     session_id = self.memory_manager.create_session(
-                        title=f"会话 {session_id[:8]}"
+                        user_id=user_id, title=f"会话 {session_id[:8]}"
                     )
             else:
                 self.memory_manager.session_store.update_session(
-                    session_id, is_active=True, end_reason=None
+                    session_id, user_id=user_id, is_active=True, end_reason=None
                 )
             return session_id
 
-        return self.memory_manager.create_session(title="Agent 对话")
+        return self.memory_manager.create_session(user_id=user_id, title="Agent 对话")
 
     @staticmethod
     def _extract_text_from_message(msg: AIMessage) -> str:
@@ -101,7 +102,7 @@ class ReactAgent:
                         text += item["text"]
         return text
 
-    async def excutor_stream(self, query, session_id: str | None = None):
+    async def excutor_stream(self, query, session_id: str | None = None, user_id: str = "default"):
         """执行 Agent 流式推理，集成记忆系统与 HITL。
 
         设计变更（固定 thread_id）：
@@ -113,15 +114,16 @@ class ReactAgent:
         Args:
             query: 用户问题
             session_id: 会话ID，为 None 时自动创建/复用当前会话
+            user_id: 用户ID（多租户隔离）
 
         Yields:
             文本片段（逐 token 输出）或 HITL 事件字典
         """
-        active_session_id = self._ensure_session(session_id)
+        active_session_id = self._ensure_session(session_id, user_id=user_id)
 
         # 将用户消息保存到记忆系统（长期/中期记忆）
         if self.memory_manager:
-            self.memory_manager.add_user_message(active_session_id, query)
+            self.memory_manager.add_user_message(active_session_id, query, user_id=user_id)
 
         # 初始状态：只包含当前 query（HumanMessage）
         # LangGraph checkpointer 会自动加载该 thread 的历史状态
@@ -185,14 +187,14 @@ class ReactAgent:
         # 保存助手回复到记忆系统
         if self.memory_manager and full_answer:
             self.memory_manager.add_assistant_message(
-                active_session_id, full_answer.strip()
+                active_session_id, full_answer.strip(), user_id=user_id
             )
-            logger.info(f"[ReactAgent] 对话已保存 | session={active_session_id}")
+            logger.info(f"[ReactAgent] 对话已保存 | session={active_session_id} | user={user_id}")
 
-    async def excutor(self, query, session_id: str | None = None) -> str | dict:
+    async def excutor(self, query, session_id: str | None = None, user_id: str = "default") -> str | dict:
         """执行 Agent 非流式推理，返回完整回答或 HITL 事件。"""
         chunks = []
-        async for chunk in self.excutor_stream(query, session_id):
+        async for chunk in self.excutor_stream(query, session_id=session_id, user_id=user_id):
             if isinstance(chunk, dict):
                 return chunk
             chunks.append(chunk)
@@ -206,6 +208,7 @@ class ReactAgent:
         self,
         session_id: str,
         approval_result: dict,
+        user_id: str = "default",
     ):
         """恢复被 HITL 挂起的 Agent 执行（流式）。
 
@@ -216,6 +219,7 @@ class ReactAgent:
         Args:
             session_id: 会话ID（与中断时一致）
             approval_result: {"action": "approve" | "reject", "comment": str}
+            user_id: 用户ID（多租户隔离）
 
         Yields:
             文本片段或新的 HITL 事件字典
@@ -266,14 +270,14 @@ class ReactAgent:
         # 保存助手回复
         if self.memory_manager and full_answer:
             self.memory_manager.add_assistant_message(
-                session_id, full_answer.strip()
+                session_id, full_answer.strip(), user_id=user_id
             )
-            logger.info(f"[ReactAgent] HITL 恢复后对话已保存 | session={session_id}")
+            logger.info(f"[ReactAgent] HITL 恢复后对话已保存 | session={session_id} | user={user_id}")
 
-    async def resume(self, session_id: str, approval_result: dict) -> str | dict:
+    async def resume(self, session_id: str, approval_result: dict, user_id: str = "default") -> str | dict:
         """恢复被 HITL 挂起的 Agent 执行（非流式）。"""
         chunks = []
-        async for chunk in self.resume_stream(session_id, approval_result):
+        async for chunk in self.resume_stream(session_id, approval_result, user_id=user_id):
             if isinstance(chunk, dict):
                 return chunk
             chunks.append(chunk)

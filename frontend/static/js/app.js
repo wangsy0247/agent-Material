@@ -19,6 +19,12 @@ const state = {
     sources: [],
     abortController: null,
     pendingApproval: null,  // { session_id, tool_calls, message }
+    // 认证状态
+    token: localStorage.getItem('agent_token') || null,
+    refreshToken: localStorage.getItem('agent_refresh_token') || null,
+    user: null,
+    isLoggedIn: false,
+    lastSessionId: localStorage.getItem('agent_last_session_id') || null,
 };
 
 // ============================================
@@ -53,17 +59,95 @@ const dom = {
 // ============================================
 // API 封装
 // ============================================
+let _refreshingPromise = null;
+
+async function _doRefresh() {
+    const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: state.refreshToken }),
+    });
+    if (!res.ok) throw new Error('刷新令牌失效');
+    const data = await res.json();
+    state.token = data.access_token;
+    state.refreshToken = data.refresh_token;
+    localStorage.setItem('agent_token', data.access_token);
+    localStorage.setItem('agent_refresh_token', data.refresh_token);
+    return data.access_token;
+}
+
+async function ensureTokenValid() {
+    if (!state.token || !state.refreshToken) return;
+    try {
+        const payload = JSON.parse(atob(state.token.split('.')[1]));
+        const exp = payload.exp * 1000;
+        // Token 将在 5 分钟内过期时自动刷新
+        if (Date.now() + 5 * 60 * 1000 >= exp) {
+            if (!_refreshingPromise) {
+                _refreshingPromise = _doRefresh().finally(() => { _refreshingPromise = null; });
+            }
+            await _refreshingPromise;
+        }
+    } catch (e) {
+        console.warn('Token 解析失败', e);
+    }
+}
+
 const api = {
     async fetchJson(path, options = {}) {
-        const res = await fetch(`${API_BASE}${path}`, {
-            headers: { 'Content-Type': 'application/json' },
-            ...options,
+        const doFetch = async () => {
+            await ensureTokenValid();
+            const headers = { 'Content-Type': 'application/json' };
+            if (state.token) {
+                headers['Authorization'] = `Bearer ${state.token}`;
+            }
+            const res = await fetch(`${API_BASE}${path}`, {
+                headers,
+                ...options,
+            });
+            if (res.status === 401) {
+                if (state.refreshToken) {
+                    if (!_refreshingPromise) {
+                        _refreshingPromise = _doRefresh()
+                            .catch((err) => { _refreshingPromise = null; throw err; })
+                            .finally(() => { _refreshingPromise = null; });
+                    }
+                    try {
+                        await _refreshingPromise;
+                        // 刷新成功后重试原请求
+                        return doFetch();
+                    } catch (refreshErr) {
+                        logout();
+                        throw new Error('登录已过期，请重新登录');
+                    }
+                }
+                logout();
+                throw new Error('登录已过期，请重新登录');
+            }
+            if (!res.ok) {
+                const err = await res.text();
+                throw new Error(err);
+            }
+            return res.json();
+        };
+        return doFetch();
+    },
+
+    // 认证
+    login(username, password) {
+        return this.fetchJson('/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ username, password }),
         });
-        if (!res.ok) {
-            const err = await res.text();
-            throw new Error(err);
-        }
-        return res.json();
+    },
+    register(username, password, email) {
+        return this.fetchJson('/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({ username, password, email }),
+        });
+    },
+    me() {
+        return this.fetchJson('/auth/me');
     },
 
     // 会话管理
@@ -99,96 +183,120 @@ const api = {
     // Agent 对话（SSE）
     chatStream(question, sessionId, onEvent, signal) {
         const body = JSON.stringify({ question, session_id: sessionId || 'default', stream: true });
+        const headers = { 'Content-Type': 'application/json' };
+        if (state.token) {
+            headers['Authorization'] = `Bearer ${state.token}`;
+        }
         return new Promise((resolve, reject) => {
-            fetch(`${API_BASE}/agent/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body,
-                signal,
-            })
-                .then((res) => {
-                    if (!res.ok) {
-                        res.text().then((t) => reject(new Error(t)));
+            ensureTokenValid().then(() => {
+                if (state.token) {
+                    headers['Authorization'] = `Bearer ${state.token}`;
+                }
+                return fetch(`${API_BASE}/agent/chat`, {
+                    method: 'POST',
+                    headers,
+                    body,
+                    signal,
+                });
+            }).then((res) => {
+                if (!res.ok) {
+                    if (res.status === 401) {
+                        logout();
+                        reject(new Error('登录已过期，请重新登录'));
                         return;
                     }
-                    const reader = res.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
+                    res.text().then((t) => reject(new Error(t)));
+                    return;
+                }
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                    const read = () => {
-                        reader.read().then(({ done, value }) => {
-                            if (done) {
-                                resolve();
-                                return;
-                            }
-                            buffer += decoder.decode(value, { stream: true });
-                            const lines = buffer.split('\n\n');
-                            buffer = lines.pop() || '';
+                const read = () => {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            resolve();
+                            return;
+                        }
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop() || '';
 
-                            for (const chunk of lines) {
-                                const line = chunk.trim();
-                                if (!line.startsWith('data:')) continue;
-                                try {
-                                    const data = JSON.parse(line.slice(5).trim());
-                                    onEvent(data);
-                                } catch (e) {
-                                    console.warn('SSE parse error:', line, e);
-                                }
+                        for (const chunk of lines) {
+                            const line = chunk.trim();
+                            if (!line.startsWith('data:')) continue;
+                            try {
+                                const data = JSON.parse(line.slice(5).trim());
+                                onEvent(data);
+                            } catch (e) {
+                                console.warn('SSE parse error:', line, e);
                             }
-                            read();
-                        }).catch(reject);
-                    };
-                    read();
-                })
-                .catch(reject);
+                        }
+                        read();
+                    }).catch(reject);
+                };
+                read();
+            }).catch(reject);
         });
     },
 
     // HITL 审批恢复（SSE）
     approveStream(sessionId, action, comment, onEvent, signal) {
         const body = JSON.stringify({ session_id: sessionId, action, comment: comment || '' });
+        const headers = { 'Content-Type': 'application/json' };
+        if (state.token) {
+            headers['Authorization'] = `Bearer ${state.token}`;
+        }
         return new Promise((resolve, reject) => {
-            fetch(`${API_BASE}/agent/approve`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body,
-                signal,
-            })
-                .then((res) => {
-                    if (!res.ok) {
-                        res.text().then((t) => reject(new Error(t)));
+            ensureTokenValid().then(() => {
+                if (state.token) {
+                    headers['Authorization'] = `Bearer ${state.token}`;
+                }
+                return fetch(`${API_BASE}/agent/approve`, {
+                    method: 'POST',
+                    headers,
+                    body,
+                    signal,
+                });
+            }).then((res) => {
+                if (!res.ok) {
+                    if (res.status === 401) {
+                        logout();
+                        reject(new Error('登录已过期，请重新登录'));
                         return;
                     }
-                    const reader = res.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
+                    res.text().then((t) => reject(new Error(t)));
+                    return;
+                }
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-                    const read = () => {
-                        reader.read().then(({ done, value }) => {
-                            if (done) {
-                                resolve();
-                                return;
-                            }
-                            buffer += decoder.decode(value, { stream: true });
-                            const lines = buffer.split('\n\n');
-                            buffer = lines.pop() || '';
+                const read = () => {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            resolve();
+                            return;
+                        }
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n\n');
+                        buffer = lines.pop() || '';
 
-                            for (const chunk of lines) {
-                                const line = chunk.trim();
-                                if (!line.startsWith('data:')) continue;
-                                try {
-                                    const data = JSON.parse(line.slice(5).trim());
-                                    onEvent(data);
-                                } catch (e) {
-                                    console.warn('SSE parse error:', line, e);
-                                }
+                        for (const chunk of lines) {
+                            const line = chunk.trim();
+                            if (!line.startsWith('data:')) continue;
+                            try {
+                                const data = JSON.parse(line.slice(5).trim());
+                                onEvent(data);
+                            } catch (e) {
+                                console.warn('SSE parse error:', line, e);
                             }
-                            read();
-                        }).catch(reject);
-                    };
-                    read();
-                })
-                .catch(reject);
+                        }
+                        read();
+                    }).catch(reject);
+                };
+                read();
+            }).catch(reject);
         });
     },
 };
@@ -230,11 +338,22 @@ function renderMarkdown(text) {
 // ============================================
 // 会话管理
 // ============================================
-async function loadSessions() {
+async function loadSessions(autoRestore = false) {
     try {
         const res = await api.listSessions();
         state.sessions = res.data || [];
         renderSessionList();
+
+        // 自动恢复上次会话（仅在初始化时触发）
+        if (autoRestore && state.lastSessionId) {
+            const exists = state.sessions.find((s) => s.session_id === state.lastSessionId);
+            if (exists && state.lastSessionId !== state.currentSessionId) {
+                await switchSession(state.lastSessionId);
+            } else if (!exists) {
+                localStorage.removeItem('agent_last_session_id');
+                state.lastSessionId = null;
+            }
+        }
     } catch (e) {
         console.error('加载会话失败:', e);
         dom.sessionList.innerHTML = '<div class="empty-state">加载失败，请刷新重试</div>';
@@ -271,6 +390,8 @@ async function createNewSession() {
         const sessionId = res.data?.session_id;
         if (sessionId) {
             state.currentSessionId = sessionId;
+            state.lastSessionId = null;
+            localStorage.removeItem('agent_last_session_id');
             await loadSessions();
             clearChat();
             updateChatHeader('新会话', '开始对话');
@@ -299,6 +420,8 @@ async function switchSession(sessionId) {
         // 1. 后端加载会话（恢复短期记忆）
         await api.loadSession(sessionId);
         state.currentSessionId = sessionId;
+        state.lastSessionId = sessionId;
+        localStorage.setItem('agent_last_session_id', sessionId);
         await loadSessions(); // 刷新列表以获取最新的消息计数和时间
         clearChat();
         closeSidebars();
@@ -878,11 +1001,146 @@ function bindEvents() {
 }
 
 // ============================================
+// 认证模块
+// ============================================
+
+function showAuthModal() {
+    $('authOverlay').style.display = 'flex';
+}
+
+function hideAuthModal() {
+    $('authOverlay').style.display = 'none';
+}
+
+function logout() {
+    state.token = null;
+    state.refreshToken = null;
+    state.user = null;
+    state.isLoggedIn = false;
+    state.lastSessionId = null;
+    localStorage.removeItem('agent_token');
+    localStorage.removeItem('agent_refresh_token');
+    localStorage.removeItem('agent_last_session_id');
+    showAuthModal();
+    updateUserBar();
+}
+
+function updateUserBar() {
+    let bar = document.querySelector('.user-bar');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'user-bar';
+        const footer = document.querySelector('.sidebar-footer');
+        if (footer) {
+            footer.parentNode.insertBefore(bar, footer.nextSibling);
+        }
+    }
+    if (state.isLoggedIn && state.user) {
+        bar.innerHTML = `
+            <span class="user-name">👤 ${escapeHtml(state.user.username)}</span>
+            <button class="logout-btn" id="btnLogout">退出</button>
+        `;
+        document.getElementById('btnLogout')?.addEventListener('click', logout);
+    } else {
+        bar.innerHTML = '';
+    }
+}
+
+async function checkAuth() {
+    if (!state.token) {
+        showAuthModal();
+        return;
+    }
+    try {
+        const data = await api.me();
+        state.user = data;
+        state.isLoggedIn = true;
+        hideAuthModal();
+        updateUserBar();
+        loadSessions(true); // true = 自动恢复上次会话
+    } catch (e) {
+        console.warn('Token 校验失败:', e);
+        logout();
+    }
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const btn = $('loginBtn');
+    const errEl = $('loginError');
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+
+    try {
+        const data = await api.login($('loginUsername').value.trim(), $('loginPassword').value);
+        state.token = data.access_token;
+        state.refreshToken = data.refresh_token;
+        state.user = data.user;
+        state.isLoggedIn = true;
+        localStorage.setItem('agent_token', data.access_token);
+        localStorage.setItem('agent_refresh_token', data.refresh_token);
+        hideAuthModal();
+        updateUserBar();
+        loadSessions();
+        $('loginPassword').value = '';
+    } catch (e) {
+        errEl.textContent = e.message || '登录失败';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '登录';
+    }
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const btn = $('registerBtn');
+    const errEl = $('registerError');
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = '注册中...';
+
+    try {
+        const email = $('registerEmail').value.trim() || null;
+        await api.register($('registerUsername').value.trim(), $('registerPassword').value, email);
+        errEl.className = 'auth-success';
+        errEl.textContent = '注册成功，请登录';
+        $('registerPassword').value = '';
+        // 切换到登录页
+        setTimeout(() => switchAuthTab('login'), 800);
+    } catch (e) {
+        errEl.className = 'auth-error';
+        errEl.textContent = e.message || '注册失败';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '注册';
+    }
+}
+
+function switchAuthTab(tab) {
+    document.querySelectorAll('.auth-tab').forEach((t) => {
+        t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    $('loginForm').classList.toggle('hidden', tab !== 'login');
+    $('registerForm').classList.toggle('hidden', tab !== 'register');
+    $('loginError').textContent = '';
+    $('registerError').textContent = '';
+}
+
+function bindAuthEvents() {
+    $('loginForm').addEventListener('submit', handleLogin);
+    $('registerForm').addEventListener('submit', handleRegister);
+    $('tabLogin').addEventListener('click', () => switchAuthTab('login'));
+    $('tabRegister').addEventListener('click', () => switchAuthTab('register'));
+}
+
+// ============================================
 // 初始化
 // ============================================
 function init() {
     bindEvents();
-    loadSessions();
+    bindAuthEvents();
+    checkAuth();
     console.log('🔬 材料科学 Agent 前端已加载');
 }
 

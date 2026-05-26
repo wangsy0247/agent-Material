@@ -4,7 +4,7 @@ API 数据模型 (Pydantic V2)
 """
 
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Any
 
 
 # ==================== 通用模型 ====================
@@ -13,6 +13,7 @@ class BaseResponse(BaseModel):
     """通用响应基类"""
     code: int = Field(default=200, description="状态码")
     message: str = Field(default="success", description="状态信息")
+    data: Any = Field(default=None, description="响应数据")
 
 
 class HealthResponse(BaseResponse):
