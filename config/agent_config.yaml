@@ -4,10 +4,13 @@ external_data_path: "workspace/material_expression.txt"
 
 # ---- Checkpointer 配置（LangGraph 状态持久化） ----
 checkpointer:
-  type: "postgres"  # 可选: postgres | memory
-  # postgres 配置（当 type=postgres 时生效，需安装 langgraph-checkpoint-postgres）
+  type: "postgres"  # 可选: postgres | sqlite | memory
+  # sqlite 配置（当 type=sqlite 时生效，无需额外服务，推荐单机部署）
+  sqlite:
+    db_path: "logs/langgraph_checkpoints.db"
+  # postgres 配置（当 type=postgres 时生效，需 PostgreSQL 服务 + langgraph-checkpoint-postgres）
   postgres:
-    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://langgraph:wsy@localhost:5432/langgraph}"
+    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://postgres:postgres@localhost:5432/langgraph}"
 
 # ---- Summarization 配置（长对话压缩） ----
 summarization:
@@ -24,29 +27,12 @@ mp_tool_mode: "mcp"
 sensitive_keywords:
   - "mp_download"
 
-# MCP 全局配置
-mcp_global:
-  max_reconnect_attempts: 5
-  initial_backoff_ms: 1000
-  max_backoff_ms: 30000
-  health_check_interval: 30
-  tool_description_max_length: 2048
-  max_inline_result_chars: 100000  # 工具结果超过此阈值自动落盘到文件
-
-# MCP 模式下的 Server 列表（支持同时连接多个）
-mcp_servers:
-  - transport: "sse"
-    url: "http://127.0.0.1:8002/sse"
-    name: "material-project"
-    enabled: false             
-    timeout: 60                # 单次工具调用超时（秒）
-    health_check_interval: 30  # 心跳间隔（秒）
-
-  # stdio 模式示例
-  - transport: "stdio"
-    command: ["python", "-m", "mp_material_server"]
-    name: "material-stdio"
-    enabled: true
-    env:                       # 可覆盖/扩展环境变量
-      MP_API_KEY: "lWo7oaVlFmSNs48f10qeGpHIykwo2VSa"
-    cwd: "workspace"
+# MCP 配置已迁移至 extensions_config.json（项目根目录）
+# 详见 docs/mcp-setup.md 或 extensions_config.json.example
+# 
+# 环境变量可覆盖全局默认值：
+#   MCP_MAX_RECONNECT=5
+#   MCP_INITIAL_BACKOFF_MS=1000
+#   MCP_MAX_BACKOFF_MS=30000
+#   MCP_HEALTH_INTERVAL=30
+#   MCP_TOOL_TIMEOUT=60

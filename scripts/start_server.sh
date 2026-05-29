@@ -61,7 +61,7 @@ MODE=${1:-dev}
 
 if [ "$MODE" == "prod" ]; then
     echo -e "${GREEN}启动模式: 生产环境${NC}"
-    uvicorn api_server:app --host ${HOST} --port ${PORT} --workers 4
+    uvicorn backend.app.gateway.app:app --host ${HOST} --port ${PORT} --workers 4
 elif [ "$MODE" == "docker" ]; then
     echo -e "${GREEN}启动模式: Docker${NC}"
     echo -e "${YELLOW}构建 Docker 镜像...${NC}"
@@ -84,5 +84,5 @@ else
     echo -e "  API 地址: http://localhost:${PORT}"
     echo -e "  文档地址: http://localhost:${PORT}/docs"
     echo -e "  ${YELLOW}按 Ctrl+C 停止服务${NC}\n"
-    uvicorn api_server:app --host ${HOST} --port ${PORT} --reload
+    uvicorn backend.app.gateway.app:app --host ${HOST} --port ${PORT} --reload
 fi

@@ -24,8 +24,8 @@ session_store:
 # ---- L3 长期记忆 (Long-term Memory) ----
 long_term:
   memory_dir: "workspace/memory"     # 记忆文件目录
-  enable_vector_memory: true         # 是否启用向量记忆（复用 ChromaDB）
-  vector_collection: "long_term_memory"  # ChromaDB collection 名称
+  enable_vector_memory: true         # 是否启用向量记忆（复用 PGVector）
+  vector_collection: "long_term_memory"  # PGVector collection 名称
 
   # 文件记忆配置
   user_file: "USER.md"               # 用户画像文件名

@@ -27,15 +27,15 @@ uvicorn api_server:app --reload            # Alternative dev server
 **LLM**: `ChatAnthropic` pointed at DeepSeek (`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`). Embeddings via `DashScopeEmbeddings`.
 
 **RAG pipeline** (4-stage in `rag/vector_store.py`):
-1. Vector retrieval (ChromaDB, custom `ChromaSimilarityThresholdRetriever` — explicitly converts cosine distance → similarity)
+1. Vector retrieval (PGVector, custom `VectorSimilarityThresholdRetriever` — explicitly converts cosine distance → similarity)
 2. BM25 keyword retrieval (in-memory index over loaded documents)
 3. Hybrid fusion (RRF, `EnsembleRetriever`)
-4. CrossEncoder rerank (`HuggingFaceCrossEncoder` + `ContextualCompressionRetriever`, model at `config/chroma_config.yaml` `reranker_model`)
+4. CrossEncoder rerank (`HuggingFaceCrossEncoder` + `ContextualCompressionRetriever`, model at `config/vector_store_config.yaml` `reranker_model`)
 
 **Memory system** (3 layers, coordinated by `memory/manager.py`):
 - L1: `short_term.py` — in-memory context window, token-budget-aware compression
 - L2: `session_store.py` — SQLite (WAL mode) at `logs/memory_sessions.db`
-- L3: `long_term.py` — file-based (`workspace/memory/USER.md`, `MEMORY.md`) + ChromaDB vector memory
+- L3: `long_term.py` — file-based (`workspace/memory/USER.md`, `MEMORY.md`) + PGVector vector memory
 
 **MCP**: `mcp_servers/client.py` connects to stdio/SSE MCP servers configured in `config/mcp_config.yaml`. Tools are converted to LangChain `StructuredTool` by `agent/tools/mcp_tool_manager.py`.
 
@@ -56,8 +56,8 @@ uvicorn api_server:app --reload            # Alternative dev server
 
 ## Gotchas
 
-- ChromaDB `similarity_search_with_score` returns **cosine distance** (0–2), not similarity. The custom `ChromaSimilarityThresholdRetriever` converts: `similarity = 1 - distance/2`.
-- Reranker model path in `config/chroma_config.yaml` — if the local path doesn't exist, reranking is silently skipped.
+- PGVector `similarity_search_with_score` returns **cosine distance** (0–2), not similarity. The custom `VectorSimilarityThresholdRetriever` converts: `similarity = 1 - distance/2`.
+- Reranker model path in `config/vector_store_config.yaml` — if the local path doesn't exist, reranking is silently skipped.
 - MCP tool connections are created and torn down per-invocation (not persistent), to avoid stale connection complexity.
 - `CrossEncoderReranker` version mismatch: this project patches `HuggingFaceCrossEncoder` to add `.predict()` if only `.score()` exists.
 

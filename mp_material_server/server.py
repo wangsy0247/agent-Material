@@ -4,7 +4,6 @@ Materials Project MCP Server
 提供 3 个 MCP Tool：
     mp_download  — 下载材料结构（POSCAR + 属性 JSON）
     mp_query     — 查询材料属性（带隙、密度、空间群等）
-    mp_list      — 列出本地下载历史
 
 支持 stdio 和 SSE 两种传输模式，与 Agent 项目完全解耦。
 """
@@ -108,19 +107,19 @@ def create_server(host: str = "127.0.0.1", port: int = 8002) -> FastMCP:
             logger.error(f"查询失败: {e}")
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 
-    @mcp.tool(
-        name="mp_list",
-        description="列出本地已从 Materials Project 下载的材料历史记录",
-        annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
-    )
-    def mp_list() -> str:
-        """查看本地下载历史。"""
-        logger.info("查询下载历史")
-        try:
-            return _get_downloader().list_history()
-        except Exception as e:
-            logger.error(f"查询历史失败: {e}")
-            return f"查询失败: {e}"
+    # @mcp.tool(
+    #     name="mp_list",
+    #     description="列出本地已从 Materials Project 下载的材料历史记录",
+    #     annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+    # )
+    # def mp_list() -> str:
+    #     """查看本地下载历史。"""
+    #     logger.info("查询下载历史")
+    #     try:
+    #         return _get_downloader().list_history()
+    #     except Exception as e:
+    #         logger.error(f"查询历史失败: {e}")
+    #         return f"查询失败: {e}"
 
     return mcp
 

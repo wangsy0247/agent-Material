@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # 配置（从环境变量读取，与 Agent 项目零依赖）
 MP_API_KEY: str = os.environ.get("MP_API_KEY", "")
 DOWNLOAD_DIR: str = os.environ.get("MP_DOWNLOAD_DIR", "./downloads")
-HISTORY_FILE: str = os.environ.get("MP_HISTORY_FILE", "./downloads/history.txt")
+# HISTORY_FILE: str = os.environ.get("MP_HISTORY_FILE", "./downloads/history.txt")
 
 
 class MaterialsProjectDownloader:
@@ -25,29 +25,29 @@ class MaterialsProjectDownloader:
         self.api_key = MP_API_KEY
         self.workspace_dir = DOWNLOAD_DIR
         self.time_str = datetime.now().strftime("%m")
-        self.history_file = HISTORY_FILE
+        # self.history_file = HISTORY_FILE
         os.makedirs(self.workspace_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
     # 历史记录
     # ------------------------------------------------------------------
 
-    def get_downloaded_formulas(self) -> set:
-        if not os.path.exists(self.history_file):
-            return set()
-        formulas = set()
-        with open(self.history_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    formulas.add(line.split(" (")[0].strip())
-        return formulas
+    # def get_downloaded_formulas(self) -> set:
+        # if not os.path.exists(self.history_file):
+        #     return set()
+        # formulas = set()
+        # with open(self.history_file, "r", encoding="utf-8") as f:
+        #     for line in f:
+        #         if line.strip():
+        #             formulas.add(line.split(" (")[0].strip())
+        # return formulas
 
-    def is_duplicate(self, formula: str) -> bool:
-        return formula in self.get_downloaded_formulas()
+    # def is_duplicate(self, formula: str) -> bool:
+    #     return formula in self.get_downloaded_formulas()
 
-    def record_download(self, formula: str, mp_id: str) -> None:
-        with open(self.history_file, "a", encoding="utf-8") as f:
-            f.write(f"{formula} ({mp_id})\n")
+    # def record_download(self, formula: str, mp_id: str) -> None:
+    #     with open(self.history_file, "a", encoding="utf-8") as f:
+    #         f.write(f"{formula} ({mp_id})\n")
 
     # ------------------------------------------------------------------
     # 属性查询
@@ -185,8 +185,8 @@ class MaterialsProjectDownloader:
         if not self.api_key:
             return "❌ 未配置 Materials Project API Key，请设置环境变量 MP_API_KEY。"
 
-        if self.is_duplicate(formula):
-            return f"⚠️ 材料 {formula} 已存在于本地历史记录中，跳过下载。"
+        # if self.is_duplicate(formula):
+        #     return f"⚠️ 材料 {formula} 已存在于本地历史记录中，跳过下载。"
 
         properties = self.query_material_properties(formula)
         if properties is None:
@@ -194,21 +194,21 @@ class MaterialsProjectDownloader:
 
         mp_id = properties["MP_ID"]
         save_dir = self._save_files(formula, properties)
-        self.record_download(formula, mp_id)
+        # self.record_download(formula, mp_id)
 
         logger.info(f"成功下载 {formula} (MP_ID: {mp_id}) → {save_dir}")
         return f"✅ 成功下载 {formula} (MP_ID: {mp_id})。文件已保存在: {save_dir}"
 
-    def list_history(self) -> str:
-        if not os.path.exists(self.history_file):
-            return "📭 本地暂无已下载的材料记录。"
+    # def list_history(self) -> str:
+    #     if not os.path.exists(self.history_file):
+    #         return "📭 本地暂无已下载的材料记录。"
 
-        with open(self.history_file, "r", encoding="utf-8") as f:
-            history = [line.strip() for line in f if line.strip()]
+    #     with open(self.history_file, "r", encoding="utf-8") as f:
+    #         history = [line.strip() for line in f if line.strip()]
 
-        if not history:
-            return "📭 本地暂无已下载的材料记录。"
+    #     if not history:
+    #         return "📭 本地暂无已下载的材料记录。"
 
-        return "📋 已下载材料列表（共 {} 条）：\n".format(len(history)) + "\n".join(
-            history
-        )
+    #     return "📋 已下载材料列表（共 {} 条）：\n".format(len(history)) + "\n".join(
+    #         history
+    #     )

@@ -1,2 +1,2 @@
-rag_prompt_path: "prompt/rag_prompt.txt"
-sys_prompt_path: "prompt/system_prompt.txt"
+rag_prompt_path: "backend/packages/agent_material/prompts/rag_prompt.txt"
+sys_prompt_path: "backend/packages/agent_material/prompts/system_prompt.txt"

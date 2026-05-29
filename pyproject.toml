@@ -3,29 +3,13 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-material"
+name = "agent-material-project"
 version = "0.1.0"
-description = "材料科学领域 LLM Agent 项目"
+description = "材料科学领域 LLM Agent 项目（参照 DeerFlow 层级架构）"
 requires-python = ">=3.10"
 dependencies = [
-    "langchain>=0.3.0",
-    "langchain-core>=0.3.0",
-    "langchain-anthropic>=0.3.0",
-    "langchain-chroma>=0.1.0",
-    "langchain-community>=0.3.0",
-    "langchain-text-splitters>=0.3.0",
-    "pymatgen>=2024.0.0",
-    "mp-api>=0.40.0",
-    "pydantic>=2.0.0",
-    "pyyaml>=6.0",
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
-    "rank-bm25>=0.2.2",
-    "sentence-transformers>=3.0.0",
-    "mcp",
-    "langchain-mcp-adapters>=0.2.0",
-    "python-dotenv",
-    # FastAPI 服务层
+    # 核心框架（editable install: backend/packages/agent_material）
+    # 网关层
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "sse-starlette>=2.0.0",
@@ -34,12 +18,14 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "bcrypt>=4.0.0",
     "email-validator>=2.0.0",
-    # 可选：LangGraph 持久化 checkpointer（企业环境推荐 PostgreSQL）
-    # "langgraph-checkpoint-postgres>=2.0.0",
+    # 测试
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["backend/tests"]
+pythonpath = ["backend/packages"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
