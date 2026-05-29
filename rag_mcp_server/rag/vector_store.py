@@ -13,10 +13,10 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from pydantic import ConfigDict
 
-from agent_material.utils.config_handler import vector_store_config
-from agent_material.models.model_factory import embedding_model
-from agent_material.utils.logger import logger
-from agent_material.utils.file_handler import (
+from rag_mcp_server.config import vector_store_config
+from rag_mcp_server.models import embedding_model
+from rag_mcp_server.utils.logger import logger
+from rag_mcp_server.utils.file_loader import (
     txt_loader,
     md_loader,
     pdf_loader,
@@ -28,7 +28,7 @@ from agent_material.utils.file_handler import (
 
 # 延迟导入 PGVector，若未安装 pgvector 包则给出友好提示
 try:
-    from langchain_community.vectorstores.pgvector import PGVector
+    from langchain_postgres.vectorstores import PGVector
 except ImportError as _e:  # pragma: no cover
     raise ImportError(
         "PGVector 依赖未安装。请运行：pip install pgvector\n"
@@ -156,7 +156,7 @@ class VectorStore:
         # 根据配置选择切分策略
         splitter_type = vector_store_config.get("splitter_type", "recursive")
         if splitter_type == "semantic":
-            from agent_material.rag.text_spliter import SemanticTextSplitter
+            from rag_mcp_server.rag.text_spliter import SemanticTextSplitter
 
             self.splitter = SemanticTextSplitter(
                 chunk_size=vector_store_config["chunk_size"],
@@ -178,9 +178,9 @@ class VectorStore:
             logger.info("使用标准切分器 (RecursiveCharacterTextSplitter)")
 
         self.vector_store = PGVector(
-            connection_string=vector_store_config.get("connection_string"),
+            embeddings=embedding_model,
+            connection=vector_store_config.get("connection_string"),
             collection_name=vector_store_config["character_name"],
-            embedding_function=embedding_model,
             use_jsonb=True,
         )
 
@@ -202,8 +202,10 @@ class VectorStore:
         if not conn_str:
             logger.warning("未配置 connection_string，跳过加载已有文档")
             return
+        # psycopg 原生连接不支持 SQLAlchemy 的 postgresql+psycopg:// 前缀
+        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
         try:
-            conn = psycopg.connect(conn_str)
+            conn = psycopg.connect(psycopg_conn_str)
             cur = conn.cursor()
             cur.execute(
                 """
@@ -423,8 +425,9 @@ class VectorStore:
         if not conn_str:
             logger.error("未配置 connection_string，无法删除文档")
             return
+        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
         try:
-            conn = psycopg.connect(conn_str)
+            conn = psycopg.connect(psycopg_conn_str)
             cur = conn.cursor()
             # 先按 metadata 的 source 字段过滤，删除匹配的记录
             cur.execute(

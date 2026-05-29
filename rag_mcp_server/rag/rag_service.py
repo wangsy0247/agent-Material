@@ -1,25 +1,46 @@
 import os
-from agent_material.rag.vector_store import VectorStore
-from agent_material.utils.prompt_loader import get_prompts
+from typing import Any
+
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from agent_material.models.model_factory import chat_model
-from agent_material.utils.config_handler import prompt_config
-from agent_material.utils.path_tools import get_abs_path
-from agent_material.utils.langsmith_setup import get_run_config
+
+from rag_mcp_server.rag.vector_store import VectorStore
+from rag_mcp_server.utils.prompt_loader import get_prompts
+from rag_mcp_server.models import chat_model
+from rag_mcp_server.config import prompt_config
+from rag_mcp_server.utils.path import get_abs_path
+
+
+def _get_run_config(
+    run_name: str,
+    query: str = "",
+    tags: list[str] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构建 LangChain run config（简化版，不依赖 LangSmith）。"""
+    metadata: dict[str, Any] = {"query": query}
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    config: dict[str, Any] = {"run_name": run_name, "metadata": metadata}
+    if tags:
+        config["tags"] = tags
+    return config
 
 
 class RagService:
     def __init__(self):
         self.vector_store = VectorStore()
         self.retriever = self.vector_store.get_retriever()
-        self.prompt_text = get_prompts(get_abs_path(prompt_config["rag_prompt_path"]))
+        prompt_path = prompt_config.get("rag_prompt_path", "rag_mcp_server/prompts/rag_prompt.txt")
+        self.prompt_text = get_prompts(get_abs_path(prompt_path)) or ""
         self.prompts_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
         self.chain = self._init_chain()
 
     def _init_chain(self):
-        return self.prompts_template | chat_model | StrOutputParser()
+        if self.model is None:
+            raise RuntimeError("Chat 模型未初始化，请检查 ANTHROPIC_API_KEY 环境变量")
+        return self.prompts_template | self.model | StrOutputParser()
 
     def retriever_docx(self, query: str):
         """执行检索，返回相关文档列表"""
@@ -29,15 +50,12 @@ class RagService:
         """基于检索结果生成回答"""
         context_docx = self.retriever_docx(query)
 
-        # 相似度阈值过滤后可能返回空结果
         if not context_docx:
             return "根据现有资料无法回答该问题。"
 
-        # 精简上下文拼接，只保留来源和正文，节省 token
         context = ""
         for i, doc in enumerate(context_docx, start=1):
             source = doc.metadata.get("source", "未知来源")
-            # 只保留文件名，不保留完整路径
             source_name = (
                 os.path.basename(source) if isinstance(source, str) else "未知来源"
             )
@@ -45,7 +63,7 @@ class RagService:
 
         return self.chain.invoke(
             {"input": query, "context": context},
-            config=get_run_config(
+            config=_get_run_config(
                 run_name="rag_generate",
                 query=query,
                 tags=["rag", "generate"],
@@ -71,7 +89,7 @@ class RagService:
 
         for chunk in self.chain.stream(
             {"input": query, "context": context},
-            config=get_run_config(
+            config=_get_run_config(
                 run_name="rag_generate_stream",
                 query=query,
                 tags=["rag", "stream"],

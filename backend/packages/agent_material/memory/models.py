@@ -31,15 +31,16 @@ class MessageRecord(BaseModel):
     @classmethod
     def from_lc_message(cls, msg: dict, timestamp: float | None = None) -> "MessageRecord":
         """从 LangChain 消息格式创建"""
-        from agent_material.memory.utils import estimate_tokens
+        from agent_material.memory.utils import estimate_tokens, normalize_message_content
+        content = normalize_message_content(msg.get("content", "") or "")
         return cls(
             role=msg.get("role", "user"),
-            content=msg.get("content", "") or "",
+            content=content,
             name=msg.get("name"),
             tool_call_id=msg.get("tool_call_id"),
             tool_calls=msg.get("tool_calls"),
             timestamp=timestamp,
-            token_count=estimate_tokens(msg.get("content", "") or ""),
+            token_count=estimate_tokens(content),
         )
 
 

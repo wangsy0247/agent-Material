@@ -1,37 +1,45 @@
 """
 依赖注入模块
-使用懒加载模式管理 Agent、RAG 和记忆系统实例，避免启动时初始化重量级对象
+使用懒加载模式管理 Agent 和记忆系统实例，避免启动时初始化重量级对象
 
 重要：本模块不在顶层导入任何重量级依赖（如 PyTorch、PGVector、Embedding 模型等），
 所有导入均在函数内部延迟执行，防止 WSL / 多进程环境下的 Segmentation Fault。
+
+注意：RAG 服务已解耦至 rag_mcp_server/，不再通过本模块注入。
 """
 
+import asyncio
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agent_material.agents.React_agent import ReactAgent
-    from agent_material.rag.rag_service import RagService
     from agent_material.memory.manager import MemoryManager
     from .schemas import UserInfo
 
+# 全局单例缓存 + 并发锁
+_agent_no_mem = None
+_agent_with_mem = None
+_agent_lock = asyncio.Lock()
 
-@lru_cache(maxsize=1)
-def get_agent() -> "ReactAgent":
+
+async def get_agent() -> "ReactAgent":
     """获取 Agent 实例（单例，懒加载）
 
-    LRU 缓存确保整个应用生命周期中只有一个 Agent 实例
-    首次调用时才会触发重量级对象的初始化
-
+    首次调用时才会触发重量级对象的初始化。
     注意：默认不绑定记忆管理器，避免循环依赖。
     需要记忆功能时，通过 get_agent_with_memory() 获取。
     """
-    from agent_material.agents.React_agent import ReactAgent
-    return ReactAgent()
+    global _agent_no_mem
+    if _agent_no_mem is None:
+        async with _agent_lock:
+            if _agent_no_mem is None:
+                from agent_material.agents.React_agent import ReactAgent
+                _agent_no_mem = ReactAgent()
+    return _agent_no_mem
 
 
-@lru_cache(maxsize=1)
-def get_agent_with_memory() -> "ReactAgent":
+async def get_agent_with_memory() -> "ReactAgent":
     """获取集成记忆系统的 Agent 实例（全局单例）
 
     自动将 MemoryManager 注入 Agent，实现：
@@ -42,20 +50,14 @@ def get_agent_with_memory() -> "ReactAgent":
     注意：Agent 实例本身是全局共享的，多租户隔离通过方法参数中的
     user_id 实现（如 excutor_stream(..., user_id=...)）。
     """
-    from agent_material.agents.React_agent import ReactAgent
-    mm = get_memory_manager()
-    return ReactAgent(memory_manager=mm)
-
-
-@lru_cache(maxsize=1)
-def get_rag_service() -> "RagService":
-    """获取 RAG 服务实例（单例，懒加载）
-
-    LRU 缓存确保整个应用生命周期中只有一个 RAGService 实例
-    首次调用时才会初始化 VectorStore、重排序模型等
-    """
-    from agent_material.rag.rag_service import RagService
-    return RagService()
+    global _agent_with_mem
+    if _agent_with_mem is None:
+        async with _agent_lock:
+            if _agent_with_mem is None:
+                from agent_material.agents.React_agent import ReactAgent
+                mm = get_memory_manager()
+                _agent_with_mem = ReactAgent(memory_manager=mm)
+    return _agent_with_mem
 
 
 @lru_cache(maxsize=1)

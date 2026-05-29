@@ -4,8 +4,8 @@
 
 import time
 from fastapi import APIRouter, Depends
-from ..schemas import HealthResponse, RAGStatsResponse
-from ..auth.dependencies import get_rag_service, get_current_user
+from ..schemas import HealthResponse
+from ..auth.dependencies import get_current_user
 from ..auth.schemas import UserInfo
 
 router = APIRouter(prefix="/system", tags=["系统管理"])
@@ -29,27 +29,5 @@ async def health_check():
     )
 
 
-@router.get("/rag/stats", response_model=RAGStatsResponse, summary="RAG 统计信息")
-async def rag_stats(
-    current_user: UserInfo = Depends(get_current_user),
-    rag_service=Depends(get_rag_service),
-):
-    """获取 RAG 向量库的统计信息（需认证）"""
-    try:
-        doc_count = rag_service.vector_store.get_document_count()
-        return RAGStatsResponse(
-            code=200,
-            message="获取成功",
-            data={
-                "document_count": doc_count,
-                "collection_name": rag_service.vector_store.vector_store._collection.name
-                if hasattr(rag_service.vector_store.vector_store, "_collection")
-                else "unknown",
-            },
-        )
-    except Exception as e:
-        return RAGStatsResponse(
-            code=500,
-            message=f"获取统计信息失败: {str(e)}",
-            data={},
-        )
+# 注意：/system/rag/stats 已随 RAG 解耦一起迁移至 rag_mcp_server。
+#       前端可通过 rag_get_stats MCP Tool 获取统计信息。

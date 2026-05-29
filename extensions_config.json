@@ -8,6 +8,17 @@
       "env": {
         "MP_API_KEY": "$MP_API_KEY"
       }
+    },
+    "rag-server": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "rag_mcp_server"],
+      "env": {
+        "ANTHROPIC_API_KEY": "$ANTHROPIC_API_KEY",
+        "DASHSCOPE_API_KEY": "$DASHSCOPE_API_KEY"
+      },
+      "description": "材料科学 RAG 服务：向量检索、文档加载、智能问答"
     }
   },
   "mcpInterceptors": [],

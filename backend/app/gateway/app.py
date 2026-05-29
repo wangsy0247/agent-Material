@@ -123,15 +123,8 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("🔧 MP 工具模式: 本地直连")
 
-    # 预热 RAG 组件（主线程加载，确保在请求到来前完成）
-    logger.info("⏳ 预热 RAG 组件（reranker / BM25）...")
-    try:
-        from agent_material.agents.tools.agent_tools import _get_rag_service
-        _get_rag_service()
-        logger.info("✅ RAG 组件预热完成")
-    except Exception as e:
-        logger.warning(f"⚠️ RAG 组件预热失败: {e} | 将在首次请求时懒加载")
-
+    # 注意：RAG 组件已解耦至 rag_mcp_server/，不再在主应用预热。
+    #       rag_mcp_server 会在首次 MCP Tool 调用时自行懒加载。
     logger.info("=" * 50)
     yield
 
@@ -156,7 +149,7 @@ async def lifespan(app: FastAPI):
     # 关闭 Checkpointer 持久化资源
     try:
         from agent_material.agents.graph.checkpointer_factory import close_checkpointer_resources
-        close_checkpointer_resources()
+        await close_checkpointer_resources()
     except Exception as e:
         logger.warning(f"⚠️ Checkpointer 资源关闭失败: {e}")
 
@@ -238,8 +231,6 @@ async def api_info():
         "version": "v1",
         "endpoints": {
             "agent": "/api/v1/agent/chat",
-            "rag_query": "/api/v1/rag/query",
-            "rag_retrieve": "/api/v1/rag/retrieve",
             "memory_sessions": "/api/v1/memory/sessions",
             "memory_recall": "/api/v1/memory/recall",
             "health": "/api/v1/system/health",

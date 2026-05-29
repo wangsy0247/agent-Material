@@ -10,8 +10,7 @@ ReAct Agent - 基于 LangGraph StateGraph 的状态机实现
 6. 支持 stream / invoke 双模式
 
 工具来源：
-    - 本地工具：rag_summary, mp_download, mp_query, mp_list
-    - MCP 工具：通过 mcp_adapter 动态加载
+    - MCP 工具：通过 MCP 动态加载（包含已解耦的 RAG：rag_search, rag_query 等）
 """
 
 from __future__ import annotations
@@ -136,6 +135,7 @@ class ReactAgent:
             "pending_approval": None,
             "query": query,
             "final_answer": "",
+            "user_id": user_id,
         }
 
         # 固定 thread_id = session_id

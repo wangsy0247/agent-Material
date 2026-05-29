@@ -47,7 +47,7 @@ def diagnose_vector_store():
         connection_string=vector_store_config.get("connection_string"),
         collection_name=vector_store_config["character_name"],
         embedding_function=embedding_model,
-        use_jsonb=True,
+        use_jsonb=False,
     )
 
     # 1. 基础统计（通过原始 SQL）

@@ -117,6 +117,7 @@ class AgentState(TypedDict):
     pending_approval: dict | None  # HITL 挂起状态
     query: str  # 当前查询，用于记忆召回
     final_answer: str  # 最终答案（finalize_node 写入）
+    user_id: str  # 当前用户 ID（用于记忆系统按用户隔离）
 
 
 # ================================================================
@@ -232,7 +233,9 @@ def memory_node(state: AgentState, memory_manager: Any | None) -> dict:
         return {"messages": updates, "memory_context": ""}
 
     # 2. 构建新的 system context（系统提示 + 长期记忆）
+    user_id: str = state.get("user_id", "default")
     system_content: str = memory_manager.build_system_context(
+        user_id=user_id,
         query=query,
         include_memory=True,
     )
@@ -258,7 +261,7 @@ def memory_node(state: AgentState, memory_manager: Any | None) -> dict:
 def _lc_messages_to_records(messages: list[AnyMessage]) -> list:
     """LangChain Message 列表 -> MessageRecord 列表（供 ContextCompressor 使用）。"""
     from agent_material.memory.models import MessageRecord
-    from agent_material.memory.utils import estimate_tokens
+    from agent_material.memory.utils import estimate_tokens, normalize_message_content
 
     records: list[MessageRecord] = []
     for msg in messages:
@@ -281,15 +284,16 @@ def _lc_messages_to_records(messages: list[AnyMessage]) -> list:
             tool_call_id = getattr(msg, "tool_call_id", None)
             name = getattr(msg, "name", None)
 
+        content = normalize_message_content(msg.content or "")
         records.append(
             MessageRecord(
                 role=role,  # type: ignore[arg-type]
-                content=msg.content or "",
+                content=content,
                 tool_call_id=tool_call_id,
                 tool_calls=tool_calls,
                 name=name,
                 timestamp=time.time(),
-                token_count=estimate_tokens(msg.content or ""),
+                token_count=estimate_tokens(content),
             )
         )
     return records
@@ -403,6 +407,40 @@ def _get_message_role_label(msg: AnyMessage) -> str:
     return "未知"
 
 
+def _sanitize_messages_for_llm(messages: list[AnyMessage]) -> list[AnyMessage]:
+    """清洗消息列表，移除孤立的 ToolMessage。
+
+    Anthropic 等模型要求每个 tool_result (ToolMessage) 必须有对应的
+    tool_use (AIMessage.tool_calls) 在其之前。如果对话历史被压缩或
+    checkpointer 中残留了损坏状态，可能出现 ToolMessage 失去 parent 的情况，
+    导致 API 报 400。此函数作为防御性清洗，在调用 LLM 前执行。
+    """
+    valid_tool_call_ids: set[str] = set()
+    cleaned: list[AnyMessage] = []
+    removed_count = 0
+
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tc_id = tc.get("id")
+                if tc_id:
+                    valid_tool_call_ids.add(tc_id)
+
+        if isinstance(msg, ToolMessage):
+            if msg.tool_call_id and msg.tool_call_id not in valid_tool_call_ids:
+                removed_count += 1
+                continue  # 跳过孤立的 ToolMessage
+
+        cleaned.append(msg)
+
+    if removed_count:
+        logger.warning(
+            f"[sanitize_messages] 移除 {removed_count} 条孤立 ToolMessage，"
+            f"剩余 {len(cleaned)} 条消息"
+        )
+    return cleaned
+
+
 async def agent_node(
     state: AgentState,
     chat_model: Any,
@@ -411,6 +449,9 @@ async def agent_node(
     """Agent 推理节点：调用 LLM（已绑定工具）。"""
     iteration: int = state["iteration_count"]
     messages: list[AnyMessage] = state["messages"]
+
+    # 防御性清洗：移除孤立的 ToolMessage（可能来自损坏的 checkpoint）
+    messages = _sanitize_messages_for_llm(messages)
 
     logger.info(
         f"[模型调用前状态]：带有{len(messages)}条信息 | "

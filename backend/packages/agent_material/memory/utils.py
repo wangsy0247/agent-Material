@@ -7,11 +7,34 @@ import re
 from datetime import datetime
 
 
-def estimate_tokens(text: str) -> int:
+def normalize_message_content(content: str | list) -> str:
+    """将消息内容统一转换为字符串（处理多模态 list 格式）"""
+    if isinstance(content, str):
+        return content
+    if not content:
+        return ""
+    text_parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+            elif block.get("type") in ("image", "image_url"):
+                text_parts.append("[image]")
+            elif block.get("type") == "file":
+                text_parts.append("[file]")
+            else:
+                text_parts.append(str(block))
+        else:
+            text_parts.append(str(block))
+    return "\n".join(text_parts)
+
+
+def estimate_tokens(text: str | list) -> int:
     """估算文本的 token 数量（轻量级，无需 tiktoken）
     
     中文按字符数 × 0.6，英文按单词数 × 1.3，取较大值
     """
+    text = normalize_message_content(text)
     if not text:
         return 0
     

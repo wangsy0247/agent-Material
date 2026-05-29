@@ -32,7 +32,7 @@
 |------|---------|---------|
 | MCP Server 基类 | 实现 `stdio` / `sse` 两种传输模式 | `mcp_servers/server.py` |
 | MCP Client | 连接外部 MCP Server | `mcp_servers/client.py` |
-| 现有工具 MCP 化 | 将 `rag_summary`、`mp_download_tool` 等封装为 MCP Tool | `mcp/tools/rag_mcp_server.py`、`mcp/tools/mp_mcp_server.py` |
+| 现有工具 MCP 化 | 将 `rag_summary`、`mp_download_tool` 等封装为 MCP Tool | `mcp/tools/rag_server.py`、`mcp/tools/mp_mcp_server.py` |
 | LangChain 桥接 | `MCPToolAdapter`：MCP Tool ↔ LangChain `BaseTool` 双向转换 | `mcp/adapters/langchain_adapter.py` |
 | 配置驱动 | `config/mcp_config.yaml` 管理所有 MCP Server | `config/mcp_config.yaml` |
 | 接入第三方 Server | 接入文件系统 MCP Server (`@modelcontextprotocol/server-filesystem`) | 验证可用性 |

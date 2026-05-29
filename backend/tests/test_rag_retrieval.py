@@ -353,7 +353,7 @@ def temp_vector_store():
         connection_string="postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres",
         collection_name="test_rag",
         embedding_function=embedding_model,
-        use_jsonb=True,
+        use_jsonb=False,
         pre_delete_collection=True,  # 测试前清空已有 collection
     )
     store.add_documents(split_docs)

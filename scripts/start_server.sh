@@ -15,6 +15,9 @@ NC='\033[0m' # No Color
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# 修复 Anaconda libffi 与系统 libffi 版本冲突（影响 psycopg）
+export LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7
+
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  材料科学 LLM Agent API 服务启动脚本${NC}"
 echo -e "${GREEN}============================================${NC}"
@@ -73,7 +76,7 @@ elif [ "$MODE" == "docker" ]; then
         -e AGENT_API_PORT=${PORT} \
         -e AGENT_API_HOST=0.0.0.0 \
         -v "$(pwd)/.env:/app/.env" \
-        -v "$(pwd)/chroma_db:/app/chroma_db" \
+        -v "$(pwd)/config:/app/config" \
         -v "$(pwd)/workspace:/app/workspace" \
         agent-material-api
     echo -e "${GREEN}✓ Docker 容器已启动${NC}"

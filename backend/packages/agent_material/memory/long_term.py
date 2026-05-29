@@ -168,18 +168,63 @@ class LongTermMemory:
         if self._vector_store is not None:
             return
 
-        from langchain_community.vectorstores.pgvector import PGVector
+        from langchain_postgres.vectorstores import PGVector
         from agent_material.models.model_factory import embedding_model
         from agent_material.utils.config_handler import vector_store_config
+        from sqlalchemy import create_engine, text
 
-        conn_str: str = vector_store_config.get("connection_string")
-        self._vector_store = PGVector(
-            connection_string=conn_str,
-            collection_name=DEFAULT_VECTOR_COLLECTION,
-            embedding_function=embedding_model,
-            use_jsonb=True,
-        )
-        logger.info("[LongTermMemory] 向量存储初始化完成")
+        try:
+            conn_str: str = vector_store_config.get("connection_string")
+
+            # 表结构兼容性迁移：旧版 langchain_community.PGVector 使用 uuid 作为主键，
+            # 新版 langchain_postgres.PGVector 使用 id (String) 作为主键。
+            # 添加 id 列并设置默认值，确保新旧版本混用时不会出错。
+            engine = create_engine(conn_str)
+            try:
+                with engine.begin() as conn:
+                    result = conn.execute(
+                        text("""
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'langchain_pg_embedding' AND column_name = 'id'
+                        """)
+                    )
+                    if not result.fetchone():
+                        conn.execute(
+                            text("""
+                                ALTER TABLE langchain_pg_embedding
+                                ADD COLUMN id VARCHAR DEFAULT gen_random_uuid()::text
+                            """)
+                        )
+                        conn.execute(
+                            text("""
+                                CREATE UNIQUE INDEX IF NOT EXISTS
+                                ix_langchain_pg_embedding_id_unique
+                                ON langchain_pg_embedding(id)
+                            """)
+                        )
+                        conn.execute(
+                            text("""
+                                ALTER TABLE langchain_pg_embedding
+                                ALTER COLUMN uuid SET DEFAULT gen_random_uuid()
+                            """)
+                        )
+                        logger.info("[LongTermMemory] 迁移 PGVector 表结构：已添加 id 列及约束")
+            finally:
+                engine.dispose()
+
+            self._vector_store = PGVector(
+                embeddings=embedding_model,
+                connection=conn_str,
+                collection_name=DEFAULT_VECTOR_COLLECTION,
+                use_jsonb=True,
+            )
+            logger.info("[LongTermMemory] 向量存储初始化完成")
+        except Exception as e:
+            logger.warning(
+                f"[LongTermMemory] PGVector 向量存储初始化失败，已禁用向量记忆: {e}"
+            )
+            self._enable_vector = False
+            self._vector_store = None
 
     def add_memory_entry(self, entry: MemoryEntry, dedup_threshold: float | None = None) -> bool:
         """添加记忆条目到向量存储（带自动去重，按 user_id 隔离）

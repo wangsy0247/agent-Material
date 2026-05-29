@@ -189,8 +189,17 @@ async def agent_chat(
             )
 
         except Exception as e:
-            logger.error(f"[Agent SSE] 请求失败 | user={user_id} | session={active_session_id} | error={e}")
-            yield format_sse_event("error", {"message": str(e), "type": type(e).__name__})
+            import traceback
+            tb = traceback.format_exc()
+            err_repr = repr(e)
+            logger.error(
+                f"[Agent SSE] 请求失败 | user={user_id} | session={active_session_id} | "
+                f"error_type={type(e).__name__} | error={err_repr}\n{tb}"
+            )
+            yield format_sse_event(
+                "error",
+                {"message": str(e) or err_repr, "type": type(e).__name__}
+            )
             yield format_sse_event("done")
 
     return StreamingResponse(

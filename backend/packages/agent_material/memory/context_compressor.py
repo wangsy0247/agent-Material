@@ -86,12 +86,22 @@ def _get_tool_collapse_info(tool_name: str | None, args: dict, content_len: int)
     """根据工具名生成信息化单行摘要"""
     name = tool_name or "unknown"
     
-    # RAG 检索
-    if name == "rag_summary":
+    # MCP RAG 工具（已从本地解耦）
+    if name == "rag_search":
         q = str(args.get("query", ""))[:50] if args else ""
-        if q:
-            return f"[rag_summary] query='{q}' -> {content_len} chars"
-        return f"[rag_summary] -> {content_len} chars"
+        return f"[rag_search] query='{q}' -> {content_len} chars"
+    if name == "rag_query":
+        q = str(args.get("query", ""))[:50] if args else ""
+        return f"[rag_query] query='{q}' -> {content_len} chars"
+    if name == "rag_load_documents":
+        return f"[rag_load_documents] -> {content_len} chars"
+    if name == "rag_add_documents":
+        return f"[rag_add_documents] -> {content_len} chars"
+    if name == "rag_delete_by_source":
+        src = str(args.get("source", ""))[:30] if args else ""
+        return f"[rag_delete_by_source] source='{src}' -> {content_len} chars"
+    if name == "rag_get_stats":
+        return f"[rag_get_stats] -> {content_len} chars"
 
     # Materials Project 查询
     if name == "mp_query":
@@ -231,6 +241,11 @@ class ContextCompressor:
             logger.info(
                 f"[ContextCompressor] 扩大尾部保护至 {protect_last_n} 条以保留最后一条用户消息"
             )
+
+        # 确保工具调用对完整性：tail 中的 ToolMessage 必须有 parent AIMessage 也在 tail 中
+        protect_last_n = self._expand_tail_for_tool_integrity(
+            processed_messages, protect_last_n
+        )
 
         head: list[MessageRecord] = processed_messages[:protect_first_n]
         tail: list[MessageRecord] = (
@@ -394,6 +409,53 @@ class ContextCompressor:
             if messages[i].role == "user":
                 return i
         return None
+
+    @staticmethod
+    def _expand_tail_for_tool_integrity(
+        messages: list[MessageRecord], protect_last_n: int
+    ) -> int:
+        """扩展 tail 边界，确保没有 ToolMessage 的 parent AIMessage 被留在压缩区中。
+
+        Anthropic 等模型要求每个 tool_result (ToolMessage) 必须有对应的
+        tool_use (AIMessage.tool_calls) 在前面。如果 tail 保留了 ToolMessage
+        但其 parent AIMessage 被压缩进 middle 并摘要掉，API 会报 400。
+
+        策略：从 tail 起始位置向前扫描，若发现 tail 中有 ToolMessage 的 parent
+        在 middle 中，则将 tail 起始位置前移到该 parent 处，并递归检查。
+        """
+        n = len(messages)
+        tail_start = n - protect_last_n
+
+        # 建立 tool_call_id -> parent AIMessage index 映射
+        parent_indices: dict[str, int] = {}
+        for idx, msg in enumerate(messages):
+            if msg.role == "assistant" and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tc_id = tc.get("id")
+                    if tc_id:
+                        parent_indices[tc_id] = idx
+
+        # 递归扩展 tail_start 直到所有 tail 中的 ToolMessage 的 parent 也在 tail 中
+        while tail_start > 0:
+            moved = False
+            for i in range(tail_start, n):
+                msg = messages[i]
+                if msg.role == "tool" and msg.tool_call_id:
+                    parent_idx = parent_indices.get(msg.tool_call_id)
+                    if parent_idx is not None and parent_idx < tail_start:
+                        tail_start = parent_idx
+                        moved = True
+                        break
+            if not moved:
+                break
+
+        new_protect_last_n = n - tail_start
+        if new_protect_last_n != protect_last_n:
+            logger.info(
+                f"[ContextCompressor] 扩展尾部保护 {protect_last_n} -> "
+                f"{new_protect_last_n} 条以确保工具调用对完整性"
+            )
+        return new_protect_last_n
 
     def _format_messages_for_compression(
         self, messages: list[MessageRecord]

@@ -33,7 +33,7 @@ def _get_downloader() -> MaterialsProjectDownloader:
     return _downloader
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8002) -> FastMCP:
+def create_server(host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
     """创建并配置 MCP Server。"""
     mcp = FastMCP(
         "material-project-server",
@@ -138,7 +138,7 @@ def main():
         help="传输模式: stdio(子进程) 或 sse(HTTP 流式)",
     )
     parser.add_argument("--host", default="127.0.0.1", help="SSE 模式监听地址")
-    parser.add_argument("--port", type=int, default=8002, help="SSE 模式监听端口")
+    parser.add_argument("--port", type=int, default=8000, help="SSE 模式监听端口")
     args = parser.parse_args()
 
     server = create_server(host=args.host, port=args.port)

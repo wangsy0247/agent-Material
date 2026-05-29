@@ -11,6 +11,8 @@ LangGraph Checkpointer 工厂
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import os
 import sqlite3
 from typing import Any
@@ -89,11 +91,22 @@ def _create_sqlite_checkpointer() -> Any | None:
 
 
 def _create_postgres_checkpointer() -> Any | None:
-    """创建 PostgreSQL checkpointer，失败时返回 None。"""
+    """创建 PostgreSQL checkpointer，失败时返回 None。
+
+    注意：LangGraph 的 async astream 需要 checkpointer 实现 aget_tuple 等异步方法。
+    langgraph-checkpoint-postgres 3.x 将同步/异步实现拆分：
+    - PostgresSaver（同步）
+    - AsyncPostgresSaver（异步，在 aio 子模块中）
+    因此必须使用 AsyncPostgresSaver 才能配合 async Agent 使用。
+
+    兼容策略：
+    - 如果在异步上下文（有 running loop）中调用，直接创建并后台调度 setup
+    - 如果在同步上下文（无 running loop）中调用，使用 asyncio.run() 完成初始化
+    """
     global _pool_instance
     try:
-        from langgraph.checkpoint.postgres import PostgresSaver
-        from psycopg_pool import ConnectionPool
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg_pool import AsyncConnectionPool
     except ImportError:
         logger.warning(
             "[CheckpointerFactory] langgraph-checkpoint-postgres 未安装，"
@@ -109,29 +122,65 @@ def _create_postgres_checkpointer() -> Any | None:
         )
         return None
 
+    # 尝试在有 running loop 时直接创建（FastAPI async dependency 路径）
     try:
-        _pool_instance = ConnectionPool(
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        # 异步上下文：直接创建对象，后台调度 open + setup
+        try:
+            _pool_instance = AsyncConnectionPool(
+                conn_str,
+                min_size=1,
+                max_size=5,
+                open=False,
+                kwargs={"autocommit": True},
+            )
+            checkpointer = AsyncPostgresSaver(conn=_pool_instance)
+
+            async def _async_init() -> None:
+                await _pool_instance.open()
+                await checkpointer.setup()
+
+            loop.create_task(_async_init())
+            logger.info(
+                f"[CheckpointerFactory] 使用 AsyncPostgresSaver | "
+                f"host={conn_str.split('@')[-1].split('/')[0]}"
+            )
+            return checkpointer
+        except Exception as e:
+            logger.warning(f"[CheckpointerFactory] PostgreSQL 初始化失败: {e}")
+            _close_pool(_pool_instance)
+            _pool_instance = None
+            return None
+
+    # 无 running loop：使用 asyncio.run() 完整初始化（线程池路径）
+    async def _async_init():
+        pool = AsyncConnectionPool(
             conn_str,
             min_size=1,
             max_size=5,
-            open=True,
+            open=False,
             kwargs={"autocommit": True},
         )
-        checkpointer = PostgresSaver(conn=_pool_instance)
-        checkpointer.setup()
+        cp = AsyncPostgresSaver(conn=pool)
+        await pool.open()
+        await cp.setup()
+        return cp, pool
+
+    try:
+        checkpointer, _pool_instance = asyncio.run(_async_init())
         logger.info(
-            f"[CheckpointerFactory] 使用 PostgresSaver | "
+            f"[CheckpointerFactory] 使用 AsyncPostgresSaver | "
             f"host={conn_str.split('@')[-1].split('/')[0]}"
         )
         return checkpointer
     except Exception as e:
         logger.warning(f"[CheckpointerFactory] PostgreSQL 连接失败: {e}")
-        if _pool_instance is not None:
-            try:
-                _pool_instance.close()
-            except Exception:
-                pass
-            _pool_instance = None
+        _close_pool(_pool_instance)
+        _pool_instance = None
         return None
 
 
@@ -152,13 +201,32 @@ def _get_postgres_conn_string() -> str:
     return conn_str
 
 
-def close_checkpointer_resources() -> None:
+def _close_pool(pool: Any) -> None:
+    """关闭连接池（兼容同步/异步）。"""
+    if pool is None:
+        return
+    try:
+        if inspect.iscoroutinefunction(pool.close):
+            try:
+                asyncio.get_running_loop().create_task(pool.close())
+            except RuntimeError:
+                pass
+        else:
+            pool.close()
+    except Exception:
+        pass
+
+
+async def close_checkpointer_resources() -> None:
     """关闭 checkpointer 占用的资源（在应用 shutdown 时调用）。"""
     global _pool_instance, _sqlite_conn
 
     if _pool_instance is not None:
         try:
-            _pool_instance.close()
+            if inspect.iscoroutinefunction(_pool_instance.close):
+                await _pool_instance.close()
+            else:
+                _pool_instance.close()
             logger.info("[CheckpointerFactory] PostgreSQL 连接池已关闭")
         except Exception as e:
             logger.warning(f"[CheckpointerFactory] 关闭 PostgreSQL 连接池失败: {e}")

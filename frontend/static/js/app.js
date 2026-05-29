@@ -172,14 +172,6 @@ const api = {
         return this.fetchJson(`/memory/sessions/${sessionId}/messages`);
     },
 
-    // RAG 检索（非流式，返回参考文献列表）
-    ragRetrieve(question, topK = 5) {
-        return this.fetchJson('/rag/retrieve', {
-            method: 'POST',
-            body: JSON.stringify({ question, top_k: topK }),
-        });
-    },
-
     // Agent 对话（SSE）
     chatStream(question, sessionId, onEvent, signal) {
         const body = JSON.stringify({ question, session_id: sessionId || 'default', stream: true });
@@ -815,22 +807,6 @@ async function sendMessage() {
 
     // 显示用户消息
     appendUserMessage(text);
-
-    // ---- 并行调用 RAG 检索，填充右栏参考文献 ----
-    api.ragRetrieve(text, 5)
-        .then((res) => {
-            const sources = res.data || [];
-            if (sources.length) {
-                renderSources(sources);
-            } else {
-                dom.sourcesList.innerHTML = '<div class="empty-state"><div class="empty-icon">📖</div><div>未检索到相关文献</div></div>';
-                dom.sourceCount.textContent = '0 篇';
-            }
-        })
-        .catch((e) => {
-            console.error('RAG 检索失败:', e);
-            dom.sourcesList.innerHTML = '<div class="empty-state"><div class="empty-icon">⚠️</div><div>文献检索失败</div></div>';
-        });
 
     // 显示助手占位
     const assistantId = appendAssistantPlaceholder();

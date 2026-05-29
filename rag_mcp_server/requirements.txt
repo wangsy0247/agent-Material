@@ -1,0 +1,4 @@
+# RAG MCP Server 依赖
+# 注意：实际运行时通过 sys.path 复用主项目的 agent_material 包，
+# 因此这里只需列出 mcp SDK 本身。
+mcp>=1.0.0
