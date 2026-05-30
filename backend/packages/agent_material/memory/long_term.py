@@ -31,6 +31,7 @@ DEFAULT_RECALL_TOP_K: int = _LONG_TERM_CFG.get("recall_top_k", 5)
 DEFAULT_RECALL_THRESHOLD: float = _LONG_TERM_CFG.get("recall_score_threshold", 0.1)
 DEFAULT_MAX_CONTEXT_CHARS: int = _LONG_TERM_CFG.get("max_memory_context_chars", 1000)
 DEFAULT_DEDUP_THRESHOLD: float = _LONG_TERM_CFG.get("dedup_threshold", 0.92)
+DEFAULT_CONNECTION_STRING: str = _LONG_TERM_CFG.get("connection_string", "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres")
 
 # 文件记忆配置
 USER_FILE_NAME: str = _LONG_TERM_CFG.get("user_file", "USER.md")
@@ -174,7 +175,7 @@ class LongTermMemory:
         from sqlalchemy import create_engine, text
 
         try:
-            conn_str: str = vector_store_config.get("connection_string")
+            conn_str = DEFAULT_CONNECTION_STRING
 
             # 表结构兼容性迁移：旧版 langchain_community.PGVector 使用 uuid 作为主键，
             # 新版 langchain_postgres.PGVector 使用 id (String) 作为主键。

@@ -38,10 +38,10 @@ def get_sc_config():
         return yaml.safe_load(f)
 
 
-def get_mp_config():
-    mp_config_path = get_abs_path("config/mp_config.yaml")
-    with open(mp_config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+# def get_mp_config():
+#     mp_config_path = get_abs_path("config/mp_config.yaml")
+#     with open(mp_config_path, "r", encoding="utf-8") as f:
+#         return yaml.safe_load(f)
 
 
 def get_memory_config():
@@ -56,7 +56,7 @@ vector_store_config = get_vector_store_config()
 # chroma_config = vector_store_config  # backward compatibility alias
 prompt_config = get_prompt_config()
 sc_config = get_sc_config()
-mp_config = get_mp_config()
+# mp_config = get_mp_config()
 memory_config = get_memory_config()
 
 if __name__ == "__main__":

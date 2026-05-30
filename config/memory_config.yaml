@@ -26,7 +26,8 @@ long_term:
   memory_dir: "workspace/memory"     # 记忆文件目录
   enable_vector_memory: true         # 是否启用向量记忆（复用 PGVector）
   vector_collection: "long_term_memory"  # PGVector collection 名称
-
+  connection_string: "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres"
+  
   # 文件记忆配置
   user_file: "USER.md"               # 用户画像文件名
   project_file: "MEMORY.md"          # 项目知识文件名

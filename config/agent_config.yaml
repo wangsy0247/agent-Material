@@ -1,6 +1,5 @@
 chat_model_name: "DeepSeek-V4-Flash"
 max_tokens: 8192
-external_data_path: "workspace/material_expression.txt"
 
 # ---- Checkpointer 配置（LangGraph 状态持久化） ----
 checkpointer:

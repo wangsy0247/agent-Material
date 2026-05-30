@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 知识库 - 材料科学 LLM Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Markdown 渲染（本地，无需翻墙） -->
+    <script src="/static/vendor/marked/marked.min.js"></script>
+    <!-- 代码高亮（本地，无需翻墙） -->
+    <link rel="stylesheet" href="/static/vendor/highlight.js/styles/github-dark.min.css">
+    <script src="/static/vendor/highlight.js/highlight.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/python.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/bash.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/json.min.js"></script>
+    <script src="/static/vendor/highlight.js/languages/yaml.min.js"></script>
+    <style>
+        /* RAG 页面专用样式 */
+        .rag-app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100vw;
+            background: var(--bg-primary);
+        }
+        .rag-header {
+            height: var(--header-height);
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            flex-shrink: 0;
+        }
+        .rag-header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .rag-header-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .rag-header-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-left: 8px;
+        }
+        .rag-nav {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-tertiary);
+            padding: 4px;
+            border-radius: var(--radius-sm);
+        }
+        .rag-nav-btn {
+            padding: 6px 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .rag-nav-btn:hover {
+            color: var(--text-primary);
+        }
+        .rag-nav-btn.active {
+            background: var(--accent);
+            color: #fff;
+        }
+        .rag-main {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        .rag-section {
+            display: none;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .rag-section.active {
+            display: block;
+        }
+        .rag-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .rag-card-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .rag-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .rag-stat-item {
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+        }
+        .rag-stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .rag-stat-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .rag-input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .rag-input {
+            flex: 1;
+            padding: 10px 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 14px;
+            outline: none;
+        }
+        .rag-input:focus {
+            border-color: var(--accent);
+        }
+        .rag-textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 10px 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 14px;
+            outline: none;
+            resize: vertical;
+            font-family: inherit;
+        }
+        .rag-textarea:focus {
+            border-color: var(--accent);
+        }
+        .rag-btn {
+            padding: 10px 20px;
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .rag-btn:hover {
+            background: var(--accent-hover);
+        }
+        .rag-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .rag-btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .rag-btn-secondary:hover {
+            background: var(--bg-hover);
+        }
+        .rag-btn-danger {
+            background: var(--error);
+        }
+        .rag-btn-danger:hover {
+            background: #ff6b6b;
+        }
+        .rag-result-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .rag-result-item {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 14px;
+        }
+        .rag-result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .rag-result-source {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .rag-result-score {
+            font-size: 12px;
+            color: var(--success);
+            background: rgba(63, 185, 80, 0.15);
+            padding: 2px 8px;
+            border-radius: 12px;
+        }
+        .rag-result-snippet {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        .rag-chat-area {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .rag-chat-history {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .rag-chat-placeholder {
+            color: var(--text-muted);
+            text-align: center;
+            padding: 40px 0;
+        }
+        .rag-answer {
+            line-height: 1.7;
+        }
+        .rag-answer pre {
+            background: var(--bg-primary);
+            padding: 12px;
+            border-radius: var(--radius-sm);
+            overflow-x: auto;
+        }
+        .rag-sources-inline {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+        .rag-sources-inline-title {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .rag-loading {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        .rag-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .rag-empty {
+            color: var(--text-muted);
+            text-align: center;
+            padding: 40px;
+        }
+        .rag-error {
+            color: var(--error);
+            background: rgba(248, 81, 73, 0.1);
+            padding: 12px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+        }
+        .rag-success {
+            color: var(--success);
+            background: rgba(63, 185, 80, 0.1);
+            padding: 12px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+        }
+        .rag-config-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .rag-config-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .rag-config-table td:first-child {
+            color: var(--text-secondary);
+            width: 40%;
+        }
+        .rag-config-table td:last-child {
+            color: var(--text-primary);
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="rag-app">
+        <!-- 顶部导航 -->
+        <header class="rag-header">
+            <div class="rag-header-left">
+                <a href="/" class="logo" style="text-decoration:none;color:inherit;margin-bottom:0;">
+                    <span class="logo-icon">🔬</span>
+                    <span class="logo-text">材料科学 Agent</span>
+                </a>
+                <span class="rag-header-title">📚 RAG 知识库</span>
+                <span class="rag-header-subtitle">混合检索（向量 + BM25 + CrossEncoder）管理</span>
+            </div>
+            <nav class="rag-nav">
+                <button class="rag-nav-btn active" data-tab="overview">概览</button>
+                <button class="rag-nav-btn" data-tab="search">检索</button>
+                <button class="rag-nav-btn" data-tab="query">问答</button>
+                <button class="rag-nav-btn" data-tab="docs">文档管理</button>
+            </nav>
+        </header>
+
+        <!-- 主体内容 -->
+        <main class="rag-main">
+            <!-- 概览 -->
+            <section class="rag-section active" id="tab-overview">
+                <div class="rag-card">
+                    <div class="rag-card-title">📊 统计信息</div>
+                    <div class="rag-stats-grid" id="statsGrid">
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">向量库文档数</div>
+                            <div class="rag-stat-value" id="statDocCount">-</div>
+                        </div>
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">Collection</div>
+                            <div class="rag-stat-value" style="font-size:14px;" id="statCollection">-</div>
+                        </div>
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">Chunk Size</div>
+                            <div class="rag-stat-value" id="statChunkSize">-</div>
+                        </div>
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">重排序</div>
+                            <div class="rag-stat-value" id="statReranker">-</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="rag-card">
+                    <div class="rag-card-title">⚙️ 配置参数</div>
+                    <table class="rag-config-table" id="configTable">
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- 检索 -->
+            <section class="rag-section" id="tab-search">
+                <div class="rag-card">
+                    <div class="rag-card-title">🔍 检索测试</div>
+                    <div class="rag-input-group">
+                        <input type="text" class="rag-input" id="searchInput" placeholder="输入查询语句，如：锂离子电池正极材料...">
+                        <button class="rag-btn" id="btnSearch">检索</button>
+                    </div>
+                    <div id="searchStatus"></div>
+                    <div class="rag-result-list" id="searchResults"></div>
+                </div>
+            </section>
+
+            <!-- 问答 -->
+            <section class="rag-section" id="tab-query">
+                <div class="rag-card">
+                    <div class="rag-card-title">💬 RAG 问答</div>
+                    <div class="rag-input-group">
+                        <input type="text" class="rag-input" id="queryInput" placeholder="输入问题，如：固态电解质的优缺点？">
+                        <button class="rag-btn" id="btnQuery">提问</button>
+                    </div>
+                    <div id="queryStatus"></div>
+                    <div class="rag-chat-history" id="queryResult">
+                        <div class="rag-chat-placeholder">输入问题后，将基于向量检索结果生成回答</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 文档管理 -->
+            <section class="rag-section" id="tab-docs">
+                <div class="rag-card">
+                    <div class="rag-card-title">📁 扫描加载文档</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        扫描 <code>data/</code> 目录，自动识别新增或修改的文档（PDF/TXT/MD/DOCX/PPTX），写入 PGVector 向量库。已加载过的文件自动跳过。
+                    </p>
+                    <button class="rag-btn" id="btnLoadDocs">开始扫描加载</button>
+                    <div id="loadDocsResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
+                    <div class="rag-card-title">➕ 手动添加文档</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        手动向向量库添加文本内容，适合注入少量知识片段。
+                    </p>
+                    <textarea class="rag-textarea" id="addDocsText" placeholder="输入要添加的文本内容..."></textarea>
+                    <div class="rag-input-group" style="margin-top:12px;">
+                        <input type="text" class="rag-input" id="addDocsSource" placeholder="来源标识（可选，如 manual_note_1）">
+                        <button class="rag-btn" id="btnAddDocs">添加</button>
+                    </div>
+                    <div id="addDocsResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
+                    <div class="rag-card-title">🗑️ 按来源删除文档</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        根据来源路径删除向量库中的文档片段。来源格式如：<code>data/某论文.pdf</code> 或 <code>manual_note_1</code>
+                    </p>
+                    <div class="rag-input-group">
+                        <input type="text" class="rag-input" id="deleteSource" placeholder="输入来源路径或标识">
+                        <button class="rag-btn rag-btn-danger" id="btnDeleteSource">删除</button>
+                    </div>
+                    <div id="deleteResult" style="margin-top:12px;"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/js/rag.js"></script>
+</body>
+</html>

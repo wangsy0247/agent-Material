@@ -6,7 +6,7 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
-        "GITHUB_TOKEN": "$GITHUB_TOKEN"
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
       },
       "description": "GitHub MCP server for repository operations"
     },

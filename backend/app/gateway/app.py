@@ -221,6 +221,12 @@ async def root():
     return FileResponse("frontend/index.html")
 
 
+@app.get("/rag", summary="RAG 管理页面", tags=["根路径"])
+async def rag_page():
+    """返回 RAG 知识库管理页面"""
+    return FileResponse("frontend/rag.html")
+
+
 # ==================== API 信息路由 ====================
 
 

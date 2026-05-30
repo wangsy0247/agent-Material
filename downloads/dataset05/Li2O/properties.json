@@ -1,0 +1,16 @@
+{
+    "Formula": "Li2O",
+    "MP_ID": "mp-1960",
+    "Number of Atoms": 12,
+    "Volume (Å³)": 100.785,
+    "Lattice a,b,c (Å)": "4.654, 4.654, 4.654",
+    "Angles α,β,γ (°)": "90.0, 90.0, 90.0",
+    "Crystal System": "Cubic",
+    "Space Group": "Fm-3m",
+    "Density (g/cm³)": 1.969,
+    "Band Gap (eV)": 4.899,
+    "Is Magnetic": false,
+    "Formation Energy (eV/atom)": -2.062,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": 78.6
+}

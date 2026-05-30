@@ -16,6 +16,7 @@
       "args": ["-m", "rag_mcp_server"],
       "env": {
         "ANTHROPIC_API_KEY": "$ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL": "$ANTHROPIC_BASE_URL",
         "DASHSCOPE_API_KEY": "$DASHSCOPE_API_KEY"
       },
       "description": "材料科学 RAG 服务：向量检索、文档加载、智能问答"
