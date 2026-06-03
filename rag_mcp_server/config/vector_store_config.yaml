@@ -11,14 +11,24 @@ character_name: agent
 connection_string: "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres"
 
 md5_hex_store: md5.text
-document_directory: data
-allow_type: [".pdf", ".txt", ".md", ".docx", ".pptx"]
+document_directory: datas
+allow_type: [".pdf", ".txt", ".md", ".html", ".docx", ".pptx"]
+
+# ── 扩展名直接映射切分器 ────────────────────────────────────────
+# 可选切分器：recursive, semantic, parent, markdown_header, html_header
+extension_splitter_map:
+  ".txt": "recursive"
+  ".md": "markdown_header"
+  ".pdf": "semantic"
+  ".html": "html_header"
+  ".docx": "recursive"
+  ".pptx": "recursive"
 
 # 检索配置
-k: 5                     # 向量/BM25 检索返回数量（减小以减少重排序负担）
+k: 10                     # 向量/BM25 检索返回数量（减小以减少重排序负担）
 score_threshold: 0.3     # 向量相似度阈值（提高以过滤低质量文档）
-top_n: 3                 # 重排序后返回数量
-max_rerank_docs: 8       # 进入重排序器的最大文档数（截断保护）
+top_n: 5                 # 重排序后返回数量
+max_rerank_docs: 10      # 进入重排序器的最大文档数（截断保护）
 
 # 重排序开关（CPU 上 0.6B 模型推理很慢，如无 GPU 建议关闭）
 enable_reranker: true

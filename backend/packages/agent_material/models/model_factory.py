@@ -5,10 +5,13 @@ from typing import Optional
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_anthropic import ChatAnthropic
+from langchain_community.chat_models import ChatTongyi
 from langchain_community.embeddings import DashScopeEmbeddings
 from agent_material.utils.config_handler import agent_config, rag_config
 from agent_material.utils.langsmith_setup import setup_langsmith
-
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+load_dotenv()
 # 程序启动时尝试初始化 LangSmith（静默失败不影响业务）
 setup_langsmith()
 
@@ -18,11 +21,21 @@ class BaseModelFactory(ABC):
     def generator(self) -> Optional[BaseChatModel | Embeddings]:
         pass
 
+# ---- Anthropic ----
+# class ChatModelFactory(BaseModelFactory):
+#     def generator(self) -> Optional[BaseChatModel | Embeddings]:
+#         return ChatAnthropic(
+#             model=agent_config["chat_model_name"],
+#             max_tokens=agent_config["max_tokens"],
+#             streaming=True,
+#         )
 
+
+# ---- 通义千问 ----
 class ChatModelFactory(BaseModelFactory):
     def generator(self) -> Optional[BaseChatModel | Embeddings]:
-        return ChatAnthropic(
-            model=agent_config["chat_model_name"],
+        return ChatOpenAI(
+            model_name=agent_config["chat_model_name"],
             max_tokens=agent_config["max_tokens"],
             streaming=True,
         )

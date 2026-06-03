@@ -35,6 +35,20 @@ _RagService = None
 def _get_vector_store():
     global _VectorStore
     if _VectorStore is None:
+        import os
+        import faulthandler
+        faulthandler.enable()
+
+        # 诊断：检测 libffi 冲突（已知 WSL+Anaconda 会导致 psycopg segfault）
+        ld_preload = os.environ.get("LD_PRELOAD", "")
+        if "libffi" not in ld_preload:
+            import logging
+            logging.warning(
+                "[RAG] LD_PRELOAD 未设置 libffi 系统库。"
+                "如果后续出现 Segmentation fault，请使用 scripts/start_server.sh 启动，"
+                "或手动执行: export LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7"
+            )
+
         from rag_mcp_server.rag.vector_store import VectorStore
 
         _VectorStore = VectorStore()
@@ -70,6 +84,16 @@ class RAGAddDocumentsRequest(BaseModel):
 
 class RAGDeleteRequest(BaseModel):
     source: str = Field(..., min_length=1, description="来源路径或标识")
+
+
+class RAGBatchDeleteRequest(BaseModel):
+    sources: list[str] = Field(..., min_length=1, description="要删除的来源路径列表")
+
+
+class RAGAddChunksRequest(BaseModel):
+    chunks: list[str] = Field(..., min_length=1, description="已切分好的文本片段列表")
+    sources: list[str] | None = Field(default=None, description="来源标识列表，与 chunks 一一对应；不传则自动分配")
+    metadatas: list[dict] | None = Field(default=None, description="额外元数据列表，与 chunks 一一对应")
 
 
 # ------------------------------------------------------------------
@@ -269,6 +293,60 @@ async def rag_add_documents(
         raise HTTPException(status_code=500, detail=f"添加文档失败: {e}")
 
 
+@router.post("/add-chunks", summary="批量添加已切分的 chunks（不再二次切分）", response_model=BaseResponse)
+async def rag_add_chunks(
+    request: RAGAddChunksRequest,
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """将已切分好的文本片段直接转为向量并批量写入向量库，不做额外切分。"""
+    try:
+        from langchain_core.documents import Document
+
+        if request.metadatas and len(request.metadatas) != len(request.chunks):
+            raise HTTPException(status_code=400, detail="metadatas 长度必须与 chunks 一致")
+
+        sources = request.sources or [f"chunk_batch_{i}" for i in range(len(request.chunks))]
+        if len(sources) != len(request.chunks):
+            raise HTTPException(status_code=400, detail="sources 长度必须与 chunks 一致")
+
+        docs: list[Document] = []
+        for i, text in enumerate(request.chunks):
+            meta = dict(request.metadatas[i]) if request.metadatas and i < len(request.metadatas) else {}
+            meta["source"] = sources[i]
+            docs.append(Document(page_content=text, metadata=meta))
+
+        store = _get_vector_store()
+        # 直接走 PGVector，不再经过 VectorStore.add_documents 的二次切分
+        store.vector_store.add_documents(docs)
+        store.all_documents.extend(docs)
+        store._retrievers_initialized = False
+        return BaseResponse(
+            code=200,
+            message=f"成功入库 {len(docs)} 条 chunks",
+            data={"added": len(docs)},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"入库失败: {e}")
+
+
+@router.get("/sources", summary="获取所有文献来源", response_model=BaseResponse)
+async def rag_sources(current_user: UserInfo = Depends(get_current_user)):
+    """获取向量库中所有唯一的文献来源列表（含片段数）。"""
+    try:
+        store = _get_vector_store()
+        sources = store.get_all_sources()
+        return BaseResponse(
+            code=200,
+            message="success",
+            data=sources,
+            total=len(sources),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取文献列表失败: {e}")
+
+
 @router.post("/delete-by-source", summary="按来源删除文档", response_model=BaseResponse)
 async def rag_delete_by_source(
     request: RAGDeleteRequest,
@@ -285,3 +363,30 @@ async def rag_delete_by_source(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除文档失败: {e}")
+
+
+@router.post("/delete-sources", summary="批量删除文献", response_model=BaseResponse)
+async def rag_delete_sources(
+    request: RAGBatchDeleteRequest,
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """批量删除向量库中的文献。"""
+    try:
+        store = _get_vector_store()
+        failed = []
+        for source in request.sources:
+            try:
+                store.delete_documents_by_source(source)
+            except Exception as e:
+                failed.append({"source": source, "error": str(e)})
+        success_count = len(request.sources) - len(failed)
+        msg = f"成功删除 {success_count} 篇文献"
+        if failed:
+            msg += f"，{len(failed)} 篇失败"
+        return BaseResponse(
+            code=200,
+            message=msg,
+            data={"success": success_count, "failed": failed},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量删除失败: {e}")

@@ -77,7 +77,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
     mcp = FastMCP(
         "rag-server",
         instructions=(
-            "材料科学领域 RAG（检索增强生成）服务。基于 PGVector + BM25 + CrossEncoder "
+            "Abacus和lammps软件使用的 RAG（检索增强生成）服务。基于 PGVector + BM25 + CrossEncoder "
             "构建的混合检索系统，支持向量检索、文档加载、增量更新和智能问答。"
         ),
         host=host,

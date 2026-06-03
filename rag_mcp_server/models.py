@@ -6,19 +6,37 @@ from typing import Optional
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 from langchain_anthropic import ChatAnthropic
+from langchain_community.chat_models import ChatTongyi
+from langchain_openai import ChatOpenAI
 from langchain_community.embeddings import DashScopeEmbeddings
 
 from rag_mcp_server.config import agent_config, vector_store_config
 from rag_mcp_server.utils.logger import logger
 
 
+# def _create_chat_model_anthropic() -> Optional[BaseChatModel]:
+#     """初始化 Chat 模型（Anthropic Claude）。"""
+#     try:
+#         model_name = agent_config.get("chat_model_name", "claude-3-sonnet-20240229")
+#         max_tokens = agent_config.get("max_tokens", 8192)
+#         return ChatAnthropic(
+#             model=model_name,
+#             max_tokens=max_tokens,
+#             streaming=True,
+#         )
+#     except Exception as e:
+#         logger.error(f"[Models] Chat 模型初始化失败: {e}")
+#         return None
+
+
+# ---- 通义千问 (Qwen) 默认方案 ----
 def _create_chat_model() -> Optional[BaseChatModel]:
-    """初始化 Chat 模型（Anthropic / DeepSeek）。"""
+    """初始化 Chat 模型（通义千问 / Qwen）。"""
     try:
-        model_name = agent_config.get("chat_model_name", "")
+        model_name = agent_config.get("chat_model_name", "qwen3.5-flash")
         max_tokens = agent_config.get("max_tokens", 8192)
-        return ChatAnthropic(
-            model=model_name,
+        return ChatOpenAI(
+            model_name=model_name,
             max_tokens=max_tokens,
             streaming=True,
         )

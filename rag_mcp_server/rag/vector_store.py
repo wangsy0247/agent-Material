@@ -20,6 +20,7 @@ from rag_mcp_server.utils.file_loader import (
     txt_loader,
     md_loader,
     pdf_loader,
+    html_loader,
     docx_loader,
     pptx_loader,
     filelist_with_allow_type,
@@ -153,46 +154,42 @@ except ImportError:
 
 class VectorStore:
     def __init__(self):
-        # 根据配置选择切分策略
-        splitter_type = vector_store_config.get("splitter_type", "recursive")
-        if splitter_type == "semantic":
-            from rag_mcp_server.rag.text_spliter import SemanticTextSplitter
+        # 加载并保存切分配置
+        self._chunk_size = vector_store_config["chunk_size"]
+        self._chunk_overlap = vector_store_config["chunk_overlap"]
+        self._separator = vector_store_config["separator"]
 
-            self.splitter = SemanticTextSplitter(
-                chunk_size=vector_store_config["chunk_size"],
-                chunk_overlap=vector_store_config["chunk_overlap"],
-                separator=vector_store_config["separator"],
-                embedding_model=embedding_model,
-                similarity_threshold=vector_store_config.get("similarity_threshold", 0.75),
-            )
-            logger.info("使用语义切分器 (SemanticTextSplitter)")
-        else:
-            from langchain_text_splitters import RecursiveCharacterTextSplitter
+        # 文档处理管道（两阶段：Loader + Splitter）
+        self._pipeline = None  # 延迟初始化
+        logger.info("文档处理管道已就绪（两阶段：Loader + Splitter）")
 
-            self.splitter = RecursiveCharacterTextSplitter(
-                chunk_size=vector_store_config["chunk_size"],
-                chunk_overlap=vector_store_config["chunk_overlap"],
-                separators=vector_store_config["separator"],
-                length_function=len,
-            )
-            logger.info("使用标准切分器 (RecursiveCharacterTextSplitter)")
-
-        self.vector_store = PGVector(
-            embeddings=embedding_model,
-            connection=vector_store_config.get("connection_string"),
-            collection_name=vector_store_config["character_name"],
-            use_jsonb=True,
-        )
+        # PGVector 延迟初始化（避免 __init__ 时触发 C 扩展 segfault）
+        self._vector_store: PGVector | None = None
 
         # 维护内存中的文档列表，用于构建 BM25 索引
         self.all_documents: list[Document] = []
-        self._load_existing_documents()
 
         # 检索器缓存（延迟初始化，避免模块导入时加载重排序模型）
         self._bm25_retriever = None
         self._hybrid_retriever = None
         self._compression_retriever = None
         self._retrievers_initialized = False
+
+    @property
+    def vector_store(self) -> PGVector:
+        """延迟初始化 PGVector，隔离 C 扩展崩溃风险。"""
+        if self._vector_store is None:
+            logger.info("[VectorStore] 初始化 PGVector...")
+            self._vector_store = PGVector(
+                embeddings=embedding_model,
+                connection=vector_store_config.get("connection_string"),
+                collection_name=vector_store_config["character_name"],
+                use_jsonb=True,
+            )
+            logger.info("[VectorStore] PGVector 初始化完成")
+            # PGVector 就绪后再加载已有文档
+            self._load_existing_documents()
+        return self._vector_store
 
     def _load_existing_documents(self):
         """从 PGVector 加载已有文档到内存，用于构建 BM25 索引"""
@@ -297,9 +294,6 @@ class VectorStore:
                     model_kwargs={"device": device},
                 )
 
-                # 兼容性处理：旧版 LangChain CrossEncoderReranker 可能调用 predict()
-                # 新版 HuggingFaceCrossEncoder 已改为 score()，这里做向后兼容
-                # 注意：HuggingFaceCrossEncoder 继承自 Pydantic v2 BaseModel，
                 # 直接赋值会被拒绝，必须使用 object.__setattr__ 绕过校验
                 if hasattr(cross_encoder, "score") and not hasattr(cross_encoder, "predict"):
                     object.__setattr__(cross_encoder, "predict", cross_encoder.score)
@@ -329,96 +323,124 @@ class VectorStore:
             self._retrievers_initialized = True
         return self._compression_retriever or self._hybrid_retriever
 
+    def _process_single_file(self, file_path: str) -> list[Document]:
+        """处理单个文件：两阶段管道（Loader → Dispatcher → Splitter）。
+
+        Returns:
+            切分后的 Document 列表（空列表表示处理失败或结果为空）
+        """
+        if self._pipeline is None:
+            from rag_mcp_server.rag.document_pipeline import ProcessingPipeline
+            self._pipeline = ProcessingPipeline()
+
+        return self._pipeline.process(file_path)
+
     def load_document(self):
-        """加载文档到向量数据库，加载完成后自动重建检索器"""
+        """加载文档到向量数据库（并发处理 + 两阶段管道）。
 
-        def check_md5_hex(md5_for_check: str) -> bool:
-            if not os.path.exists(vector_store_config["md5_hex_store"]):
-                open(vector_store_config["md5_hex_store"], "w", encoding="utf-8").close()
-
-            with open(vector_store_config["md5_hex_store"], "r", encoding="utf-8") as f:
-                for line in f.readlines():
-                    if line.strip() == md5_for_check:
-                        return True
-                return False
-
-        def save_md5_hex(md5_hex: str):
-            with open(vector_store_config["md5_hex_store"], "a", encoding="utf-8") as f:
-                f.write(md5_hex + "\n")
-
-        def get_file_documents(file_path: str):
-            if file_path.endswith(".pdf"):
-                return pdf_loader(file_path)
-            elif file_path.endswith(".txt"):
-                return txt_loader(file_path)
-            elif file_path.endswith(".md"):
-                return md_loader(file_path)
-            elif file_path.endswith(".docx"):
-                return docx_loader(file_path)
-            elif file_path.endswith(".pptx"):
-                return pptx_loader(file_path)
-            else:
-                raise ValueError(
-                    f"Unsupported file type: {os.path.splitext(file_path)[1]}"
-                )
+        流程：
+        1. ThreadPoolExecutor 并发处理文件（Loader 加载清洗 + Splitter 按类型切分）
+        2. 收集所有 Document，批量写入 PGVector
+        3. 重置检索器标记，下次查询时自动重建
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
         files: list[str] = filelist_with_allow_type(
             path=vector_store_config["document_directory"],
             allow_type=vector_store_config["allow_type"],
         )
 
-        new_docs_loaded = False
+        new_docs: list[Document] = []
+        processed_count = 0
+        failed_count = 0
 
-        for file in files:
-            md5_hex = get_file_md5_hex(file)
-            if not md5_hex:
-                continue
-
-            if check_md5_hex(md5_hex):
-                logger.info(f"文件{file}已加载过，跳过")
-                continue
-
-            try:
-                documents = get_file_documents(file)
-                if not documents:
-                    logger.error(f"文件{file}为空")
+        # 阶段 1：并发处理文件（清洗 + 切分，CPU 密集型）
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_file: dict = {}
+            for file in files:
+                md5_hex = get_file_md5_hex(file)
+                if not md5_hex:
                     continue
-
-                spliter_documents = self.splitter.split_documents(documents)
-                if not spliter_documents:
-                    logger.error(f"文件{file}分割后为空")
+                if self._check_md5_hex(md5_hex):
+                    logger.info(f"文件{file}已加载过，跳过")
                     continue
+                future = executor.submit(self._process_single_file, file)
+                future_to_file[future] = (file, md5_hex)
 
-                self.vector_store.add_documents(spliter_documents)
-                self.all_documents.extend(spliter_documents)
-                new_docs_loaded = True
+            for future in as_completed(future_to_file):
+                file, md5_hex = future_to_file[future]
+                try:
+                    docs = future.result()
+                    if docs:
+                        new_docs.extend(docs)
+                        self._save_md5_hex(md5_hex)
+                        processed_count += 1
+                        logger.info(f"文件{file}处理成功 | {len(docs)} chunks")
+                    else:
+                        logger.warning(f"文件{file}处理后为空")
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"文件{file}处理失败: {e}")
 
-                logger.info(f"文件{file}加载成功")
-                save_md5_hex(md5_hex)
-            except Exception as e:
-                logger.error(f"文件{file}加载失败: {str(e)}")
-
-        # 如果有新文档加载，重置初始化标记，下次 get_retriever() 时重建
-        if new_docs_loaded:
+        # 阶段 2：批量写入向量数据库（串行，避免并发写问题）
+        if new_docs:
+            self.vector_store.add_documents(new_docs)
+            self.all_documents.extend(new_docs)
             self._retrievers_initialized = False
-            logger.info("有新文档加载，检索器将在下次查询时自动重建")
+            logger.info(
+                f"文档加载完成 | 成功: {processed_count} 文件 | "
+                f"失败: {failed_count} 文件 | 总 chunks: {len(new_docs)} | "
+                f"检索器将在下次查询时自动重建"
+            )
+        else:
+            logger.info("无新文档需要加载")
 
     def add_documents(self, documents: list[Document]):
-        """手动添加文档（供外部调用），添加后自动重建检索器"""
+        """手动添加文档（供外部调用），添加后自动重建检索器。
+
+        根据 Document metadata 中的 source 路径扩展名选择切分器，
+        未匹配则回退到 recursive。
+        """
         if not documents:
             return
 
-        split_docs = self.splitter.split_documents(documents)
-        if not split_docs:
+        from rag_mcp_server.rag.document_pipeline import DocumentSplitter, RecursiveSplitter
+
+        splitter = DocumentSplitter()
+        ext_map: dict[str, str] = vector_store_config.get("extension_splitter_map", {})
+
+        # 按扩展名分组
+        docs_by_ext: dict[str, list[Document]] = {}
+        for doc in documents:
+            source = doc.metadata.get("source", "")
+            ext = os.path.splitext(source)[1].lower() or ".unknown"
+            docs_by_ext.setdefault(ext, []).append(doc)
+
+        all_splits: list[Document] = []
+        for ext, docs in docs_by_ext.items():
+            splitter_name = ext_map.get(ext, "recursive")
+            try:
+                splits = splitter.split(docs, splitter_name)
+                all_splits.extend(splits)
+                logger.info(f"手动添加文档: {ext} → {splitter_name} | 产出 {len(splits)} chunks")
+            except Exception as e:
+                logger.error(f"手动添加文档切分失败 ({ext} → {splitter_name}): {e}")
+                fallback = RecursiveSplitter()
+                splits = fallback.split_documents(docs)
+                all_splits.extend(splits)
+
+        if not all_splits:
             return
 
-        self.vector_store.add_documents(split_docs)
-        self.all_documents.extend(split_docs)
+        self.vector_store.add_documents(all_splits)
+        self.all_documents.extend(all_splits)
         self._retrievers_initialized = False
-        logger.info(f"手动添加了 {len(split_docs)} 条文档，检索器将在下次查询时自动重建")
+        logger.info(
+            f"手动添加了 {len(all_splits)} 条文档，检索器将在下次查询时自动重建"
+        )
 
     def delete_documents_by_source(self, source: str):
-        """根据来源路径删除文档（支持增量更新）"""
+        """根据来源路径删除文档（支持增量更新），并同步清理 md5 记录。"""
         import psycopg
         conn_str = vector_store_config.get("connection_string")
         collection_name = vector_store_config.get("character_name", "agent")
@@ -451,13 +473,135 @@ class VectorStore:
                 d for d in self.all_documents if d.metadata.get("source") != source
             ]
             self._retrievers_initialized = False
-            logger.info(f"已删除来源为 {source} 的 {deleted} 条文档，检索器将在下次查询时自动重建")
+            # 同步清理 md5 记录（如果 source 对应本地文件）
+            md5_removed = self._remove_md5_hex_for_source(source)
+            logger.info(
+                f"已删除来源为 {source} 的 {deleted} 条文档"
+                f"{'，并清理 md5 记录' if md5_removed else ''}"
+                f"，检索器将在下次查询时自动重建"
+            )
         except Exception as e:
             logger.error(f"删除文档失败: {e}")
 
+    def _split_html_documents(self, documents: list[Document]) -> list[Document]:
+        """对 HTML 清洗后的 Markdown 文本使用标题结构切分（兼容层）。
+
+        直接复用文档管道中的 MarkdownHeaderSplitter 逻辑。
+        """
+        from rag_mcp_server.rag.document_pipeline import MarkdownHeaderSplitter
+        splitter = MarkdownHeaderSplitter()
+        return splitter.split_documents(documents)
+
+    # ------------------------------------------------------------------ #
+    #  MD5 辅助方法（供 load_document 和并发处理使用）
+    # ------------------------------------------------------------------ #
+    def _check_md5_hex(self, md5_for_check: str) -> bool:
+        md5_file = vector_store_config.get("md5_hex_store", "md5.text")
+        if not os.path.exists(md5_file):
+            open(md5_file, "w", encoding="utf-8").close()
+        with open(md5_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip() == md5_for_check:
+                    return True
+        return False
+
+    def _save_md5_hex(self, md5_hex: str):
+        md5_file = vector_store_config.get("md5_hex_store", "md5.text")
+        with open(md5_file, "a", encoding="utf-8") as f:
+            f.write(md5_hex + "\n")
+
+    def _remove_md5_hex_for_source(self, source: str) -> bool:
+        """根据 source 路径计算 md5，并从 md5.text 中移除对应记录。
+
+        Returns:
+            是否成功移除了 md5 记录
+        """
+        md5_hex = get_file_md5_hex(source)
+        if not md5_hex:
+            return False
+        md5_file = vector_store_config.get("md5_hex_store", "md5.text")
+        if not os.path.exists(md5_file):
+            return False
+        try:
+            with open(md5_file, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip()]
+            if md5_hex not in lines:
+                return False
+            lines.remove(md5_hex)
+            with open(md5_file, "w", encoding="utf-8") as f:
+                for line in lines:
+                    f.write(line + "\n")
+            logger.info(f"已从 md5.text 移除 {source} 的 md5 记录")
+            return True
+        except Exception as e:
+            logger.error(f"清理 md5 记录失败: {e}")
+            return False
+
     def get_document_count(self) -> int:
-        """获取当前向量库中的文档总数"""
-        return len(self.all_documents)
+        """获取当前向量库中的文档总数。
+
+        优先从数据库查询，避免依赖尚未加载的内存缓存。
+        """
+        import psycopg
+        conn_str = vector_store_config.get("connection_string")
+        collection_name = vector_store_config.get("character_name", "agent")
+        if not conn_str:
+            return len(self.all_documents)
+        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
+        try:
+            conn = psycopg.connect(psycopg_conn_str)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM langchain_pg_embedding e
+                JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                WHERE c.name = %s
+                """,
+                (collection_name,),
+            )
+            count = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+            return count
+        except Exception:
+            return len(self.all_documents)
+
+    def get_all_sources(self) -> list[dict]:
+        """获取向量库中所有唯一的文献来源列表。
+
+        直接查询数据库，避免触发 PGVector 初始化（减少 segfault 风险）。
+
+        Returns:
+            按文献名排序的列表，每项包含 source 和 chunk_count
+        """
+        import psycopg
+        conn_str = vector_store_config.get("connection_string")
+        collection_name = vector_store_config.get("character_name", "agent")
+        if not conn_str:
+            logger.error("未配置 connection_string，无法获取文献列表")
+            return []
+        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
+        try:
+            conn = psycopg.connect(psycopg_conn_str)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT e.cmetadata->>'source' AS source, COUNT(*) AS chunk_count
+                FROM langchain_pg_embedding e
+                JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                WHERE c.name = %s AND e.cmetadata->>'source' IS NOT NULL
+                GROUP BY e.cmetadata->>'source'
+                ORDER BY source
+                """,
+                (collection_name,),
+            )
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            return [{"source": row[0], "chunk_count": row[1]} for row in rows]
+        except Exception as e:
+            logger.error(f"获取文献列表失败: {e}")
+            return []
 
 
 if __name__ == "__main__":

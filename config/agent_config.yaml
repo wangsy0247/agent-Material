@@ -1,4 +1,4 @@
-chat_model_name: "DeepSeek-V4-Flash"
+chat_model_name: "qwen3.6-plus"
 max_tokens: 8192
 
 # ---- Checkpointer 配置（LangGraph 状态持久化） ----

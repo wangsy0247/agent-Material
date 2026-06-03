@@ -407,6 +407,27 @@ def _get_message_role_label(msg: AnyMessage) -> str:
     return "未知"
 
 
+def _normalize_content_block(block: dict) -> str:
+    """将多模态 content block 转换为纯文本描述。"""
+    block_type = block.get("type", "")
+    if block_type == "text":
+        return block.get("text", "")
+    if block_type == "image_url":
+        image_url = block.get("image_url", {})
+        url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
+        return f"[图片: {url}]"
+    if block_type == "image":
+        return "[图片]"
+    if block_type == "file":
+        file_info = block.get("file", {})
+        if isinstance(file_info, dict):
+            url = file_info.get("url", "")
+            mime = file_info.get("mime_type", "")
+            return f"[文件: {url or mime or 'unknown'}]"
+        return f"[文件: {file_info}]"
+    return str(block)
+
+
 def _sanitize_messages_for_llm(messages: list[AnyMessage]) -> list[AnyMessage]:
     """清洗消息列表，移除孤立的 ToolMessage。
 

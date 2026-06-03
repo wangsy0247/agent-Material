@@ -171,7 +171,6 @@ class LongTermMemory:
 
         from langchain_postgres.vectorstores import PGVector
         from agent_material.models.model_factory import embedding_model
-        from agent_material.utils.config_handler import vector_store_config
         from sqlalchemy import create_engine, text
 
         try:

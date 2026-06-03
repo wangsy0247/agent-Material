@@ -1,0 +1,16 @@
+{
+    "Formula": "Si",
+    "MP_ID": "mp-149",
+    "Number of Atoms": 8,
+    "Volume (Å³)": 161.318,
+    "Lattice a,b,c (Å)": "5.444, 5.444, 5.444",
+    "Angles α,β,γ (°)": "90.0, 90.0, 90.0",
+    "Crystal System": "Cubic",
+    "Space Group": "Fd-3m",
+    "Density (g/cm³)": 2.313,
+    "Band Gap (eV)": 0.611,
+    "Is Magnetic": false,
+    "Formation Energy (eV/atom)": 0.0,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": 88.92
+}

@@ -4,33 +4,10 @@ import os
 import hashlib
 from typing import Union
 
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, UnstructuredMarkdownLoader, Docx2txtLoader, UnstructuredPowerPointLoader
+from langchain_core.documents import Document
 from rag_mcp_server.utils.path import get_abs_path
 from rag_mcp_server.utils.logger import logger
-
-# 可选依赖：Markdown
-try:
-    from langchain_community.document_loaders import UnstructuredMarkdownLoader
-    MD_AVAILABLE = True
-except ImportError:
-    MD_AVAILABLE = False
-    logger.warning("UnstructuredMarkdownLoader 不可用，将无法加载 .md 文件")
-
-# 可选依赖：Word
-try:
-    from langchain_community.document_loaders import Docx2txtLoader
-    DOCX_AVAILABLE = True
-except ImportError:
-    DOCX_AVAILABLE = False
-    logger.warning("Docx2txtLoader 不可用，将无法加载 .docx 文件")
-
-# 可选依赖：PPT
-try:
-    from langchain_community.document_loaders import UnstructuredPowerPointLoader
-    PPTX_AVAILABLE = True
-except ImportError:
-    PPTX_AVAILABLE = False
-    logger.warning("UnstructuredPowerPointLoader 不可用，将无法加载 .pptx 文件")
 
 
 def get_file_md5_hex(file_path: str) -> str | None:
@@ -57,17 +34,93 @@ def filelist_with_allow_type(path: str, allow_type: Union[tuple, list]) -> list[
     if not os.path.isdir(abs_path):
         logger.error(f"不是目录: {path}")
         return files
-    for filename in os.listdir(abs_path):
-        if filename.endswith(tuple(allow_type)):
-            files.append(os.path.join(abs_path, filename))
+    for root, _dirs, filenames in os.walk(abs_path):
+        for filename in filenames:
+            if filename.endswith(tuple(allow_type)):
+                files.append(os.path.join(root, filename))
     return files
 
 
-def pdf_loader(path: str, password=None) -> list:
+def pdf_text_loader(path: str, password=None) -> list:
+    """纯文本提取（不经过手册清洗），用于论文等需要原始文本的场景。
+
+    优先使用 PyMuPDF（fitz），缺失则回退到 PyPDFLoader。
+    """
+    try:
+        import fitz
+
+        doc = fitz.open(path)
+        return [
+            Document(
+                page_content=page.get_text(),
+                metadata={"source": path, "page": i + 1},
+            )
+            for i, page in enumerate(doc)
+        ]
+    except ImportError:
+        logger.debug(f"PyMuPDF 未安装，回退到 PyPDFLoader: {path}")
+    except Exception as e:
+        logger.debug(f"PyMuPDF 提取失败，回退到 PyPDFLoader: {path} | {e}")
+
     try:
         return PyPDFLoader(path, password).load()
     except Exception as e:
         logger.error(f"PDF加载失败 {path}: {e}")
+        return []
+
+
+def pdf_loader(path: str, password=None) -> list:
+    """加载 PDF，优先使用软件手册清洗器，失败则回退到 PyPDFLoader。"""
+    # 尝试软件手册清洗
+    try:
+        from rag_mcp_server.cleaner.pdf_manual_cleaner import SoftwareManualCleaner
+
+        cleaner = SoftwareManualCleaner()
+        pages = cleaner.extract_pages(path)
+        if pages:
+            cleaned_pages = cleaner.clean(pages)
+            docs = []
+            for page in cleaned_pages:
+                text = page.get("cleaned_text", "")
+                tags = page.get("tags", [])
+                if not text or "toc_page" in tags:
+                    continue
+                docs.append(
+                    Document(
+                        page_content=text,
+                        metadata={
+                            "source": path,
+                            "page": page.get("page_num", 0),
+                        },
+                    )
+                )
+            if docs:
+                logger.info(f"PDF手册清洗成功: {path}，共 {len(docs)} 页")
+                return docs
+    except ImportError:
+        logger.debug(f"pdfplumber 未安装，跳过 PDF 清洗: {path}")
+    except Exception as e:
+        logger.debug(f"PDF软件手册清洗失败，回退到 PyPDFLoader: {path} | {e}")
+
+    # 回退到纯文本提取
+    return pdf_text_loader(path, password)
+
+
+def html_loader(path: str) -> list:
+    """加载并清洗 HTML 文件，返回 Markdown 格式文本。"""
+    try:
+        from rag_mcp_server.cleaner.html_cleaner import HTMLCleaner
+
+        _html_cleaner = HTMLCleaner()
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        cleaned_text = _html_cleaner.clean_html(content)
+        if not cleaned_text:
+            logger.warning(f"HTML清洗后为空: {path}")
+            return []
+        return [Document(page_content=cleaned_text, metadata={"source": path})]
+    except Exception as e:
+        logger.error(f"HTML加载失败 {path}: {e}")
         return []
 
 
@@ -80,8 +133,6 @@ def txt_loader(path: str) -> list:
 
 
 def md_loader(path: str) -> list:
-    if not MD_AVAILABLE:
-        return txt_loader(path)
     try:
         return UnstructuredMarkdownLoader(path).load()
     except Exception as e:
@@ -90,9 +141,6 @@ def md_loader(path: str) -> list:
 
 
 def docx_loader(path: str) -> list:
-    if not DOCX_AVAILABLE:
-        logger.error(f"Docx2txtLoader 未安装，无法加载 {path}")
-        return []
     try:
         return Docx2txtLoader(path).load()
     except Exception as e:
@@ -101,9 +149,6 @@ def docx_loader(path: str) -> list:
 
 
 def pptx_loader(path: str) -> list:
-    if not PPTX_AVAILABLE:
-        logger.error(f"UnstructuredPowerPointLoader 未安装，无法加载 {path}")
-        return []
     try:
         return UnstructuredPowerPointLoader(path).load()
     except Exception as e:

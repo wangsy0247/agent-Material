@@ -12,6 +12,8 @@ const state = {
     currentTab: 'overview',
     isQuerying: false,
     abortController: null,
+    selectedDocs: new Set(),
+    allDocs: [],
 };
 
 // DOM 缓存
@@ -122,6 +124,7 @@ function switchTab(tab) {
         sec.classList.toggle('active', sec.id === `tab-${tab}`);
     });
     if (tab === 'overview') loadStats();
+    if (tab === 'docs') loadDocsList();
 }
 
 // ============================================
@@ -462,6 +465,15 @@ function bindEvents() {
     $('btnLoadDocs').addEventListener('click', doLoadDocuments);
     $('btnAddDocs').addEventListener('click', doAddDocuments);
     $('btnDeleteSource').addEventListener('click', doDeleteBySource);
+
+    // 文献列表
+    $('btnRefreshDocs').addEventListener('click', loadDocsList);
+    $('checkAllDocs').addEventListener('change', toggleSelectAll);
+    $('checkAllDocsHeader').addEventListener('change', toggleSelectAll);
+    $('btnBatchDeleteDocs').addEventListener('click', doBatchDelete);
+
+    // 批量入库 chunks
+    $('btnAddChunks').addEventListener('click', doAddChunks);
 }
 
 // ============================================
@@ -476,6 +488,157 @@ function init() {
     bindEvents();
     loadStats();
     console.log('📚 RAG 知识库页面已加载');
+}
+
+// ============================================
+// 文献列表
+// ============================================
+
+async function loadDocsList() {
+    const status = $('docsListStatus');
+    const tbody = $('docsTableBody');
+    setLoading(status, '加载文献列表...');
+    try {
+        const res = await apiFetch('/rag/sources');
+        const data = res.data || [];
+        state.allDocs = data;
+        state.selectedDocs.clear();
+        updateBatchDeleteUI();
+        status.innerHTML = '';
+        if (!data.length) {
+            tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px;">暂无文献</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = data.map((item, i) => `
+            <tr data-source="${escapeHtml(item.source)}">
+                <td class="col-check"><input type="checkbox" class="rag-doc-checkbox doc-checkbox" data-source="${escapeHtml(item.source)}"></td>
+                <td class="col-num">${i + 1}</td>
+                <td class="rag-doc-source">${escapeHtml(item.source)}</td>
+                <td class="col-count">${item.chunk_count ?? '-'}</td>
+                <td class="col-action">
+                    <button class="rag-btn-small rag-btn-danger-small btn-delete-doc" data-source="${escapeHtml(item.source)}">删除</button>
+                </td>
+            </tr>
+        `).join('');
+
+        // 绑定单个 checkbox
+        tbody.querySelectorAll('.doc-checkbox').forEach((cb) => {
+            cb.addEventListener('change', () => {
+                const src = cb.dataset.source;
+                if (cb.checked) state.selectedDocs.add(src);
+                else state.selectedDocs.delete(src);
+                updateBatchDeleteUI();
+            });
+        });
+
+        // 绑定单个删除按钮
+        tbody.querySelectorAll('.btn-delete-doc').forEach((btn) => {
+            btn.addEventListener('click', () => doDeleteSingleDoc(btn.dataset.source));
+        });
+    } catch (e) {
+        status.innerHTML = '';
+        setError(status, e.message);
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--error);padding:24px;">加载失败: ${escapeHtml(e.message)}</td></tr>`;
+    }
+}
+
+function updateBatchDeleteUI() {
+    const count = state.selectedDocs.size;
+    $('batchDeleteCount').textContent = count;
+    $('btnBatchDeleteDocs').disabled = count === 0;
+    // 同步全选 checkbox 状态
+    const allCount = state.allDocs.length;
+    const checked = allCount > 0 && count === allCount;
+    $('checkAllDocs').checked = checked;
+    $('checkAllDocsHeader').checked = checked;
+}
+
+function toggleSelectAll(e) {
+    const checked = e.target.checked;
+    $('checkAllDocs').checked = checked;
+    $('checkAllDocsHeader').checked = checked;
+    if (checked) {
+        state.allDocs.forEach((d) => state.selectedDocs.add(d.source));
+    } else {
+        state.selectedDocs.clear();
+    }
+    // 同步表格中所有 checkbox
+    $('docsTableBody').querySelectorAll('.doc-checkbox').forEach((cb) => {
+        cb.checked = checked;
+    });
+    updateBatchDeleteUI();
+}
+
+async function doDeleteSingleDoc(source) {
+    if (!confirm(`确定要删除文献 "${source}" 吗？`)) return;
+    const status = $('docsListStatus');
+    setLoading(status, '删除中...');
+    try {
+        const res = await apiFetch('/rag/delete-by-source', {
+            method: 'POST',
+            body: JSON.stringify({ source }),
+        });
+        setSuccess(status, res.message);
+        state.selectedDocs.delete(source);
+        loadDocsList();
+        if (state.currentTab === 'overview') loadStats();
+    } catch (e) {
+        setError(status, e.message);
+    }
+}
+
+async function doBatchDelete() {
+    const sources = Array.from(state.selectedDocs);
+    if (!sources.length) return;
+    if (!confirm(`确定要删除选中的 ${sources.length} 篇文献吗？此操作不可恢复。`)) return;
+    const status = $('docsListStatus');
+    setLoading(status, '批量删除中...');
+    try {
+        const res = await apiFetch('/rag/delete-sources', {
+            method: 'POST',
+            body: JSON.stringify({ sources }),
+        });
+        setSuccess(status, res.message);
+        state.selectedDocs.clear();
+        loadDocsList();
+        if (state.currentTab === 'overview') loadStats();
+    } catch (e) {
+        setError(status, e.message);
+    }
+}
+
+async function doAddChunks() {
+    const text = $('addChunksText').value.trim();
+    const prefix = $('addChunksSource').value.trim();
+    const result = $('addChunksResult');
+    if (!text) {
+        setError(result, '请输入要入库的 chunks');
+        return;
+    }
+    const chunks = text.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
+    if (!chunks.length) {
+        setError(result, '没有有效的 chunks');
+        return;
+    }
+    const btn = $('btnAddChunks');
+    btn.disabled = true;
+    setLoading(result, `正在入库 ${chunks.length} 条 chunks...`);
+    try {
+        const sources = prefix ? chunks.map((_, i) => `${prefix}_${i + 1}`) : undefined;
+        const res = await apiFetch('/rag/add-chunks', {
+            method: 'POST',
+            body: JSON.stringify({ chunks, sources }),
+        });
+        setSuccess(result, res.message);
+        $('addChunksText').value = '';
+        $('addChunksSource').value = '';
+        if (state.currentTab === 'overview') loadStats();
+        if (state.currentTab === 'docs') loadDocsList();
+    } catch (e) {
+        setError(result, e.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', init);

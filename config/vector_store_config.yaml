@@ -11,8 +11,19 @@ character_name: agent
 connection_string: "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres"
 
 md5_hex_store: md5.text
-document_directory: data
-allow_type: [".pdf", ".txt", ".md", ".docx", ".pptx"]
+document_directory: datas
+allow_type: [".pdf", ".txt", ".md", ".html", ".docx", ".pptx"]
+
+# ── 扩展名直接映射切分器 ────────────────────────────────────────
+# 可选切分器：recursive, semantic, parent, markdown_header, html_header
+# 未配置的扩展名默认使用 recursive
+extension_splitter_map:
+  ".txt": "recursive"
+  ".md": "markdown_header"
+  ".pdf": "parent"
+  ".html": "html_header"
+  ".docx": "recursive"
+  ".pptx": "recursive"
 
 # 检索配置
 k: 5                     # 向量/BM25 检索返回数量（减小以减少重排序负担）

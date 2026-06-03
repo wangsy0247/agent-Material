@@ -313,6 +313,90 @@
             color: var(--text-primary);
             font-family: monospace;
         }
+        /* 文献列表样式 */
+        .rag-doc-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .rag-doc-table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+        }
+        .rag-doc-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .rag-doc-table th,
+        .rag-doc-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .rag-doc-table th {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .rag-doc-table tr:hover td {
+            background: var(--bg-tertiary);
+        }
+        .rag-doc-table td {
+            color: var(--text-primary);
+        }
+        .rag-doc-table .col-check {
+            width: 40px;
+            text-align: center;
+        }
+        .rag-doc-table .col-num {
+            width: 50px;
+            text-align: center;
+        }
+        .rag-doc-table .col-count {
+            width: 80px;
+            text-align: center;
+        }
+        .rag-doc-table .col-action {
+            width: 70px;
+            text-align: center;
+        }
+        .rag-doc-source {
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .rag-doc-checkbox {
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+        .rag-btn-small {
+            padding: 4px 10px;
+            font-size: 12px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .rag-btn-danger-small {
+            background: var(--error);
+            color: #fff;
+        }
+        .rag-btn-danger-small:hover {
+            background: #ff6b6b;
+        }
+        .rag-btn-secondary-small {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .rag-btn-secondary-small:hover {
+            background: var(--bg-hover);
+        }
     </style>
 </head>
 <body>
@@ -421,6 +505,20 @@
                 </div>
 
                 <div class="rag-card">
+                    <div class="rag-card-title">📦 批量入库已切分 chunks</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        如果文本已经在外部切分好，可直接批量转为向量入库，<strong>不再进行二次切分</strong>。
+                        每行一条 chunk，来源标识可选。
+                    </p>
+                    <textarea class="rag-textarea" id="addChunksText" placeholder="每行一个已切分好的文本片段..."></textarea>
+                    <div class="rag-input-group" style="margin-top:12px;">
+                        <input type="text" class="rag-input" id="addChunksSource" placeholder="来源标识前缀（可选，如 thesis_chapter_1）">
+                        <button class="rag-btn" id="btnAddChunks">批量入库</button>
+                    </div>
+                    <div id="addChunksResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
                     <div class="rag-card-title">🗑️ 按来源删除文档</div>
                     <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
                         根据来源路径删除向量库中的文档片段。来源格式如：<code>data/某论文.pdf</code> 或 <code>manual_note_1</code>
@@ -430,6 +528,38 @@
                         <button class="rag-btn rag-btn-danger" id="btnDeleteSource">删除</button>
                     </div>
                     <div id="deleteResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
+                    <div class="rag-card-title">📚 文献列表</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        展示向量库中已加载的所有文献，支持单篇删除和批量删除。
+                    </p>
+                    <div class="rag-doc-toolbar">
+                        <button class="rag-btn rag-btn-secondary" id="btnRefreshDocs" title="刷新列表">🔄 刷新</button>
+                        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer;">
+                            <input type="checkbox" class="rag-doc-checkbox" id="checkAllDocs">
+                            <span>全选</span>
+                        </label>
+                        <button class="rag-btn rag-btn-danger" id="btnBatchDeleteDocs" disabled>🗑️ 批量删除 (<span id="batchDeleteCount">0</span>)</button>
+                    </div>
+                    <div id="docsListStatus"></div>
+                    <div class="rag-doc-table-wrap">
+                        <table class="rag-doc-table" id="docsTable">
+                            <thead>
+                                <tr>
+                                    <th class="col-check"><input type="checkbox" class="rag-doc-checkbox" id="checkAllDocsHeader"></th>
+                                    <th class="col-num">#</th>
+                                    <th>文献来源</th>
+                                    <th class="col-count">片段数</th>
+                                    <th class="col-action">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="docsTableBody">
+                                <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px;">点击刷新加载文献列表</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </section>
         </main>

@@ -1,0 +1,16 @@
+{
+    "Formula": "C",
+    "MP_ID": "mp-3347313",
+    "Number of Atoms": 4,
+    "Volume (Å³)": 36.66,
+    "Lattice a,b,c (Å)": "4.255, 2.456, 3.695",
+    "Angles α,β,γ (°)": "90.0, 108.353, 90.0",
+    "Crystal System": "Monoclinic",
+    "Space Group": "C2/m",
+    "Density (g/cm³)": 2.176,
+    "Band Gap (eV)": 1.376,
+    "Is Magnetic": false,
+    "Formation Energy (eV/atom)": 0.0,
+    "Energy Above Hull (eV/atom)": 0.0,
+    "Bulk Modulus (GPa)": "未知"
+}
