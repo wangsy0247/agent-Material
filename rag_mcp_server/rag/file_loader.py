@@ -69,41 +69,6 @@ def pdf_text_loader(path: str, password=None) -> list:
         return []
 
 
-def pdf_loader(path: str, password=None) -> list:
-    """加载 PDF，优先使用软件手册清洗器，失败则回退到 PyPDFLoader。"""
-    # 尝试软件手册清洗
-    try:
-        from rag_mcp_server.cleaner.pdf_manual_cleaner import SoftwareManualCleaner
-
-        cleaner = SoftwareManualCleaner()
-        pages = cleaner.extract_pages(path)
-        if pages:
-            cleaned_pages = cleaner.clean(pages)
-            docs = []
-            for page in cleaned_pages:
-                text = page.get("cleaned_text", "")
-                tags = page.get("tags", [])
-                if not text or "toc_page" in tags:
-                    continue
-                docs.append(
-                    Document(
-                        page_content=text,
-                        metadata={
-                            "source": path,
-                            "page": page.get("page_num", 0),
-                        },
-                    )
-                )
-            if docs:
-                logger.info(f"PDF手册清洗成功: {path}，共 {len(docs)} 页")
-                return docs
-    except ImportError:
-        logger.debug(f"pdfplumber 未安装，跳过 PDF 清洗: {path}")
-    except Exception as e:
-        logger.debug(f"PDF软件手册清洗失败，回退到 PyPDFLoader: {path} | {e}")
-
-    # 回退到纯文本提取
-    return pdf_text_loader(path, password)
 
 
 def html_loader(path: str) -> list:
@@ -154,3 +119,35 @@ def pptx_loader(path: str) -> list:
     except Exception as e:
         logger.error(f"PPTX加载失败 {path}: {e}")
         return []
+
+
+def mineru_pdf_loader(path: str) -> list[Document]:
+    """使用 MinerU 加载 PDF → 清洗 Markdown → 返回结构化 Document。
+
+    流程: MinerU API → Markdown → MarkdownCleaner → list[Document]
+    失败时回退到 pdf_text_loader（纯文本提取）。
+    """
+    try:
+        from rag_mcp_server.rag.mineru_loader import mineru_pdf_loader as _mineru_load
+        from rag_mcp_server.cleaner.markdown_cleaner import MarkdownCleaner
+
+        docs = _mineru_load(path)
+        if not docs:
+            logger.warning(f"[MinerU] 解析失败，回退到纯文本提取: {path}")
+            return pdf_text_loader(path)
+
+        cleaner = MarkdownCleaner()
+        cleaned = cleaner.clean(docs)
+        if cleaned:
+            logger.info(f"[MinerU] 加载+清洗成功: {path} | {len(cleaned)} 篇文档")
+            return cleaned
+
+        logger.warning(f"[MinerU] 清洗后为空，回退到纯文本提取: {path}")
+        return pdf_text_loader(path)
+
+    except ImportError as e:
+        logger.warning(f"[MinerU] 依赖未安装，回退到纯文本提取: {e}")
+        return pdf_text_loader(path)
+    except Exception as e:
+        logger.error(f"[MinerU] 加载失败，回退到纯文本提取: {e}")
+        return pdf_text_loader(path)

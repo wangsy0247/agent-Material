@@ -15,9 +15,6 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-from urllib.parse import urlparse
-
 import logging
 from bs4 import BeautifulSoup, NavigableString, Tag
 

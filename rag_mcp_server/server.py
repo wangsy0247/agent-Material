@@ -258,7 +258,6 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
                 "connection_string_masked": _mask_conn_str(
                     vector_store_config.get("connection_string", "")
                 ),
-                "splitter_type": vector_store_config.get("splitter_type", "recursive"),
                 "chunk_size": vector_store_config.get("chunk_size"),
                 "chunk_overlap": vector_store_config.get("chunk_overlap"),
                 "vector_weight": vector_store_config.get("vector_weight", 0.7),

@@ -1,41 +1,27 @@
-"""文档处理管道 — 极简架构：扩展名直接映射切分器。
+"""文档处理管道 — 三阶段流水线。
 
-流程：Loader（按扩展名加载）→ 切分器（按扩展名选择）→ list[Document]
+流程：Loader → Cleaner → Splitter
+
+PDF 处理流程（MinerU）：
+  MinerU API（文本/表格/图片 → Markdown）
+  → MarkdownCleaner（移除噪声、规范化格式）
+  → MarkdownHeader + Recursive + SemanticMerge（标题切分 + 递归字符 + 语义合并）
 
 支持的扩展名：.txt, .md, .pdf, .html, .docx, .pptx
-支持的切分器：recursive, semantic, parent, markdown_header, html_header
+支持的切分器：recursive, semantic, parent, markdown_header, html_header, sentence_boundary
 """
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Callable
 
 from langchain_core.documents import Document
-from langchain_text_splitters import (
-    HTMLHeaderTextSplitter,
-    MarkdownHeaderTextSplitter,
-    RecursiveCharacterTextSplitter,
-)
 
 from rag_mcp_server.config import vector_store_config
 from rag_mcp_server.utils.logger import logger
-
-# ── embedding_model 延迟导入 ─────────────────────────────────────
-_embedding_model = None
-
-
-def _get_embedding_model():
-    global _embedding_model
-    if _embedding_model is None:
-        try:
-            from rag_mcp_server.models import embedding_model
-
-            _embedding_model = embedding_model
-        except Exception as e:
-            logger.warning(f"Embedding 模型加载失败: {e}，语义切分将退化为标准切分")
-            _embedding_model = None
-    return _embedding_model
 
 
 # ════════════════════════════════════════════════════════════════
@@ -57,10 +43,10 @@ class DocumentLoader:
         if cls._LOADERS:
             return
 
-        from rag_mcp_server.utils.file_loader import (
+        from rag_mcp_server.rag.file_loader import (
             txt_loader,
             md_loader,
-            pdf_loader,
+            mineru_pdf_loader,
             html_loader,
             docx_loader,
             pptx_loader,
@@ -69,7 +55,7 @@ class DocumentLoader:
         cls._LOADERS = {
             ".txt": txt_loader,
             ".md": md_loader,
-            ".pdf": pdf_loader,
+            ".pdf": mineru_pdf_loader,
             ".html": html_loader,
             ".docx": docx_loader,
             ".pptx": pptx_loader,
@@ -91,189 +77,27 @@ class DocumentLoader:
 
 
 # ════════════════════════════════════════════════════════════════
-# 阶段 2：切分器集合
+#  切分器配置工具
 # ════════════════════════════════════════════════════════════════
 
-
-class BaseSplitter:
-    """切分器抽象基类，统一接口 ``split_documents(docs) -> list[Document]``。"""
-
-    def split_documents(self, documents: list[Document]) -> list[Document]:
-        raise NotImplementedError
-
-
-class RecursiveSplitter(BaseSplitter):
-    """递归字符切分器 — 通用、安全、不依赖 embedding。"""
-
-    def __init__(self):
-        self._splitter = RecursiveCharacterTextSplitter(
-            chunk_size=vector_store_config.get("chunk_size", 800),
-            chunk_overlap=vector_store_config.get("chunk_overlap", 100),
-            separators=vector_store_config.get(
-                "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
-            ),
-            length_function=len,
-        )
-
-    def split_documents(self, documents: list[Document]) -> list[Document]:
-        return self._splitter.split_documents(documents)
-
-
-class SemanticSplitter(BaseSplitter):
-    """语义切分器 — 优先 LangChain SemanticChunker，缺失则回退 SemanticTextSplitter。"""
-
-    def __init__(self):
-        self._fallback = RecursiveSplitter()
-
-    def split_documents(self, documents: list[Document]) -> list[Document]:
-        try:
-            from langchain_experimental.text_splitter import SemanticChunker
-
-            splitter = SemanticChunker(
-                embeddings=_get_embedding_model(),
-                breakpoint_threshold_type="percentile",
-                breakpoint_threshold_amount=90,
-                min_chunk_size=100,
-            )
-            result = splitter.split_documents(documents)
-            logger.info(f"[Splitter] SemanticChunker 切分完成 | {len(result)} chunks")
-            return result
-        except ImportError:
-            logger.warning(
-                "langchain_experimental 未安装，回退到 SemanticTextSplitter。"
-                "安装命令: pip install langchain-experimental"
-            )
-            return self._fallback_semantic(documents)
-        except Exception as e:
-            logger.error(f"SemanticChunker 失败: {e}，回退到 SemanticTextSplitter")
-            return self._fallback_semantic(documents)
-
-    def _fallback_semantic(self, documents: list[Document]) -> list[Document]:
-        try:
-            from rag_mcp_server.rag.text_spliter import SemanticTextSplitter
-
-            splitter = SemanticTextSplitter(
-                chunk_size=vector_store_config.get("chunk_size", 800),
-                chunk_overlap=vector_store_config.get("chunk_overlap", 100),
-                separator=vector_store_config.get("separator"),
-                embedding_model=_get_embedding_model(),
-                similarity_threshold=vector_store_config.get("similarity_threshold", 0.75),
-            )
-            result = splitter.split_documents(documents)
-            logger.info(f"[Splitter] SemanticTextSplitter 切分完成 | {len(result)} chunks")
-            return result
-        except Exception as e:
-            logger.error(f"SemanticTextSplitter 也失败: {e}，最终回退到 RecursiveSplitter")
-            return self._fallback.split_documents(documents)
-
-
-class ParentDocumentSplitter(BaseSplitter):
-    """父子文档切分器（ParentDocumentRetriever 兼容实现）。
-
-    先用大 chunk_size 切出"父文档"，再用小 chunk_size 切出"子文档"，
-    子文档 metadata 保留 ``parent_doc`` / ``parent_id`` 引用。
-    """
-
-    def __init__(
-        self,
-        parent_chunk_size: int = 2000,
-        child_chunk_size: int = 400,
-    ):
-        self.parent_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=parent_chunk_size,
-            chunk_overlap=200,
-            separators=vector_store_config.get(
-                "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
-            ),
-            length_function=len,
-        )
-        self.child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=child_chunk_size,
-            chunk_overlap=50,
-            separators=vector_store_config.get(
-                "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
-            ),
-            length_function=len,
-        )
-
-    def split_documents(self, documents: list[Document]) -> list[Document]:
-        result: list[Document] = []
-        for doc in documents:
-            parents = self.parent_splitter.split_documents([doc])
-            for parent in parents:
-                children = self.child_splitter.split_documents([parent])
-                parent_id = str(hash(parent.page_content) & 0xFFFFFFFF)
-                for child in children:
-                    child.metadata["parent_doc"] = parent.page_content
-                    child.metadata["parent_id"] = parent_id
-                    result.append(child)
-        logger.info(f"[Splitter] ParentDocumentSplitter 切分完成 | {len(result)} chunks")
-        return result
-
-
-class MarkdownHeaderSplitter(BaseSplitter):
-    """Markdown 标题切分器 — 按 #/##/###/#### 切分，大 chunk 二次细切分。"""
-
-    def __init__(self):
-        self._md = MarkdownHeaderTextSplitter(
-            headers_to_split_on=[
-                ("#", "Header 1"),
-                ("##", "Header 2"),
-                ("###", "Header 3"),
-                ("####", "Header 4"),
-            ],
-            strip_headers=False,
-        )
-        self._fallback = RecursiveSplitter()
-
-    def split_documents(self, documents: list[Document]) -> list[Document]:
-        result: list[Document] = []
-        for doc in documents:
-            chunks = self._md.split_text(doc.page_content)
-            if not chunks:
-                chunks = [doc]
-            for chunk in chunks:
-                sub_docs = self._fallback.split_documents([chunk])
-                for sub in sub_docs:
-                    sub.metadata = {**doc.metadata, **sub.metadata}
-                    result.append(sub)
-        logger.info(f"[Splitter] MarkdownHeaderSplitter 切分完成 | {len(result)} chunks")
-        return result
-
-
-class HTMLHeaderSplitter(BaseSplitter):
-    """HTML 标题切分器 — 按 h1/h2/h3 标签切分，大 chunk 二次细切分。"""
-
-    def __init__(self):
-        self._html = HTMLHeaderTextSplitter(
-            headers_to_split_on=[
-                ("h1", "Header 1"),
-                ("h2", "Header 2"),
-                ("h3", "Header 3"),
-                ("h4", "Header 4"),
-            ],
-        )
-        self._fallback = RecursiveSplitter()
-
-    def split_documents(self, documents: list[Document]) -> list[Document]:
-        result: list[Document] = []
-        for doc in documents:
-            chunks = self._html.split_text(doc.page_content)
-            if not chunks:
-                chunks = [doc]
-            for chunk in chunks:
-                sub_docs = self._fallback.split_documents([chunk])
-                for sub in sub_docs:
-                    sub.metadata = {**doc.metadata, **sub.metadata}
-                    result.append(sub)
-        logger.info(f"[Splitter] HTMLHeaderSplitter 切分完成 | {len(result)} chunks")
-        return result
-
+from rag_mcp_server.rag.text_spliter import (
+    BaseSplitter,
+    RecursiveSplitter,
+    SemanticSplitter,
+    ParentDocumentSplitter,
+    MarkdownHeaderSplitter,
+    HTMLHeaderSplitter,
+    SemanticMergeOnly,
+    SentenceBoundarySplitter,
+    HybridSplitter,
+)
 
 # 切分器工厂（供 Pipeline 和外部使用）
 SPLITTER_FACTORY: dict[str, Callable[[], BaseSplitter]] = {
     "recursive": RecursiveSplitter,
+    "sentence_boundary": SentenceBoundarySplitter,
     "semantic": SemanticSplitter,
+    "semantic_merge": SemanticMergeOnly,
     "parent": ParentDocumentSplitter,
     "markdown_header": MarkdownHeaderSplitter,
     "html_header": HTMLHeaderSplitter,
@@ -281,60 +105,136 @@ SPLITTER_FACTORY: dict[str, Callable[[], BaseSplitter]] = {
 
 
 # ════════════════════════════════════════════════════════════════
-# ProcessingPipeline — 扩展名直接映射切分器
+# ProcessingPipeline — 混合切分流水线
 # ════════════════════════════════════════════════════════════════
 
 
 class ProcessingPipeline:
-    """完整处理管道：Loader（按扩展名）→ 切分器（按扩展名）。"""
+    """完整处理管道：Loader → Cleaner → Splitter → Metadata 增强。
+
+    PDF 处理（MinerU）：
+      MinerU 提取 Markdown（文本+表格+图片）
+      → MarkdownCleaner（去除噪声、规范化格式）
+      → markdown_header + recursive + semantic_merge
+      → MetadataEnhancer
+
+    切分策略从 config 的 extension_pipeline 读取，按扩展名映射多步切分步骤。
+    """
+
+    # 需要执行 Markdown 清洗的扩展名（MinerU / Markdown 来源）
+    _MD_CLEAN_EXTS: set[str] = {".pdf", ".md"}
 
     def __init__(self):
         self.loader = DocumentLoader()
-        self._ext_map: dict[str, str] = vector_store_config.get(
-            "extension_splitter_map", {}
+        self._ext_pipeline: dict[str, list[str]] = vector_store_config.get(
+            "extension_pipeline", {}
         )
+        self._md_cleaner = None  # 延迟初始化
+
+    def _get_cleaner(self):
+        """延迟初始化 MarkdownCleaner。"""
+        if self._md_cleaner is None:
+            from rag_mcp_server.cleaner.markdown_cleaner import MarkdownCleaner
+            self._md_cleaner = MarkdownCleaner()
+        return self._md_cleaner
 
     def _get_splitter(self, file_path: str) -> BaseSplitter:
-        """根据扩展名获取切分器实例，未配置则默认 recursive。"""
+        """根据扩展名获取切分器实例（单步或多步混合）。"""
         ext = os.path.splitext(file_path)[1].lower()
-        splitter_name = self._ext_map.get(ext, "recursive")
-        factory = SPLITTER_FACTORY.get(splitter_name)
-        if factory is None:
-            logger.warning(f"未知切分器: {splitter_name}，回退到 recursive")
-            factory = RecursiveSplitter
-        return factory()
+        steps = self._ext_pipeline.get(ext, ["recursive"])
+        return HybridSplitter(steps)
 
-    def  process(self, file_path: str) -> list[Document]:
+    def  process(
+        self, file_path: str, enhance_metadata: bool = True,
+        save_pre_split_dir: str = "",
+    ) -> list[Document]:
         """处理单个文件。
 
+        四阶段流水线：
+        1. 加载（MinerU → Markdown / 传统 Loader）
+        2. 数据清洗（MarkdownCleaner，仅 .pdf / .md）
+        3. 切分（按 extension_pipeline 配置的步骤链）
+        4. Metadata 增强（语言、类型、溯源等）
+
+        Args:
+            file_path: 文件路径
+            enhance_metadata: 是否增强元数据
+            save_pre_split_dir: 非空时，将切分前的 Document 保存到此目录（JSONL 格式）
+
         Returns:
-            切分后的 Document 列表（标准字段：page_content, metadata）
+            切分后的 Document 列表
         """
-        # 阶段 1：加载 + 清洗
+        # 阶段 1：加载（MinerU 已内建清洗）
         docs = self.loader.load(file_path)
         if not docs:
             logger.warning(f"文件加载为空: {file_path}")
             return []
 
-        # 阶段 2：按扩展名选择切分器并切分
+        # 阶段 2：数据清洗 & 格式恢复（Markdown 来源的二次清洗）
+        docs = self._clean_documents(docs, file_path)
+
+        # 可选：保存切分前的内容（调试/检查用）
+        if save_pre_split_dir:
+            self._save_pre_split(docs, file_path, save_pre_split_dir)
+
+        # 阶段 3：按扩展名选择切分器并切分
         splitter = self._get_splitter(file_path)
         chunks = splitter.split_documents(docs)
+
+        # 阶段 4：metadata 增强
+        if enhance_metadata:
+            chunks = self._enhance_metadata(chunks)
 
         logger.info(
             f"[Pipeline] {file_path} → {splitter.__class__.__name__} | 产出 {len(chunks)} chunks"
         )
         return chunks
 
-    def process_batch(self, file_paths: list[str]) -> list[Document]:
-        """批量处理多个文件（串行，如需并发请在外层用 ThreadPoolExecutor）。"""
-        all_chunks: list[Document] = []
-        for fp in file_paths:
-            try:
-                chunks = self.process(fp)
-                all_chunks.extend(chunks)
-            except Exception as e:
-                logger.error(f"文件处理失败: {fp} | {e}")
-        return all_chunks
+    def _clean_documents(
+        self, docs: list[Document], file_path: str,
+    ) -> list[Document]:
+        """对 Markdown 来源的文档执行二次清洗。
+
+        仅在 loader 未内建 Markdown 清洗时生效。
+        MarkdownCleaner 是幂等的，重复清洗无害。
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in self._MD_CLEAN_EXTS:
+            return docs
+        try:
+            cleaner = self._get_cleaner()
+            return cleaner.clean(docs)
+        except Exception as e:
+            logger.warning(f"[Pipeline] Markdown 清洗失败，跳过: {e}")
+            return docs
+
+    @staticmethod
+    def _save_pre_split(docs: list[Document], file_path: str, output_dir: str) -> None:
+        """将切分前的 Document 列表保存为 JSONL 文件。"""
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        filename = Path(file_path).stem + "_pre_split.jsonl"
+        filepath = out / filename
+        with open(filepath, "w", encoding="utf-8") as f:
+            for doc in docs:
+                f.write(json.dumps({
+                    "content": doc.page_content,
+                    "metadata": doc.metadata,
+                }, ensure_ascii=False) + "\n")
+        logger.info(
+            f"[Pipeline] 切分前内容已保存: {filepath} "
+            f"({len(docs)} docs, {sum(len(d.page_content) for d in docs)} chars)"
+        )
+
+    @staticmethod
+    def _enhance_metadata(chunks: list[Document]) -> list[Document]:
+        try:
+            from rag_mcp_server.rag.metadata_enhancer import MetadataEnhancer
+            enhancer = MetadataEnhancer()
+            return enhancer.enhance(chunks)
+        except Exception as e:
+            logger.warning(f"Metadata 增强失败，跳过: {e}")
+            return chunks
 
 
 # ════════════════════════════════════════════════════════════════

@@ -1,1 +1,0 @@
-{"event": "ingestion", "timestamp": "2026-05-30T15:25:29.136136", "total_chunks": 55, "avg_chunk_length": 1623.8909090909092, "median_chunk_length": 1296, "min_chunk_length": 65, "max_chunk_length": 8377, "auto_flag_count": 36}

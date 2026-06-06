@@ -16,10 +16,9 @@ from pydantic import ConfigDict
 from rag_mcp_server.config import vector_store_config
 from rag_mcp_server.models import embedding_model
 from rag_mcp_server.utils.logger import logger
-from rag_mcp_server.utils.file_loader import (
+from rag_mcp_server.rag.file_loader import (
     txt_loader,
     md_loader,
-    pdf_loader,
     html_loader,
     docx_loader,
     pptx_loader,
@@ -398,16 +397,14 @@ class VectorStore:
     def add_documents(self, documents: list[Document]):
         """手动添加文档（供外部调用），添加后自动重建检索器。
 
-        根据 Document metadata 中的 source 路径扩展名选择切分器，
-        未匹配则回退到 recursive。
+        优先使用 extension_pipeline 混合切分，否则回退 extension_splitter_map。
         """
         if not documents:
             return
 
-        from rag_mcp_server.rag.document_pipeline import DocumentSplitter, RecursiveSplitter
+        from rag_mcp_server.rag.text_spliter import RecursiveSplitter, HybridSplitter
 
-        splitter = DocumentSplitter()
-        ext_map: dict[str, str] = vector_store_config.get("extension_splitter_map", {})
+        ext_pipeline: dict[str, list[str]] = vector_store_config.get("extension_pipeline", {})
 
         # 按扩展名分组
         docs_by_ext: dict[str, list[Document]] = {}
@@ -418,19 +415,28 @@ class VectorStore:
 
         all_splits: list[Document] = []
         for ext, docs in docs_by_ext.items():
-            splitter_name = ext_map.get(ext, "recursive")
+            steps = ext_pipeline.get(ext, ["recursive"])
             try:
-                splits = splitter.split(docs, splitter_name)
+                splitter = HybridSplitter(steps)
+                splits = splitter.split_documents(docs)
                 all_splits.extend(splits)
-                logger.info(f"手动添加文档: {ext} → {splitter_name} | 产出 {len(splits)} chunks")
+                logger.info(f"手动添加文档: {ext} → {steps} | 产出 {len(splits)} chunks")
             except Exception as e:
-                logger.error(f"手动添加文档切分失败 ({ext} → {splitter_name}): {e}")
+                logger.error(f"手动添加文档切分失败 ({ext}): {e}")
                 fallback = RecursiveSplitter()
                 splits = fallback.split_documents(docs)
                 all_splits.extend(splits)
 
         if not all_splits:
             return
+
+        # metadata 增强（补充语言/类型/长度等统计信息）
+        try:
+            from rag_mcp_server.rag.metadata_enhancer import MetadataEnhancer
+            enhancer = MetadataEnhancer()
+            all_splits = enhancer.enhance(all_splits)
+        except Exception as e:
+            logger.warning(f"Metadata 增强失败，跳过: {e}")
 
         self.vector_store.add_documents(all_splits)
         self.all_documents.extend(all_splits)
@@ -482,15 +488,6 @@ class VectorStore:
             )
         except Exception as e:
             logger.error(f"删除文档失败: {e}")
-
-    def _split_html_documents(self, documents: list[Document]) -> list[Document]:
-        """对 HTML 清洗后的 Markdown 文本使用标题结构切分（兼容层）。
-
-        直接复用文档管道中的 MarkdownHeaderSplitter 逻辑。
-        """
-        from rag_mcp_server.rag.document_pipeline import MarkdownHeaderSplitter
-        splitter = MarkdownHeaderSplitter()
-        return splitter.split_documents(documents)
 
     # ------------------------------------------------------------------ #
     #  MD5 辅助方法（供 load_document 和并发处理使用）
