@@ -38,6 +38,9 @@ class ChatModelFactory(BaseModelFactory):
             model_name=agent_config["chat_model_name"],
             max_tokens=agent_config["max_tokens"],
             streaming=True,
+            model_kwargs={
+                "extra_body": {"enable_thinking": True}
+            }
         )
 
 

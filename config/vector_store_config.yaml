@@ -15,40 +15,55 @@ splitters:
     similarity_threshold: 0.75
     min_chunk_size: 100
   semantic_merge:
-    similarity_threshold: 0.9 
+    similarity_threshold: 0.9
   parent:
     parent_chunk_size: 2000      # 父文档大小
     child_chunk_size: 400        # 子文档大小
 
+embedding_model_name: text-embedding-v4
 character_name: agent
 # PostgreSQL + pgvector 连接字符串
 connection_string: "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres"
 
-md5_hex_store: md5.text
-document_directory: datas
-allow_type: [".pdf", ".txt", ".md", ".html", ".docx", ".pptx"]
+document_directory: data
+# allow_type: [".pdf", ".txt", ".md", ".html", ".docx", ".pptx"]
+allow_type: [".pdf"]
 
 # ── 扩展名 → 切分流水线 ────────────────────────────────────────
-# 每个扩展名对应一个步骤列表，按顺序链式执行。单项即单步。
+# parent 步骤：在末尾增加父子文档切分（用于多粒度索引）
 extension_pipeline:
-  ".md":    [markdown_header, sentence_boundary, semantic_merge]
-  ".pdf":   [markdown_header, sentence_boundary, semantic_merge]
-  ".html":  [html_header, sentence_boundary, semantic_merge]
-  ".txt":   [recursive]
-  ".docx":  [recursive]
-  ".pptx":  [recursive]
+  ".md":    [markdown_header, sentence_boundary, semantic_merge, parent]
+  ".pdf":   [markdown_header, sentence_boundary, semantic_merge, parent]
+  ".html":  [html_header, sentence_boundary, semantic_merge, parent]
+  ".txt":   [recursive, parent]
+  ".docx":  [recursive, parent]
+  ".pptx":  [recursive, parent]
 
 splitter_type: "semantic"       # 手动添加文档时的默认切分器
 
 # 检索配置
-k: 5                     # 向量/BM25 检索返回数量（减小以减少重排序负担）
-score_threshold: 0.3     # 向量相似度阈值（提高以过滤低质量文档）
+k: 5                     # 向量/BM25 检索返回数量
+score_threshold: 0.3     # 向量相似度阈值
 top_n: 3                 # 重排序后返回数量
-max_rerank_docs: 8       # 进入重排序器的最大文档数（截断保护）
+max_rerank_docs: 8       # 进入重排序器的最大文档数
 
 # 重排序开关（CPU 上 0.6B 模型推理很慢，如无 GPU 建议关闭）
 enable_reranker: true
-reranker_batch_size: 8   # CrossEncoder batch size（越大 CPU/GPU 利用率越高）
-reranker_model: "/mnt/d/models/Qwen3-Reranker-0.6B"  # 重排序模型（本地路径）
+reranker_batch_size: 8   # CrossEncoder batch size
+reranker_model: "/mnt/d/models/Qwen3-Reranker-0.6B"
 bm25_weight: 0.5         # BM25 检索权重
 vector_weight: 0.5       # 向量检索权重
+
+# ── 多粒度索引 ──────────────────────────────────────────────────
+multi_granularity:
+  enabled: true                    # 启用多粒度索引
+  small_collection_suffix: "_small" # 子chunk collection 后缀
+  large_collection_suffix: "_large" # 父chunk collection 后缀
+
+# ── 异步 Embedding 配置 ──────────────────────────────────────────
+async_embedding:
+  enabled: true
+  batch_size: 10          # 每批次文本数（DashScope限制≤10）
+  max_concurrency: 4      # 最大并发 API 请求数
+  rate_limit: 500        # 每秒最大请求数
+  retry_on_failure: 3     # 失败重试次数

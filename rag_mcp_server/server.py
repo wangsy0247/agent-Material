@@ -6,17 +6,20 @@ RAG MCP Server（完全独立）
 不再通过 sys.path 注入依赖主项目的 agent_material 包。
 
 提供的 Tools:
-    rag_search          — 向量检索，返回相关文档片段
-    rag_query           — RAG 问答（检索 + LLM 生成）
-    rag_load_documents  — 扫描 data/ 目录并加载新文档
-    rag_add_documents   — 手动添加文本到向量库
-    rag_delete_by_source — 按来源路径删除文档
-    rag_get_stats       — 获取向量库统计信息
+    rag_search            — 向量检索，返回相关文档片段
+    rag_query             — RAG 问答（检索 + LLM 生成）
+    rag_load_documents    — 扫描 data/ 目录，增量入队处理
+    rag_add_documents     — 手动添加文本到向量库
+    rag_delete_by_source  — 按来源路径删除文档
+    rag_get_stats         — 获取向量库统计信息
+    rag_get_task_status   — 查询队列任务状态
+    rag_get_pending_tasks — 查询队列中待处理任务数
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -28,6 +31,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 延迟导入 RAG 模块（避免在模块顶层触发重量级初始化）
 _VectorStore = None
 _RagService = None
+_TaskQueue = None
 
 
 def _get_vector_store():
@@ -44,6 +48,16 @@ def _get_rag_service():
         from rag_mcp_server.rag.rag_service import RagService
         _RagService = RagService()
     return _RagService
+
+
+def _get_task_queue():
+    global _TaskQueue
+    if _TaskQueue is None:
+        from rag_mcp_server.db.task_queue import TaskQueue
+        from rag_mcp_server.config import queue_config
+        db_path = queue_config.get("queue", {}).get("db_path", "rag_queue.db")
+        _TaskQueue = TaskQueue(db_path=db_path)
+    return _TaskQueue
 
 
 logging.basicConfig(level=logging.INFO)
@@ -79,6 +93,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         instructions=(
             "Abacus和lammps软件使用的 RAG（检索增强生成）服务。基于 PGVector + BM25 + CrossEncoder "
             "构建的混合检索系统，支持向量检索、文档加载、增量更新和智能问答。"
+            "支持多粒度索引（子chunk检索 + 父chunk上下文）和后台任务队列。"
         ),
         host=host,
         port=port,
@@ -92,11 +107,12 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         description=(
             "根据查询内容从向量数据库中检索最相关的文档片段。"
             "使用混合检索（向量相似度 + BM25 关键词 + CrossEncoder 重排序）。"
+            "多粒度模式下返回父chunk以提供更丰富的上下文。"
             "返回文档片段的文本内容、来源文件和元数据。"
         ),
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=True),
     )
-    def rag_search(query: str) -> str:
+    async def rag_search(query: str) -> str:
         """检索与查询相关的文档片段。
 
         Args:
@@ -105,7 +121,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         logger.info(f"[rag_search] query={query}")
         try:
             service = _get_rag_service()
-            docs = service.retriever_docx(query)
+            docs = await asyncio.to_thread(service.retriever_docx, query)
             if not docs:
                 return json.dumps({"results": [], "message": "未检索到相关文档"}, ensure_ascii=False)
             return json.dumps(
@@ -128,7 +144,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         ),
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=False),
     )
-    def rag_query(query: str) -> str:
+    async def rag_query(query: str) -> str:
         """RAG 问答：检索相关文档并生成回答。
 
         Args:
@@ -137,33 +153,41 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         logger.info(f"[rag_query] query={query}")
         try:
             service = _get_rag_service()
-            answer = service.get_summary(query)
+            answer = await asyncio.to_thread(service.get_summary, query)
             return answer
         except Exception as e:
             logger.error(f"[rag_query] 失败: {e}\n{traceback.format_exc()}")
             return f"RAG 问答失败: {e}"
 
     # ================================================================
-    # Tool: rag_load_documents — 批量加载文档
+    # Tool: rag_load_documents — 增量扫描入队（非阻塞）
     # ================================================================
     @mcp.tool(
         name="rag_load_documents",
         description=(
-            "扫描配置的 data/ 目录，自动识别新增或修改的文档（PDF/TXT/MD/DOCX/PPTX），"
-            "进行文本切分并写入 PGVector 向量库。基于 MD5 去重，已加载过的文件自动跳过。"
+            "扫描配置的 data/ 目录，自动识别新增/修改/删除的文档，"
+            "将处理任务加入后台队列异步执行。基于 SQLite 文件追踪实现增量更新，"
+            "只有变化的文件会被重新处理。任务在后台 Worker 中执行，此工具非阻塞返回。"
         ),
         annotations=ToolAnnotations(destructiveHint=True, openWorldHint=False, idempotentHint=False),
     )
-    def rag_load_documents() -> str:
-        """扫描并加载 data/ 目录下的文档到向量库。"""
-        logger.info("[rag_load_documents] 开始加载文档")
+    async def rag_load_documents() -> str:
+        """扫描并加载 data/ 目录下的文档到向量库（非阻塞入队）。"""
+        logger.info("[rag_load_documents] 开始扫描文档目录")
         try:
             store = _get_vector_store()
             before = store.get_document_count()
-            store.load_document()
+            await asyncio.to_thread(store.load_document)
             after = store.get_document_count()
-            loaded = after - before
-            msg = f"文档加载完成 | 加载前: {before} 条 | 加载后: {after} 条 | 新增: {loaded} 条"
+
+            queue = _get_task_queue()
+            summary = queue.get_summary()
+
+            msg = (
+                f"文档扫描完成 | 扫描前: {before} 条 | 当前: {after} 条\n"
+                f"队列状态: 待处理 {summary['pending']} | 处理中 {summary['processing']} | "
+                f"已完成 {summary['completed']} | 失败 {summary['failed']}"
+            )
             logger.info(f"[rag_load_documents] {msg}")
             return msg
         except Exception as e:
@@ -181,7 +205,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         ),
         annotations=ToolAnnotations(destructiveHint=True, openWorldHint=False, idempotentHint=False),
     )
-    def rag_add_documents(
+    async def rag_add_documents(
         documents: list[str],
         sources: list[str] | None = None,
     ) -> str:
@@ -205,7 +229,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
                 for text, src in zip(documents, sources)
             ]
             store = _get_vector_store()
-            store.add_documents(docs)
+            await asyncio.to_thread(store.add_documents, docs)
             return f"成功添加 {len(docs)} 条文档到向量库"
         except Exception as e:
             logger.error(f"[rag_add_documents] 失败: {e}\n{traceback.format_exc()}")
@@ -222,7 +246,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         ),
         annotations=ToolAnnotations(destructiveHint=True, openWorldHint=False, idempotentHint=False),
     )
-    def rag_delete_by_source(source: str) -> str:
+    async def rag_delete_by_source(source: str) -> str:
         """按来源路径删除文档。
 
         Args:
@@ -231,8 +255,8 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         logger.info(f"[rag_delete_by_source] source={source}")
         try:
             store = _get_vector_store()
-            store.delete_documents_by_source(source)
-            return f"已触发删除来源为 '{source}' 的文档"
+            await asyncio.to_thread(store.delete_documents_by_source, source)
+            return f"已删除来源为 '{source}' 的文档"
         except Exception as e:
             logger.error(f"[rag_delete_by_source] 失败: {e}\n{traceback.format_exc()}")
             return f"删除文档失败: {e}"
@@ -245,7 +269,7 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         description="获取 RAG 向量库的当前统计信息，包括文档总数、配置参数等。",
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=True),
     )
-    def rag_get_stats() -> str:
+    async def rag_get_stats() -> str:
         """获取向量库统计信息。"""
         logger.info("[rag_get_stats]")
         try:
@@ -265,10 +289,55 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
                 "enable_reranker": vector_store_config.get("enable_reranker", True),
                 "top_n": vector_store_config.get("top_n", 3),
                 "score_threshold": vector_store_config.get("score_threshold", 0.3),
+                "multi_granularity": vector_store_config.get("multi_granularity", {}).get("enabled", False),
             }
             return json.dumps(stats, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"[rag_get_stats] 失败: {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    # ================================================================
+    # Tool: rag_get_task_status — 查询任务状态
+    # ================================================================
+    @mcp.tool(
+        name="rag_get_task_status",
+        description="根据任务 ID 查询后台处理任务的状态。",
+        annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=True),
+    )
+    async def rag_get_task_status(task_id: int) -> str:
+        """查询任务状态。
+
+        Args:
+            task_id: 任务 ID
+        """
+        logger.info(f"[rag_get_task_status] task_id={task_id}")
+        try:
+            queue = _get_task_queue()
+            status = queue.get_status(task_id)
+            if status is None:
+                return json.dumps({"error": f"任务 {task_id} 不存在"}, ensure_ascii=False)
+            return json.dumps(status, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[rag_get_task_status] 失败: {e}")
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+    # ================================================================
+    # Tool: rag_get_pending_tasks — 查询待处理任务
+    # ================================================================
+    @mcp.tool(
+        name="rag_get_pending_tasks",
+        description="获取任务队列的当前状态汇总（各状态任务数量）。",
+        annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=True),
+    )
+    async def rag_get_pending_tasks() -> str:
+        """获取队列状态汇总。"""
+        logger.info("[rag_get_pending_tasks]")
+        try:
+            queue = _get_task_queue()
+            summary = queue.get_summary()
+            return json.dumps(summary, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[rag_get_pending_tasks] 失败: {e}")
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 
     return mcp
@@ -305,8 +374,6 @@ def main():
     args = parser.parse_args()
 
     server = create_server(host=args.host, port=args.port)
-
-    import asyncio
 
     tool_list = asyncio.run(server.list_tools())
     tool_names = [t.name for t in tool_list]

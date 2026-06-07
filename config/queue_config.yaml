@@ -1,0 +1,7 @@
+# ── 任务队列配置 ──────────────────────────────────────────
+queue:
+  db_path: "rag_queue.db"           # SQLite 数据库路径（相对于项目根目录）
+  poll_interval: 2.0                # Worker 轮询间隔（秒）
+  max_retries: 3                    # 每任务最大重试次数
+  retry_delay_base: 2.0             # 指数退避基数（秒）
+  cleanup_days: 7                   # 自动清理旧任务记录（天）

@@ -20,6 +20,7 @@ def _load_yaml(path: str) -> dict:
 vector_store_config: dict = _load_yaml("config/vector_store_config.yaml")
 agent_config: dict = _load_yaml("config/agent_config.yaml")
 prompt_config: dict = _load_yaml("config/prompts_config.yaml")
+queue_config: dict = _load_yaml("config/queue_config.yaml")
 
 # ---- 环境变量覆盖 / 校验 ----
 if not os.environ.get("DASHSCOPE_API_KEY"):

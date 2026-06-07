@@ -22,18 +22,9 @@ from rag_mcp_server.rag.file_loader import (
     html_loader,
     docx_loader,
     pptx_loader,
-    filelist_with_allow_type,
-    get_file_md5_hex,
 )
 
-# 延迟导入 PGVector，若未安装 pgvector 包则给出友好提示
-try:
-    from langchain_postgres.vectorstores import PGVector
-except ImportError as _e:  # pragma: no cover
-    raise ImportError(
-        "PGVector 依赖未安装。请运行：pip install pgvector\n"
-        "（需要网络连接，或从离线 whl 安装）"
-    ) from _e
+from langchain_postgres.vectorstores import PGVector
 
 
 class VectorSimilarityThresholdRetriever(BaseRetriever):
@@ -173,6 +164,17 @@ class VectorStore:
         self._hybrid_retriever = None
         self._compression_retriever = None
         self._retrievers_initialized = False
+
+        # ── 多粒度索引 ──
+        mg_config = vector_store_config.get("multi_granularity", {})
+        self._multi_gran_enabled = mg_config.get("enabled", False)
+        self._multi_index = None
+        self._multi_retriever = None
+
+        # ── 文件追踪 & 任务队列（懒加载）──
+        self._file_tracker = None
+        self._task_queue = None
+        self._worker = None
 
     @property
     def vector_store(self) -> PGVector:
@@ -316,11 +318,72 @@ class VectorStore:
             self._compression_retriever = None
 
     def get_retriever(self):
-        """返回检索器（首次调用时初始化，避免模块导入时触发 segfault）"""
+        """返回检索器（首次调用时初始化，避免模块导入时触发 segfault）。
+
+        当多粒度索引启用时，返回 MultiGranularityRetriever。
+        """
+        if self._multi_gran_enabled:
+            if self._multi_retriever is None:
+                self._init_multi_retriever()
+            return self._multi_retriever
+
         if not self._retrievers_initialized:
             self._init_retrievers()
             self._retrievers_initialized = True
         return self._compression_retriever or self._hybrid_retriever
+
+    def _init_multi_retriever(self):
+        """初始化多粒度检索器。"""
+        from rag_mcp_server.indexing.multi_granularity import MultiGranularityIndex
+        from rag_mcp_server.indexing.multi_gran_retriever import MultiGranularityRetriever
+
+        mi = self._get_multi_index()
+        mi.small_store  # 触发 PGVector 初始化
+        mi.large_store  # 触发 PGVector 初始化
+
+        # 加载小chunk文档用于 BM25
+        small_docs = self._load_documents_from_collection(mi.small_name)
+
+        self._multi_retriever = MultiGranularityRetriever(
+            small_store=mi.small_store,
+            large_store=mi.large_store,
+            all_documents=small_docs,
+        )
+        self.all_documents = small_docs  # 保持兼容
+        logger.info("[VectorStore] 多粒度检索器初始化完成")
+
+    def _get_multi_index(self):
+        if self._multi_index is None:
+            from rag_mcp_server.indexing.multi_granularity import MultiGranularityIndex
+            self._multi_index = MultiGranularityIndex(enabled=self._multi_gran_enabled)
+        return self._multi_index
+
+    def _load_documents_from_collection(self, collection_name: str) -> list[Document]:
+        """从指定 PGVector collection 加载所有文档到内存。"""
+        import psycopg
+        conn_str = vector_store_config.get("connection_string")
+        if not conn_str:
+            return []
+        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
+        docs = []
+        try:
+            conn = psycopg.connect(psycopg_conn_str)
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT e.document, e.cmetadata
+                   FROM langchain_pg_embedding e
+                   JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                   WHERE c.name = %s""",
+                (collection_name,),
+            )
+            for content, meta in cur.fetchall():
+                docs.append(Document(page_content=content, metadata=meta or {}))
+            cur.close()
+            conn.close()
+            logger.info(f"从 {collection_name} 加载了 {len(docs)} 条文档")
+        except Exception as e:
+            logger.warning(f"加载 {collection_name} 文档失败: {e}")
+        return docs
 
     def _process_single_file(self, file_path: str) -> list[Document]:
         """处理单个文件：两阶段管道（Loader → Dispatcher → Splitter）。
@@ -335,64 +398,77 @@ class VectorStore:
         return self._pipeline.process(file_path)
 
     def load_document(self):
-        """加载文档到向量数据库（并发处理 + 两阶段管道）。
+        """扫描目录并增量加载文档（扫描 → 入队 → Worker 异步处理）。
 
         流程：
-        1. ThreadPoolExecutor 并发处理文件（Loader 加载清洗 + Splitter 按类型切分）
-        2. 收集所有 Document，批量写入 PGVector
-        3. 重置检索器标记，下次查询时自动重建
+        1. FileTracker 扫描目录，识别新增/修改/删除文件
+        2. 新增/修改文件入队 ingest_file
+        3. 已删除文件入队 delete_file
+        4. BackgroundWorker 异步消费任务，处理 Pipeline → 写入向量库
+        5. 非阻塞返回（任务在后台执行）
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from rag_mcp_server.db.task_queue import TaskType
 
-        files: list[str] = filelist_with_allow_type(
-            path=vector_store_config["document_directory"],
-            allow_type=vector_store_config["allow_type"],
+        tracker = self._get_file_tracker()
+        queue = self._get_task_queue()
+
+        result = tracker.scan_directory(
+            directory=vector_store_config["document_directory"],
+            allow_types=vector_store_config["allow_type"],
+            rapid=True,
         )
 
-        new_docs: list[Document] = []
-        processed_count = 0
-        failed_count = 0
+        # 入队处理任务
+        enqueued = 0
+        for file_path in result["new"] + result["modified"]:
+            queue.enqueue(TaskType.INGEST_FILE, {"file_path": file_path})
+            enqueued += 1
 
-        # 阶段 1：并发处理文件（清洗 + 切分，CPU 密集型）
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_file: dict = {}
-            for file in files:
-                md5_hex = get_file_md5_hex(file)
-                if not md5_hex:
-                    continue
-                if self._check_md5_hex(md5_hex):
-                    logger.info(f"文件{file}已加载过，跳过")
-                    continue
-                future = executor.submit(self._process_single_file, file)
-                future_to_file[future] = (file, md5_hex)
-
-            for future in as_completed(future_to_file):
-                file, md5_hex = future_to_file[future]
-                try:
-                    docs = future.result()
-                    if docs:
-                        new_docs.extend(docs)
-                        self._save_md5_hex(md5_hex)
-                        processed_count += 1
-                        logger.info(f"文件{file}处理成功 | {len(docs)} chunks")
-                    else:
-                        logger.warning(f"文件{file}处理后为空")
-                except Exception as e:
-                    failed_count += 1
-                    logger.error(f"文件{file}处理失败: {e}")
-
-        # 阶段 2：批量写入向量数据库（串行，避免并发写问题）
-        if new_docs:
-            self.vector_store.add_documents(new_docs)
-            self.all_documents.extend(new_docs)
-            self._retrievers_initialized = False
-            logger.info(
-                f"文档加载完成 | 成功: {processed_count} 文件 | "
-                f"失败: {failed_count} 文件 | 总 chunks: {len(new_docs)} | "
-                f"检索器将在下次查询时自动重建"
+        for file_path in result["deleted"]:
+            queue.enqueue(
+                TaskType.DELETE_FILE,
+                {"source": file_path, "file_path": file_path},
             )
-        else:
-            logger.info("无新文档需要加载")
+            enqueued += 1
+
+        # 启动 Worker（首次调用时）
+        self._ensure_worker_started()
+
+        logger.info(
+            f"[VectorStore] 扫描入队完成 | 新增 {len(result['new'])} | "
+            f"修改 {len(result['modified'])} | 未变 {len(result['unchanged'])} | "
+            f"已删 {len(result['deleted'])} | 共入队 {enqueued}"
+        )
+        return
+
+    def _get_file_tracker(self):
+        if self._file_tracker is None:
+            from rag_mcp_server.db.file_tracker import FileTracker
+            from rag_mcp_server.config import queue_config
+
+            db_path = queue_config.get("queue", {}).get("db_path", "rag_queue.db")
+            self._file_tracker = FileTracker(db_path=db_path)
+        return self._file_tracker
+
+    def _get_task_queue(self):
+        if self._task_queue is None:
+            from rag_mcp_server.db.task_queue import TaskQueue
+            from rag_mcp_server.config import queue_config
+
+            db_path = queue_config.get("queue", {}).get("db_path", "rag_queue.db")
+            self._task_queue = TaskQueue(db_path=db_path)
+        return self._task_queue
+
+    def _ensure_worker_started(self):
+        if self._worker is not None and self._worker.is_running():
+            return
+        from rag_mcp_server.db.worker import BackgroundWorker
+
+        self._worker = BackgroundWorker(
+            task_queue=self._get_task_queue(),
+            file_tracker=self._get_file_tracker(),
+        )
+        self._worker.start()
 
     def add_documents(self, documents: list[Document]):
         """手动添加文档（供外部调用），添加后自动重建检索器。
@@ -446,99 +522,64 @@ class VectorStore:
         )
 
     def delete_documents_by_source(self, source: str):
-        """根据来源路径删除文档（支持增量更新），并同步清理 md5 记录。"""
-        import psycopg
-        conn_str = vector_store_config.get("connection_string")
-        collection_name = vector_store_config.get("character_name", "agent")
-        if not conn_str:
-            logger.error("未配置 connection_string，无法删除文档")
-            return
-        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
-        try:
-            conn = psycopg.connect(psycopg_conn_str)
-            cur = conn.cursor()
-            # 先按 metadata 的 source 字段过滤，删除匹配的记录
-            cur.execute(
-                """
-                DELETE FROM langchain_pg_embedding
-                WHERE uuid IN (
-                    SELECT e.uuid
-                    FROM langchain_pg_embedding e
-                    JOIN langchain_pg_collection c ON e.collection_id = c.uuid
-                    WHERE c.name = %s AND e.cmetadata->>'source' = %s
+        """根据来源路径删除文档（支持多粒度索引）。"""
+        if self._multi_gran_enabled:
+            self._get_multi_index().delete_by_source(source)
+        else:
+            import psycopg
+            conn_str = vector_store_config.get("connection_string")
+            collection_name = vector_store_config.get("character_name", "agent")
+            if not conn_str:
+                logger.error("未配置 connection_string，无法删除文档")
+                return
+            psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
+            try:
+                conn = psycopg.connect(psycopg_conn_str)
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    DELETE FROM langchain_pg_embedding
+                    WHERE uuid IN (
+                        SELECT e.uuid
+                        FROM langchain_pg_embedding e
+                        JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                        WHERE c.name = %s AND e.cmetadata->>'source' = %s
+                    )
+                    """,
+                    (collection_name, source),
                 )
-                """,
-                (collection_name, source),
-            )
-            deleted = cur.rowcount
-            conn.commit()
-            cur.close()
-            conn.close()
-            # 同步从内存列表中移除
-            self.all_documents = [
-                d for d in self.all_documents if d.metadata.get("source") != source
-            ]
-            self._retrievers_initialized = False
-            # 同步清理 md5 记录（如果 source 对应本地文件）
-            md5_removed = self._remove_md5_hex_for_source(source)
-            logger.info(
-                f"已删除来源为 {source} 的 {deleted} 条文档"
-                f"{'，并清理 md5 记录' if md5_removed else ''}"
-                f"，检索器将在下次查询时自动重建"
-            )
-        except Exception as e:
-            logger.error(f"删除文档失败: {e}")
+                deleted = cur.rowcount
+                conn.commit()
+                cur.close()
+                conn.close()
+                logger.info(f"已删除来源为 {source} 的 {deleted} 条文档")
+            except Exception as e:
+                logger.error(f"删除文档失败: {e}")
+
+        # 同步清理内存和追踪
+        self.all_documents = [
+            d for d in self.all_documents if d.metadata.get("source") != source
+        ]
+        self._retrievers_initialized = False
+        self._remove_md5_hex_for_source(source)
 
     # ------------------------------------------------------------------ #
-    #  MD5 辅助方法（供 load_document 和并发处理使用）
+    #  MD5 辅助（已委托给 FileTracker）
     # ------------------------------------------------------------------ #
-    def _check_md5_hex(self, md5_for_check: str) -> bool:
-        md5_file = vector_store_config.get("md5_hex_store", "md5.text")
-        if not os.path.exists(md5_file):
-            open(md5_file, "w", encoding="utf-8").close()
-        with open(md5_file, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip() == md5_for_check:
-                    return True
-        return False
-
-    def _save_md5_hex(self, md5_hex: str):
-        md5_file = vector_store_config.get("md5_hex_store", "md5.text")
-        with open(md5_file, "a", encoding="utf-8") as f:
-            f.write(md5_hex + "\n")
-
     def _remove_md5_hex_for_source(self, source: str) -> bool:
-        """根据 source 路径计算 md5，并从 md5.text 中移除对应记录。
-
-        Returns:
-            是否成功移除了 md5 记录
-        """
-        md5_hex = get_file_md5_hex(source)
-        if not md5_hex:
-            return False
-        md5_file = vector_store_config.get("md5_hex_store", "md5.text")
-        if not os.path.exists(md5_file):
-            return False
-        try:
-            with open(md5_file, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f if line.strip()]
-            if md5_hex not in lines:
-                return False
-            lines.remove(md5_hex)
-            with open(md5_file, "w", encoding="utf-8") as f:
-                for line in lines:
-                    f.write(line + "\n")
-            logger.info(f"已从 md5.text 移除 {source} 的 md5 记录")
-            return True
-        except Exception as e:
-            logger.error(f"清理 md5 记录失败: {e}")
-            return False
+        """移除 source 的 MD5 记录（委托 FileTracker）。"""
+        self._get_file_tracker().remove_source(source)
+        return True
 
     def get_document_count(self) -> int:
         """获取当前向量库中的文档总数。
 
-        优先从数据库查询，避免依赖尚未加载的内存缓存。
+        支持多粒度索引（返回两个 collection 的总和）。
         """
+        if self._multi_gran_enabled:
+            counts = self._get_multi_index().get_document_count()
+            return counts.get("total", 0)
+
         import psycopg
         conn_str = vector_store_config.get("connection_string")
         collection_name = vector_store_config.get("character_name", "agent")
@@ -566,11 +607,11 @@ class VectorStore:
     def get_all_sources(self) -> list[dict]:
         """获取向量库中所有唯一的文献来源列表。
 
-        直接查询数据库，避免触发 PGVector 初始化（减少 segfault 风险）。
-
-        Returns:
-            按文献名排序的列表，每项包含 source 和 chunk_count
+        支持多粒度索引。
         """
+        if self._multi_gran_enabled:
+            return self._get_multi_index().get_all_sources()
+
         import psycopg
         conn_str = vector_store_config.get("connection_string")
         collection_name = vector_store_config.get("character_name", "agent")

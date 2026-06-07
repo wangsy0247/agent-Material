@@ -510,31 +510,32 @@ class SemanticSplitter(BaseSplitter):
 
 
 class ParentDocumentSplitter(BaseSplitter):
-    """父子文档切分器（ParentDocumentRetriever 兼容实现）。
+    """父子文档切分器 — 用于多粒度索引。
 
-    先用大 chunk_size 切出"父文档"，再用小 chunk_size 切出"子文档"，
-    子文档 metadata 保留 ``parent_doc`` / ``parent_id`` 引用。
+    先用大 chunk_size 切出"父文档"（~2000 字符），再用小 chunk_size 切出"子文档"（~500 字符）。
+    子文档 metadata 保留 ``parent_doc`` / ``parent_id`` 引用，供 MultiGranularityIndex 使用。
+    parent_id 使用文本的 MD5 哈希（跨进程稳定）。
     """
 
-    def __init__(
-        self,
-        parent_chunk_size: int = 2000,
-        child_chunk_size: int = 400,
-    ):
+    def __init__(self):
+        import hashlib
+        self._hashlib = hashlib
+        cfg = _splitter_cfg("parent")
+        parent_chunk_size = cfg.get("parent_chunk_size", 2000)
+        child_chunk_size = cfg.get("child_chunk_size", 500)
+        separators = vector_store_config.get(
+            "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
+        )
         self.parent_splitter = RecursiveCharacterTextSplitter(
             chunk_size=parent_chunk_size,
             chunk_overlap=200,
-            separators=vector_store_config.get(
-                "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
-            ),
+            separators=separators,
             length_function=len,
         )
         self.child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=child_chunk_size,
-            chunk_overlap=50,
-            separators=vector_store_config.get(
-                "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
-            ),
+            chunk_overlap=70,
+            separators=separators,
             length_function=len,
         )
 
@@ -544,7 +545,9 @@ class ParentDocumentSplitter(BaseSplitter):
             parents = self.parent_splitter.split_documents([doc])
             for parent in parents:
                 children = self.child_splitter.split_documents([parent])
-                parent_id = str(hash(parent.page_content) & 0xFFFFFFFF)
+                parent_id = self._hashlib.md5(
+                    parent.page_content.encode("utf-8")
+                ).hexdigest()[:16]
                 for child in children:
                     child.metadata["parent_doc"] = parent.page_content
                     child.metadata["parent_id"] = parent_id
@@ -617,6 +620,9 @@ class SemanticMergeOnly(BaseSplitter):
 
     用于 PDF 两段式流水线: recursive → semantic_merge，
     先递归字符切分保证块大小均匀，再语义合并保持语义完整。
+
+    优化：合并判断使用加权平均 embedding 近似，避免逐条 API 重嵌入。
+    下游 PGVector.add_documents() 会为最终合并文本重新 embedding。
     """
 
     def __init__(self):
@@ -635,11 +641,14 @@ class SemanticMergeOnly(BaseSplitter):
             logger.warning(f"语义合并 Embedding 失败: {e}，跳过合并")
             return documents
 
+        # 首条初始化
         merged: list[tuple[str, dict]] = [
             (texts[0], dict(documents[0].metadata))
         ]
         current_emb = embeddings[0]
+        current_len = len(texts[0])
 
+        # 合并判断：加权平均 embedding 近似，无需 API 重嵌入
         for i in range(1, len(texts)):
             sim = SemanticTextSplitter._cosine_similarity(current_emb, embeddings[i])
             if sim > self._similarity_threshold:
@@ -647,13 +656,14 @@ class SemanticMergeOnly(BaseSplitter):
                     merged[-1][0] + "\n" + texts[i],
                     merged[-1][1],
                 )
-                try:
-                    current_emb = embedding_model.embed_documents([merged[-1][0]])[0]
-                except Exception:
-                    current_emb = embeddings[i]
+                w1 = current_len / (current_len + len(texts[i]) + 1)
+                w2 = len(texts[i]) / (current_len + len(texts[i]) + 1)
+                current_emb = [w1 * a + w2 * b for a, b in zip(current_emb, embeddings[i])]
+                current_len = current_len + len(texts[i]) + 1
             else:
                 merged.append((texts[i], dict(documents[i].metadata)))
                 current_emb = embeddings[i]
+                current_len = len(texts[i])
 
         result = [
             Document(page_content=t, metadata=m)

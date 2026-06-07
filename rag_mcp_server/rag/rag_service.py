@@ -30,17 +30,23 @@ def _get_run_config(
 class RagService:
     def __init__(self):
         self.vector_store = VectorStore()
-        self.retriever = self.vector_store.get_retriever()
         prompt_path = prompt_config.get("rag_prompt_path", "rag_mcp_server/prompts/rag_prompt.txt")
         self.prompt_text = get_prompts(get_abs_path(prompt_path)) or ""
         self.prompts_template = PromptTemplate.from_template(self.prompt_text)
         self.model = chat_model
-        self.chain = self._init_chain()
+        self._chain = None  # 延迟初始化（避免无 Chat API key 时阻断纯检索）
 
-    def _init_chain(self):
-        if self.model is None:
-            raise RuntimeError("Chat 模型未初始化，请检查 ANTHROPIC_API_KEY 环境变量")
-        return self.prompts_template | self.model | StrOutputParser()
+    def _get_chain(self):
+        if self._chain is None:
+            if self.model is None:
+                raise RuntimeError("Chat 模型未初始化，请检查 ANTHROPIC_API_KEY 环境变量")
+            self._chain = self.prompts_template | self.model | StrOutputParser()
+        return self._chain
+
+    @property
+    def retriever(self):
+        """每次获取最新的检索器（支持热更新）。"""
+        return self.vector_store.get_retriever()
 
     def retriever_docx(self, query: str):
         """执行检索，返回相关文档列表"""
@@ -61,7 +67,7 @@ class RagService:
             )
             context += f"[参考资料{i}] 来源：{source_name}\n{doc.page_content}\n\n"
 
-        return self.chain.invoke(
+        return self._get_chain().invoke(
             {"input": query, "context": context},
             config=_get_run_config(
                 run_name="rag_generate",
@@ -87,7 +93,7 @@ class RagService:
             )
             context += f"[参考资料{i}] 来源：{source_name}\n{doc.page_content}\n\n"
 
-        for chunk in self.chain.stream(
+        for chunk in self._get_chain().stream(
             {"input": query, "context": context},
             config=_get_run_config(
                 run_name="rag_generate_stream",
