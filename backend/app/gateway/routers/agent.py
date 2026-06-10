@@ -27,7 +27,17 @@ from ..schemas import (
 )
 from ..auth.dependencies import get_agent_with_memory, get_memory_manager, get_current_user
 from ..auth.schemas import UserInfo
-from agent_material.utils.logger import logger
+from agent_material.observability.structured_logger import get_logger, set_request_context
+from agent_material.observability.metrics import (
+    http_request_total,
+    http_request_duration,
+    http_request_in_flight,
+    agent_invocation_total,
+    agent_duration,
+    StreamMetrics,
+)
+
+logger = get_logger("router.agent")
 
 if TYPE_CHECKING:
     from agent_material.memory.manager import MemoryManager
@@ -95,56 +105,52 @@ async def agent_chat(
         raise HTTPException(status_code=400, detail="问题不能为空")
 
     user_id = current_user.user_id
+    set_request_context(request_id="", session_id=request.session_id or "", user_id=user_id)
 
     # 确保会话
     active_session_id = _ensure_session(mm, request.session_id, user_id)
+    mode = "invoke" if not request.stream else "stream"
+    endpoint = "/api/v1/agent/chat"
+    http_request_in_flight.labels(method="POST").inc()
+    t_req = time.time()
 
     # 非流式模式：直接返回完整结果
     if not request.stream:
         try:
-            # 注入记忆状态信息
-            memory_info = []
-            lt = mm._get_long_term(user_id)
-            if lt:
-                if lt.user_file.exists():
-                    memory_info.append("已加载用户画像")
-                if lt.project_file.exists():
-                    memory_info.append("已加载项目知识")
-
             result = await agent.excutor(
                 request.question,
                 session_id=active_session_id,
                 user_id=user_id,
             )
+            agent_duration.labels(mode="invoke").observe(time.time() - t_req)
 
-            # HITL 中断返回事件字典
             if isinstance(result, dict):
-                return {
-                    "code": 202,
-                    "message": "等待人工确认",
-                    "data": result,
-                }
+                agent_invocation_total.labels(mode="invoke", status="hitl_interrupt").inc()
+                http_request_total.labels(method="POST", endpoint=endpoint, status_code=202).inc()
+                return {"code": 202, "message": "等待人工确认", "data": result}
 
-            return AgentChatResponse(
-                answer=result,
-                session_id=active_session_id,
-            )
+            agent_invocation_total.labels(mode="invoke", status="success").inc()
+            http_request_total.labels(method="POST", endpoint=endpoint, status_code=200).inc()
+            return AgentChatResponse(answer=result, session_id=active_session_id)
         except Exception as e:
-            logger.error(f"[Agent] 非流式调用失败: {e}")
+            agent_invocation_total.labels(mode="invoke", status="error").inc()
+            http_request_total.labels(method="POST", endpoint=endpoint, status_code=500).inc()
+            logger.error("agent_chat_failed", extra={"error": str(e)}, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            http_request_duration.labels(method="POST", endpoint=endpoint).observe(time.time() - t_req)
+            http_request_in_flight.labels(method="POST").dec()
 
     # 流式模式：SSE
-    async def event_stream():
-        """生成 SSE 事件流"""
-        logger.info(
-            f"[Agent SSE] 新请求 | user={user_id} | session={active_session_id} | "
-            f"question={request.question[:50]}..."
-        )
+    sm = StreamMetrics(mode="agent_chat")
 
-        # 发送启动事件
+    async def event_stream():
+        logger.info("agent_sse_start", extra={
+            "user_id": user_id, "session_id": active_session_id,
+            "question": request.question[:100],
+        })
         yield format_sse_event("start", {"session_id": active_session_id})
 
-        # 发送记忆注入状态
         memory_status = []
         lt = mm._get_long_term(user_id)
         if lt:
@@ -155,52 +161,49 @@ async def agent_chat(
         if memory_status:
             yield format_sse_event("status", {"memory": memory_status})
 
-        # 发送上下文统计（从指定会话的短期记忆中获取）
         session_stats = mm.get_session_stats(active_session_id, user_id=user_id)
         yield format_sse_event("status", {"context": session_stats})
 
         full_answer = ""
-
         try:
-            # 使用 Agent 的流式执行（已集成记忆）
-            async for chunk in agent.excutor_stream(
+            async for chunk in sm.awrap(agent.excutor_stream(
                 request.question,
                 session_id=active_session_id,
                 user_id=user_id,
-            ):
+            )):
                 if isinstance(chunk, dict):
-                    # HITL 中断事件
+                    agent_invocation_total.labels(mode="stream", status="hitl_interrupt").inc()
                     yield format_sse_event("approval_required", chunk)
-                    # HITL 中断后直接结束，不发送 done（等待 approve 恢复）
                     return
                 elif chunk:
                     full_answer += chunk
                     yield format_sse_event("token", chunk)
 
-            # 正常结束
             done_stats = mm.get_session_stats(active_session_id, user_id=user_id)
             yield format_sse_event("done", {
                 "session_id": active_session_id,
                 "total_tokens": done_stats["total_tokens"],
             })
-            logger.info(
-                f"[Agent SSE] 请求完成 | user={user_id} | session={active_session_id} | "
-                f"answer_len={len(full_answer)}"
-            )
-
+            agent_invocation_total.labels(mode="stream", status="success").inc()
+            logger.info("agent_sse_done", extra={
+                "user_id": user_id, "session_id": active_session_id,
+                "answer_len": len(full_answer),
+                "first_token_latency": sm.first_token_latency,
+                "total_chunks": sm._chunk_count,
+            })
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            err_repr = repr(e)
-            logger.error(
-                f"[Agent SSE] 请求失败 | user={user_id} | session={active_session_id} | "
-                f"error_type={type(e).__name__} | error={err_repr}\n{tb}"
-            )
-            yield format_sse_event(
-                "error",
-                {"message": str(e) or err_repr, "type": type(e).__name__}
-            )
+            agent_invocation_total.labels(mode="stream", status="error").inc()
+            logger.error("agent_sse_failed", extra={
+                "user_id": user_id, "session_id": active_session_id,
+                "error": str(e), "error_type": type(e).__name__,
+            }, exc_info=True)
+            yield format_sse_event("error", {"message": str(e), "type": type(e).__name__})
             yield format_sse_event("done")
+        finally:
+            agent_duration.labels(mode="stream").observe(time.time() - t_req)
+            http_request_total.labels(method="POST", endpoint=endpoint, status_code=200).inc()
+            http_request_duration.labels(method="POST", endpoint=endpoint).observe(time.time() - t_req)
+            http_request_in_flight.labels(method="POST").dec()
 
     return StreamingResponse(
         event_stream(),

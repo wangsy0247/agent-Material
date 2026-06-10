@@ -219,12 +219,96 @@ class LongTermMemory:
                 use_jsonb=True,
             )
             logger.info("[LongTermMemory] 向量存储初始化完成")
+
+            # HNSW 向量索引：加速 PGVector 检索（幂等安全）
+            self._ensure_vector_index(conn_str)
         except Exception as e:
             logger.warning(
                 f"[LongTermMemory] PGVector 向量存储初始化失败，已禁用向量记忆: {e}"
             )
             self._enable_vector = False
             self._vector_store = None
+
+    @staticmethod
+    def _ensure_vector_index(conn_str: str) -> None:
+        """在 langchain_pg_embedding.embedding 列上创建 HNSW 向量索引（幂等安全）。
+
+        自动处理 embedding 列无维度声明的情况（ALTER COLUMN TYPE）。
+        内联实现，避免跨包依赖 rag_mcp_server.rag.vector_index。
+        失败仅记录警告，不阻断记忆链路。
+        """
+        import re
+
+        import psycopg
+
+        TABLE = "langchain_pg_embedding"
+        COLUMN = "embedding"
+        INDEX_NAME = "idx_langchain_pg_embedding_embedding_hnsw"
+        M = 16
+        EF_CONSTRUCTION = 64
+
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", INDEX_NAME):
+            logger.warning(f"[LongTermMemory] 非法索引名称: {INDEX_NAME}")
+            return
+
+        try:
+            psycopg_conn_str = conn_str.replace(
+                "postgresql+psycopg://", "postgresql://"
+            )
+            conn = psycopg.connect(psycopg_conn_str, autocommit=True)
+            try:
+                # 1) 确保 embedding 列有显式维度
+                row = conn.execute(
+                    "SELECT atttypmod FROM pg_attribute "
+                    "WHERE attrelid = %s::regclass AND attname = %s",
+                    (TABLE, COLUMN),
+                ).fetchone()
+
+                if row is None:
+                    logger.warning(
+                        f"[LongTermMemory] 列 {TABLE}.{COLUMN} 不存在，跳过索引创建"
+                    )
+                    return
+
+                if row[0] == -1:
+                    dim_row = conn.execute(
+                        f"SELECT vector_dims({COLUMN}) FROM {TABLE} LIMIT 1"
+                    ).fetchone()
+                    if dim_row is None:
+                        logger.warning(
+                            "[LongTermMemory] embedding 列无数据，跳过索引创建"
+                        )
+                        return
+                    dims = dim_row[0]
+                    logger.info(
+                        f"[LongTermMemory] embedding 列无显式维度，"
+                        f"推测为 vector({dims})，执行 ALTER COLUMN..."
+                    )
+                    conn.execute(
+                        f"ALTER TABLE {TABLE} "
+                        f"ALTER COLUMN {COLUMN} TYPE vector({int(dims)})"
+                    )
+                    logger.info(
+                        f"[LongTermMemory] embedding 列已更新为 vector({dims})"
+                    )
+
+                # 2) 创建 HNSW 索引
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {INDEX_NAME} "
+                    f"ON {TABLE} "
+                    f"USING hnsw ({COLUMN} vector_cosine_ops) "
+                    f"WITH (m = {M}, ef_construction = {EF_CONSTRUCTION})"
+                )
+                logger.info(
+                    f"[LongTermMemory] HNSW 向量索引就绪 | "
+                    f"index={INDEX_NAME} | m={M} | ef_construction={EF_CONSTRUCTION}"
+                )
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(
+                f"[LongTermMemory] HNSW 索引创建失败，检索回退到顺序扫描: {e}"
+            )
 
     def add_memory_entry(self, entry: MemoryEntry, dedup_threshold: float | None = None) -> bool:
         """添加记忆条目到向量存储（带自动去重，按 user_id 隔离）

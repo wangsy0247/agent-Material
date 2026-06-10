@@ -57,7 +57,9 @@ except ImportError:
     FASTAPI_OFFLINE_AVAILABLE = False
 
 from .routers import agent, rag, system, memory, auth, mcp as mcp_router
-from agent_material.utils.logger import logger
+from agent_material.observability.structured_logger import get_logger
+
+logger = get_logger("gateway.app")
 
 
 # ==================== MCP 健康检查后台任务 ====================
@@ -97,9 +99,15 @@ async def lifespan(app: FastAPI):
     shutdown: 服务关闭时执行（如释放资源、关闭连接）
     """
     # ===== Startup =====
-    logger.info("=" * 50)
-    logger.info("🚀 材料科学 LLM Agent API 服务启动中...")
-    logger.info(f"📁 项目根目录: {PROJECT_ROOT}")
+    logger.info("=" * 50, extra={"event": "startup_begin"})
+
+    # ── 可观测性初始化 ──
+    try:
+        from agent_material.observability import init_all
+        status = init_all(service_name="agent_material")
+        logger.info("observability_init", extra=status)
+    except Exception:
+        logger.warning("可观测性初始化失败，使用默认配置", exc_info=True)
 
     from agent_material.utils.config_handler import agent_config
 
@@ -196,6 +204,17 @@ app.add_middleware(
 # GZip 压缩：减少响应体积（对非 SSE 请求有效）
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# OpenTelemetry HTTP 中间件：自动为每个 HTTP 请求创建 Span
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor.instrument_app(
+        app,
+        excluded_urls="/metrics,/health,/docs,/redoc,/openapi.json",
+    )
+    logger.info("otel_fastapi_instrumentation_enabled")
+except ImportError:
+    logger.info("opentelemetry-instrumentation-fastapi 未安装，跳过 HTTP 自动追踪")
+
 # ==================== 路由注册 ====================
 
 # API v1 版本前缀
@@ -241,12 +260,27 @@ async def api_info():
             "memory_recall": "/api/v1/memory/recall",
             "health": "/api/v1/system/health",
             "stats": "/api/v1/system/rag/stats",
+            "metrics": "/metrics",
             "auth_login": "/api/v1/auth/login",
             "auth_register": "/api/v1/auth/register",
             "mcp_config": "/api/mcp/config",
             "mcp_status": "/api/mcp/status",
         },
     }
+
+
+# ==================== Prometheus /metrics ====================
+
+
+@app.get("/metrics", summary="Prometheus 指标", include_in_schema=False)
+async def metrics():
+    """Prometheus 格式的指标端点，供 Grafana 抓取。"""
+    from fastapi.responses import Response
+    try:
+        from agent_material.observability.metrics import get_metrics
+        return Response(content=get_metrics(), media_type="text/plain; charset=utf-8")
+    except ImportError:
+        return Response(content="# prometheus_client 未安装\n", media_type="text/plain")
 
 
 # ==================== 入口 ====================

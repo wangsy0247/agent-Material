@@ -1,0 +1,185 @@
+{
+  "title": "AI Agent 全栈可观测性",
+  "tags": ["agent", "rag", "mcp", "llm", "observability"],
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1, "title": "HTTP 请求 QPS", "type": "graph",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(gateway_http_request_total[1m])) by (endpoint)", "legendFormat": "{{endpoint}}"}
+      ]
+    },
+    {
+      "id": 2, "title": "HTTP P50/P95/P99", "type": "graph",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(gateway_http_request_duration_seconds_bucket[5m]))", "legendFormat": "P50"},
+        {"expr": "histogram_quantile(0.95, rate(gateway_http_request_duration_seconds_bucket[5m]))", "legendFormat": "P95"},
+        {"expr": "histogram_quantile(0.99, rate(gateway_http_request_duration_seconds_bucket[5m]))", "legendFormat": "P99"}
+      ]
+    },
+    {
+      "id": 3, "title": "HTTP 错误率 (%)", "type": "stat",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(gateway_http_request_total{status_code=~'5..'}[1m])) / sum(rate(gateway_http_request_total[1m])) * 100"}
+      ]
+    },
+    {
+      "id": 4, "title": "当前并发请求", "type": "stat",
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "gateway_http_request_in_flight"}
+      ]
+    },
+    {
+      "id": 5, "title": "Agent 调用速率 (stream/invoke)", "type": "graph",
+      "gridPos": {"x": 0, "y": 4, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(agent_invocation_total{status='success'}[1m])) by (mode)", "legendFormat": "{{mode}}"}
+      ]
+    },
+    {
+      "id": 6, "title": "Agent 推理轮次分布", "type": "heatmap",
+      "gridPos": {"x": 6, "y": 4, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(agent_iteration_count_bucket[5m])) by (le)"}
+      ]
+    },
+    {
+      "id": 7, "title": "Agent 执行延迟 P50/P95 (stream)", "type": "graph",
+      "gridPos": {"x": 12, "y": 4, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(agent_duration_seconds_bucket{mode='stream'}[5m]))", "legendFormat": "P50"},
+        {"expr": "histogram_quantile(0.95, rate(agent_duration_seconds_bucket{mode='stream'}[5m]))", "legendFormat": "P95"}
+      ]
+    },
+    {
+      "id": 8, "title": "Agent HITL 中断 / 错误率", "type": "stat",
+      "gridPos": {"x": 16, "y": 4, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(agent_invocation_total{status=~'hitl_interrupt|error'}[1m])) / sum(rate(agent_invocation_total[1m])) * 100"}
+      ]
+    },
+    {
+      "id": 9, "title": "LangGraph 节点耗时分布", "type": "bargauge",
+      "gridPos": {"x": 0, "y": 8, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "rate(agent_graph_node_duration_seconds_sum[5m]) / rate(agent_graph_node_duration_seconds_count[5m])", "legendFormat": "{{node}}"}
+      ]
+    },
+    {
+      "id": 10, "title": "流式首 Token 延迟", "type": "graph",
+      "gridPos": {"x": 8, "y": 8, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(agent_stream_first_token_latency_seconds_bucket[5m]))", "legendFormat": "P50 {{mode}}"},
+        {"expr": "histogram_quantile(0.95, rate(agent_stream_first_token_latency_seconds_bucket[5m]))", "legendFormat": "P95 {{mode}}"}
+      ]
+    },
+    {
+      "id": 11, "title": "LLM 调用速率 (by purpose)", "type": "graph",
+      "gridPos": {"x": 12, "y": 8, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(agent_llm_call_total[1m])) by (purpose)", "legendFormat": "{{purpose}}"},
+        {"expr": "sum(rate(rag_llm_call_total[1m])) by (purpose)", "legendFormat": "RAG-{{purpose}}"}
+      ]
+    },
+    {
+      "id": 12, "title": "LLM 延迟 P95 (by purpose)", "type": "graph",
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(agent_llm_call_duration_seconds_bucket[5m]))", "legendFormat": "Agent-{{purpose}}"},
+        {"expr": "histogram_quantile(0.95, rate(rag_llm_call_duration_seconds_bucket[5m]))", "legendFormat": "RAG-{{purpose}}"}
+      ]
+    },
+    {
+      "id": 13, "title": "LLM Token 消耗速率", "type": "graph",
+      "gridPos": {"x": 8, "y": 12, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "rate(agent_llm_token_total{type='input'}[5m]) + rate(rag_llm_token_total{type='input'}[5m])", "legendFormat": "input/s"},
+        {"expr": "rate(agent_llm_token_total{type='output'}[5m]) + rate(rag_llm_token_total{type='output'}[5m])", "legendFormat": "output/s"}
+      ]
+    },
+    {
+      "id": 14, "title": "MCP Tool Call 速率", "type": "graph",
+      "gridPos": {"x": 0, "y": 16, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "sum(rate(mcp_tool_call_total[1m])) by (server, tool)", "legendFormat": "{{server}}/{{tool}}"}
+      ]
+    },
+    {
+      "id": 15, "title": "MCP Tool Call P95 延迟", "type": "graph",
+      "gridPos": {"x": 6, "y": 16, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(mcp_tool_call_duration_seconds_bucket[5m]))", "legendFormat": "{{server}}/{{tool}}"}
+      ]
+    },
+    {
+      "id": 16, "title": "RAG 检索各阶段延迟", "type": "bargauge",
+      "gridPos": {"x": 12, "y": 16, "w": 8, "h": 4},
+      "targets": [
+        {"expr": "rate(rag_retrieval_duration_seconds_sum[5m]) / rate(rag_retrieval_duration_seconds_count[5m])", "legendFormat": "{{stage}}"}
+      ]
+    },
+    {
+      "id": 17, "title": "RAG 空结果 / 检索文档数", "type": "graph",
+      "gridPos": {"x": 0, "y": 20, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "rate(rag_retrieval_empty_total[5m])", "legendFormat": "empty rate"},
+        {"expr": "rate(rag_retrieval_docs_count_sum[5m]) / rate(rag_retrieval_docs_count_count[5m])", "legendFormat": "avg docs"}
+      ]
+    },
+    {
+      "id": 18, "title": "DashScope API 延迟", "type": "graph",
+      "gridPos": {"x": 4, "y": 20, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(dashscope_api_duration_seconds_bucket[5m]))", "legendFormat": "{{api}}"}
+      ]
+    },
+    {
+      "id": 19, "title": "DashScope 限流/重试", "type": "graph",
+      "gridPos": {"x": 8, "y": 20, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "rate(dashscope_api_total{status='rate_limited'}[5m])", "legendFormat": "rate_limited"},
+        {"expr": "rate(dashscope_api_retries_total[5m])", "legendFormat": "retries"}
+      ]
+    },
+    {
+      "id": 20, "title": "记忆操作延迟", "type": "graph",
+      "gridPos": {"x": 12, "y": 20, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(memory_operation_duration_seconds_bucket[5m]))", "legendFormat": "{{operation}}"}
+      ]
+    },
+    {
+      "id": 21, "title": "记忆系统状态", "type": "stat",
+      "gridPos": {"x": 16, "y": 20, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "memory_session_count", "legendFormat": "sessions"},
+        {"expr": "memory_vector_count", "legendFormat": "long-term vectors"}
+      ]
+    },
+    {
+      "id": 22, "title": "任务队列深度", "type": "bargauge",
+      "gridPos": {"x": 0, "y": 24, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "rag_queue_depth", "legendFormat": "{{status}}"}
+      ]
+    },
+    {
+      "id": 23, "title": "任务处理耗时", "type": "graph",
+      "gridPos": {"x": 6, "y": 24, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(rag_queue_task_duration_seconds_bucket[5m]))", "legendFormat": "{{type}}"}
+      ]
+    },
+    {
+      "id": 24, "title": "Worker 空闲时间", "type": "stat",
+      "gridPos": {"x": 12, "y": 24, "w": 4, "h": 4},
+      "targets": [
+        {"expr": "rag_queue_worker_idle_seconds"}
+      ]
+    }
+  ]
+}

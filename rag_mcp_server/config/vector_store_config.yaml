@@ -46,10 +46,13 @@ score_threshold: 0.3      # 向量相似度阈值
 top_n: 5                  # 重排序后返回数量
 max_rerank_docs: 10       # 进入重排序器的最大文档数
 
-# 重排序开关（CPU 上 0.6B 模型推理很慢，如无 GPU 建议关闭）
+# 重排序开关（使用 DashScope API 重排序，无需本地 GPU）
 enable_reranker: true
-reranker_batch_size: 8    # CrossEncoder batch size
-reranker_model: "/mnt/d/models/Qwen3-Reranker-0.6B"
+# ── 重排序配置 ──────────────────────────────────────────────────
+reranker:
+  provider: "dashscope"          # dashscope=阿里云API重排序, local=本地HuggingFace模型
+  model: "qwen3-rerank"          # DashScope 重排序模型（gte-rerank 已下线）
+  top_n: 5                       # 重排序后返回数量
 bm25_weight: 0.5          # BM25 检索权重
 vector_weight: 0.5        # 向量检索权重
 
@@ -59,6 +62,35 @@ multi_granularity:
   small_collection_suffix: "_small" # 子chunk collection 后缀
   large_collection_suffix: "_large" # 父chunk collection 后缀
 
+# ── Query Routing & Classification ──────────────────────────────
+query_routing:
+  enabled: true                    # 主开关
+  chat_detection: true             # 闲聊识别 → 直答（不走RAG，降低延迟）
+  irrelevant_detection: true       # 无关问题拦截 → 拒答
+  question_classification: true    # 问题类型标注（factual/summary/comparison）
+  confidence_threshold: 0.7        # 最低置信度阈值
+
+# ── Query Rewriting ─────────────────────────────────────────────
+query_rewriting:
+  # 默认策略（空字符串 = 不做改写，auto = 根据问题类型自适应）
+  default_strategy: "step_back+expand"
+  # HyDE 开关：启用后自动在策略前追加 hyde+（如 hyde+step_back+expand）
+  # 使用假设文档 embedding 增强向量检索，但增加约 2s 延迟
+  enable_hyde: false
+  expansion:
+    num_queries: 3                 # 生成的查询变体数量（含原始查询）
+    merge_top_k: 10                # 每个变体的最大召回数
+    final_top_k: 5                 # 融合后最终返回数
+  hyde:
+    doc_length: 150                # 假设文档目标字数
+  step_back:
+    merge_top_k: 10
+    final_top_k: 5
+  decomposition:
+    max_sub_queries: 5             # 最大子问题数量
+    merge_top_k: 10
+    final_top_k: 5
+
 # ── 异步 Embedding 配置 ──────────────────────────────────────────
 async_embedding:
   enabled: true
@@ -66,3 +98,13 @@ async_embedding:
   max_concurrency: 4      # 最大并发 API 请求数
   rate_limit: 500        # 每秒最大请求数
   retry_on_failure: 3     # 失败重试次数
+
+# ── 向量索引配置 ──────────────────────────────────────────────────
+vector_index:
+  enabled: true            # 是否启用向量索引（false=精确暴力搜索）
+  method: hnsw             # 索引类型：hnsw | ivfflat
+  hnsw:
+    m: 16                  # 每个节点的最大连接数（越大召回越高，内存越大）
+    ef_construction: 64    # 构建时的搜索深度（越大图质量越高）
+  query:
+    ef_search: 40          # 查询时的搜索深度（越大召回越高，查询越慢）

@@ -8,12 +8,18 @@
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Optional
 
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.callbacks import CallbackManagerForRetrieverRun
+
+from rag_mcp_server.observability.metrics import (
+    retrieval_duration,
+    retrieval_docs,
+    postgres_query_duration,
+)
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from pydantic import ConfigDict
 
@@ -84,6 +90,7 @@ class MultiGranularityRetriever(BaseRetriever):
         self._hybrid_retriever = None
         self._compression_retriever = None
         self._bm25_retriever = None
+        self._vector_retriever = None  # HyDE 模式需要访问内部的向量检索器
 
     def _get_relevant_documents(
         self,
@@ -144,6 +151,7 @@ class MultiGranularityRetriever(BaseRetriever):
             k=k,
             score_threshold=score_threshold,
         )
+        self._vector_retriever = vector_retriever
 
         # BM25
         if BM25_AVAILABLE and self.all_documents:
@@ -173,38 +181,33 @@ class MultiGranularityRetriever(BaseRetriever):
         )
 
         enable_reranker = vector_store_config.get("enable_reranker", True)
-        if enable_reranker and RERANKER_AVAILABLE and CrossEncoderReranker:
+        if enable_reranker:
             try:
-                model_path = vector_store_config.get(
-                    "reranker_model", "BAAI/bge-reranker-base"
-                )
-                is_local = os.path.exists(model_path) and os.path.isdir(model_path)
+                reranker_cfg = vector_store_config.get("reranker", {})
+                provider = reranker_cfg.get("provider", "dashscope")
 
-                try:
-                    import torch
-                    device = "cuda" if torch.cuda.is_available() else "cpu"
-                except ImportError:
-                    device = "cpu"
+                if provider == "dashscope":
+                    from rag_mcp_server.rag.dashscope_reranker import DashScopeReranker
 
-                cross_encoder = HuggingFaceCrossEncoder(
-                    model_name=model_path,
-                    model_kwargs={"device": device},
-                )
-                if hasattr(cross_encoder, "score") and not hasattr(
-                    cross_encoder, "predict"
-                ):
-                    object.__setattr__(
-                        cross_encoder, "predict", cross_encoder.score
+                    compressor = DashScopeReranker(
+                        model=reranker_cfg.get("model", "qwen3-rerank"),
+                        top_n=reranker_cfg.get("top_n", vector_store_config.get("top_n", 5)),
                     )
-
-                compressor = CrossEncoderReranker(
-                    model=cross_encoder,
-                    top_n=vector_store_config.get("top_n", 5),
-                )
-                self._compression_retriever = ContextualCompressionRetriever(
-                    base_compressor=compressor,
-                    base_retriever=truncated,
-                )
+                    self._compression_retriever = ContextualCompressionRetriever(
+                        base_compressor=compressor,
+                        base_retriever=truncated,
+                    )
+                    logger.info(
+                        f"[MultiRetriever] DashScope 重排序器初始化成功 | "
+                        f"model={reranker_cfg.get('model', 'qwen3-rerank')}"
+                    )
+                elif provider == "local":
+                    self._compression_retriever = self._init_local_reranker(truncated)
+                else:
+                    logger.warning(
+                        f"[MultiRetriever] 未知的重排序 provider: {provider}，跳过"
+                    )
+                    self._compression_retriever = None
             except Exception as e:
                 logger.error(f"[MultiRetriever] 重排序器初始化失败: {e}")
                 self._compression_retriever = None
@@ -212,6 +215,39 @@ class MultiGranularityRetriever(BaseRetriever):
             self._compression_retriever = None
 
         self._retrievers_initialized = True
+
+    def _init_local_reranker(self, truncated):
+        """本地 CrossEncoder 重排序器（local provider 降级路径）。"""
+        if not RERANKER_AVAILABLE or not CrossEncoderReranker:
+            logger.warning("[MultiRetriever] 重排序依赖未安装，跳过")
+            return None
+
+        model_path = vector_store_config.get(
+            "reranker", {}
+        ).get("model_path", "BAAI/bge-reranker-base")
+
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
+
+        cross_encoder = HuggingFaceCrossEncoder(
+            model_name=model_path,
+            model_kwargs={"device": device},
+        )
+        if hasattr(cross_encoder, "score") and not hasattr(cross_encoder, "predict"):
+            object.__setattr__(cross_encoder, "predict", cross_encoder.score)
+
+        compressor = CrossEncoderReranker(
+            model=cross_encoder,
+            top_n=vector_store_config.get("top_n", 5),
+        )
+        logger.info("[MultiRetriever] 本地 CrossEncoder 重排序器初始化成功")
+        return ContextualCompressionRetriever(
+            base_compressor=compressor,
+            base_retriever=truncated,
+        )
 
     def _hybrid_search(self, query: str) -> list[Document]:
         """在小 collection 上执行混合检索。"""
@@ -223,6 +259,21 @@ class MultiGranularityRetriever(BaseRetriever):
             return []
         return retriever.invoke(query)
 
+    def set_hyde_embedding(self, embedding: list[float] | None) -> None:
+        """设置/清除 HyDE embedding 覆盖到内部的向量检索器。
+
+        Args:
+            embedding: 假设文档的 embedding 向量，None 清除覆盖
+        """
+        if not self._retrievers_initialized:
+            self._init_retrievers()
+        if self._vector_retriever is not None:
+            self._vector_retriever.embedding_override = embedding
+            logger.info(
+                f"[MultiRetriever] HyDE embedding "
+                f"{'设置' if embedding else '清除'}"
+            )
+
     # ── 父chunk 获取 ──────────────────────────────────────
 
     def _fetch_parents(self, parent_ids: list[str]) -> list[Document]:
@@ -230,6 +281,7 @@ class MultiGranularityRetriever(BaseRetriever):
         import psycopg
         from langchain_core.documents import Document
 
+        t0 = time.time()
         conn_str = vector_store_config.get("connection_string", "")
         psycopg_conn_str = conn_str.replace(
             "postgresql+psycopg://", "postgresql://"
@@ -261,8 +313,14 @@ class MultiGranularityRetriever(BaseRetriever):
                 Document(page_content=row[0], metadata=row[1] or {})
                 for row in rows
             ]
+
+            elapsed = time.time() - t0
+            retrieval_duration.labels(stage="parent_fetch").observe(elapsed)
+            retrieval_docs.labels(stage="parent_fetch").observe(len(docs))
+            postgres_query_duration.labels(operation="parent_fetch").observe(elapsed)
             logger.info(
-                f"[MultiRetriever] 获取父chunk: {len(parent_ids)} ids → {len(docs)} docs"
+                f"[MultiRetriever] 获取父chunk: {len(parent_ids)} ids → "
+                f"{len(docs)} docs | {elapsed:.3f}s"
             )
             return docs
         except Exception as e:

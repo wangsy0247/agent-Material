@@ -6,8 +6,8 @@ RAG MCP Server（完全独立）
 不再通过 sys.path 注入依赖主项目的 agent_material 包。
 
 提供的 Tools:
-    rag_search            — 向量检索，返回相关文档片段
-    rag_query             — RAG 问答（检索 + LLM 生成）
+    rag_search            — 向量检索，返回相关文档片段（支持查询改写）
+    rag_query             — RAG 问答（自动路由 + 可选改写 + LLM 生成）
     rag_load_documents    — 扫描 data/ 目录，增量入队处理
     rag_add_documents     — 手动添加文本到向量库
     rag_delete_by_source  — 按来源路径删除文档
@@ -21,12 +21,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import sys
+import time
 import traceback
+import uuid
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# ── 可观测性 ──
+from rag_mcp_server.observability.structured_logger import (
+    get_logger,
+    set_request_context,
+)
+from rag_mcp_server.observability.metrics import (
+    request_total,
+    request_duration,
+    request_in_flight,
+    retrieval_empty_total,
+)
+from rag_mcp_server.observability.mcp_trace import extract_trace_context as _extract_trace
 
 # 延迟导入 RAG 模块（避免在模块顶层触发重量级初始化）
 _VectorStore = None
@@ -60,8 +74,7 @@ def _get_task_queue():
     return _TaskQueue
 
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger("server")
 
 # ------------------------------------------------------------------
 # 序列化辅助
@@ -88,6 +101,13 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
     from mcp.server import FastMCP
     from mcp.types import ToolAnnotations
 
+    # ── 初始化可观测性 ──
+    try:
+        from rag_mcp_server.observability import init_all
+        init_all(service_name="rag_mcp_server")
+    except Exception:
+        logger.warning("可观测性初始化失败，使用默认日志", exc_info=True)
+
     mcp = FastMCP(
         "rag-server",
         instructions=(
@@ -108,30 +128,98 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
             "根据查询内容从向量数据库中检索最相关的文档片段。"
             "使用混合检索（向量相似度 + BM25 关键词 + CrossEncoder 重排序）。"
             "多粒度模式下返回父chunk以提供更丰富的上下文。"
+            "可选启用查询改写（enable_rewrite=True），支持组合策略（如 step_back+expand）。"
+            "单策略: expand/hyde/step_back/decompose，用 + 组合。"
             "返回文档片段的文本内容、来源文件和元数据。"
         ),
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=True),
     )
-    async def rag_search(query: str) -> str:
-        """检索与查询相关的文档片段。
+    async def rag_search(
+        query: str,
+        enable_rewrite: bool = False,
+        rewrite_strategy: str = "",
+        tracing_meta: dict | None = None,  # MCP Trace Context 跨进程传播
+    ) -> str:
+        """检索与查询相关的文档片段。"""
+        req_id = uuid.uuid4().hex[:12]
+        set_request_context(request_id=req_id)
 
-        Args:
-            query: 查询语句，如 "锂离子电池正极材料有哪些"
-        """
-        logger.info(f"[rag_search] query={query}")
+        # MCP 跨进程 trace context 恢复
+        parent_ctx = _extract_trace(tracing_meta)
         try:
-            service = _get_rag_service()
-            docs = await asyncio.to_thread(service.retriever_docx, query)
+            from opentelemetry import trace
+            tracer = trace.get_tracer("rag_mcp_server")
+        except ImportError:
+            tracer = None
+
+        method = "rag_search"
+        request_in_flight.labels(method=method).inc()
+        start = time.time()
+
+        try:
+            logger.info(
+                "rag_search_start",
+                extra={
+                    "query": query[:100],
+                    "enable_rewrite": enable_rewrite,
+                    "strategy": rewrite_strategy or "default",
+                },
+            )
+            if tracer:
+                with tracer.start_as_current_span(
+                    "rag.search",
+                    context=parent_ctx,
+                ) as span:
+                    span.set_attribute("query", query[:200])
+                    span.set_attribute("enable_rewrite", enable_rewrite)
+                    if rewrite_strategy:
+                        span.set_attribute("strategy", rewrite_strategy)
+                    service = _get_rag_service()
+                    if enable_rewrite:
+                        docs = await asyncio.to_thread(
+                            service._retrieve_with_strategy, query, rewrite_strategy
+                        )
+                    else:
+                        docs = await asyncio.to_thread(service.retriever_docx, query)
+                    span.set_attribute("result_count", len(docs) if docs else 0)
+            else:
+                service = _get_rag_service()
+                if enable_rewrite:
+                    docs = await asyncio.to_thread(
+                        service._retrieve_with_strategy, query, rewrite_strategy
+                    )
+                else:
+                    docs = await asyncio.to_thread(service.retriever_docx, query)
+
             if not docs:
-                return json.dumps({"results": [], "message": "未检索到相关文档"}, ensure_ascii=False)
+                retrieval_empty_total.labels(method=method).inc()
+                request_total.labels(method=method, status="empty").inc()
+                return json.dumps(
+                    {"results": [], "message": "未检索到相关文档"}, ensure_ascii=False
+                )
+
+            request_total.labels(method=method, status="success").inc()
             return json.dumps(
                 {"results": _serialize_docs(docs), "count": len(docs)},
                 ensure_ascii=False,
                 indent=2,
             )
         except Exception as e:
-            logger.error(f"[rag_search] 失败: {e}\n{traceback.format_exc()}")
+            request_total.labels(method=method, status="error").inc()
+            logger.error(
+                "rag_search_failed",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
             return json.dumps({"error": str(e)}, ensure_ascii=False)
+        finally:
+            elapsed = time.time() - start
+            request_duration.labels(method=method).observe(elapsed)
+            request_in_flight.labels(method=method).dec()
+            logger.info(
+                "rag_search_end",
+                extra={"duration_ms": elapsed * 1000},
+            )
 
     # ================================================================
     # Tool: rag_query — RAG 问答
@@ -140,24 +228,87 @@ def create_server(host: str = "127.0.0.1", port: int = 8003) -> "FastMCP":
         name="rag_query",
         description=(
             "基于向量检索结果，调用大语言模型生成回答。"
+            "内置查询路由：自动检测闲聊（直答）、无关问题（拒答）、问题类型标注。"
+            "可选启用查询改写（enable_rewrite=True），支持组合策略（如 step_back+expand）。"
+            "单策略: expand/hyde/step_back/decompose，用 + 组合。"
             "适合需要综合多篇文献进行总结、分析、对比的复杂问题。"
         ),
         annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False, idempotentHint=False),
     )
-    async def rag_query(query: str) -> str:
-        """RAG 问答：检索相关文档并生成回答。
+    async def rag_query(
+        query: str,
+        enable_rewrite: bool = False,
+        rewrite_strategy: str = "",
+        tracing_meta: dict | None = None,  # MCP Trace Context 跨进程传播
+    ) -> str:
+        """RAG 问答：检索相关文档并生成回答（自动路由 + 可选改写）。"""
+        req_id = uuid.uuid4().hex[:12]
+        set_request_context(request_id=req_id)
 
-        Args:
-            query: 用户问题，如 "固态电解质的优缺点"
-        """
-        logger.info(f"[rag_query] query={query}")
+        parent_ctx = _extract_trace(tracing_meta)
         try:
-            service = _get_rag_service()
-            answer = await asyncio.to_thread(service.get_summary, query)
+            from opentelemetry import trace
+            tracer = trace.get_tracer("rag_mcp_server")
+        except ImportError:
+            tracer = None
+
+        method = "rag_query"
+        request_in_flight.labels(method=method).inc()
+        start = time.time()
+
+        try:
+            logger.info(
+                "rag_query_start",
+                extra={
+                    "query": query[:100],
+                    "enable_rewrite": enable_rewrite,
+                    "strategy": rewrite_strategy or "default",
+                },
+            )
+            if tracer:
+                with tracer.start_as_current_span(
+                    "rag.query",
+                    context=parent_ctx,
+                ) as span:
+                    span.set_attribute("query", query[:200])
+                    span.set_attribute("enable_rewrite", enable_rewrite)
+                    if rewrite_strategy:
+                        span.set_attribute("strategy", rewrite_strategy)
+                    service = _get_rag_service()
+                    answer = await asyncio.to_thread(
+                        service.get_summary,
+                        query,
+                        enable_rewrite=enable_rewrite,
+                        rewrite_strategy=rewrite_strategy,
+                    )
+                    span.set_attribute("answer_length", len(answer) if answer else 0)
+            else:
+                service = _get_rag_service()
+                answer = await asyncio.to_thread(
+                    service.get_summary,
+                    query,
+                    enable_rewrite=enable_rewrite,
+                    rewrite_strategy=rewrite_strategy,
+                )
+
+            request_total.labels(method=method, status="success").inc()
             return answer
         except Exception as e:
-            logger.error(f"[rag_query] 失败: {e}\n{traceback.format_exc()}")
+            request_total.labels(method=method, status="error").inc()
+            logger.error(
+                "rag_query_failed",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
             return f"RAG 问答失败: {e}"
+        finally:
+            elapsed = time.time() - start
+            request_duration.labels(method=method).observe(elapsed)
+            request_in_flight.labels(method=method).dec()
+            logger.info(
+                "rag_query_end",
+                extra={"duration_ms": elapsed * 1000},
+            )
 
     # ================================================================
     # Tool: rag_load_documents — 增量扫描入队（非阻塞）

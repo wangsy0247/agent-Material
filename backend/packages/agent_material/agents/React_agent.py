@@ -15,6 +15,8 @@ ReAct Agent - 基于 LangGraph StateGraph 的状态机实现
 
 from __future__ import annotations
 
+import time
+
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
@@ -24,9 +26,16 @@ from agent_material.agents.tools.agent_tools import get_all_tools
 from agent_material.models.model_factory import chat_model
 from agent_material.utils.config_handler import prompt_config
 from agent_material.utils.langsmith_setup import get_run_config
-from agent_material.utils.logger import logger
+from agent_material.observability.structured_logger import get_logger
+from agent_material.observability.metrics import (
+    agent_iteration_count,
+    agent_duration,
+    agent_invocation_total,
+)
 from agent_material.utils.path_tools import get_abs_path
 from agent_material.utils.prompt_loader import get_prompts
+
+logger = get_logger("React_agent")
 
 
 class ReactAgent:
@@ -151,6 +160,7 @@ class ReactAgent:
         }
 
         full_answer = ""
+        t_start = time.time()
 
         async for chunk in self.graph.astream(
             initial_state, config, stream_mode="updates"
@@ -162,9 +172,13 @@ class ReactAgent:
             if "__interrupt__" in chunk:
                 interrupt_tuple = chunk["__interrupt__"]
                 interrupt_value = interrupt_tuple[0].value if interrupt_tuple else {}
+                agent_iteration_count.observe(state.get("iteration_count", 0))
                 logger.warning(
-                    f"[ReactAgent] HITL 中断 | session={active_session_id} | "
-                    f"tools={interrupt_value.get('tool_calls', [])}"
+                    "agent_hitl_interrupt",
+                    extra={
+                        "session_id": active_session_id,
+                        "tools": interrupt_value.get("tool_calls", []),
+                    },
                 )
                 yield {
                     "type": "approval_required",
@@ -184,12 +198,24 @@ class ReactAgent:
                             full_answer += text
                             yield text.strip() + "\n"
 
+        # 记录指标
+        agent_iteration_count.observe(state.get("iteration_count", 0))
+        agent_duration.labels(mode="stream").observe(time.time() - t_start)
+
         # 保存助手回复到记忆系统
         if self.memory_manager and full_answer:
             self.memory_manager.add_assistant_message(
                 active_session_id, full_answer.strip(), user_id=user_id
             )
-            logger.info(f"[ReactAgent] 对话已保存 | session={active_session_id} | user={user_id}")
+            logger.info(
+                "agent_stream_done",
+                extra={
+                    "session_id": active_session_id,
+                    "user_id": user_id,
+                    "iterations": state.get("iteration_count", 0),
+                    "duration_s": time.time() - t_start,
+                },
+            )
 
     async def excutor(self, query, session_id: str | None = None, user_id: str = "default") -> str | dict:
         """执行 Agent 非流式推理，返回完整回答或 HITL 事件。"""

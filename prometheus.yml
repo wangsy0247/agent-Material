@@ -1,0 +1,21 @@
+# Prometheus 抓取配置
+global:
+  scrape_interval: 15s        # 每 15 秒从应用中抓一次指标
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Agent Gateway (FastAPI 主服务, 端口 8080)
+  - job_name: "agent_gateway"
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+        labels:
+          service: "agent_material"
+
+  # RAG MCP Server (如果启用了 HTTP metrics, 端口 9090)
+  # 注意: stdio 模式下 RAG Server 没有 /metrics 端点
+  #       需要在 create_server 中启动 metrics HTTP server 才能抓取
+  - job_name: "rag_mcp_server"
+    static_configs:
+      - targets: ["host.docker.internal:9090"]
+        labels:
+          service: "rag_mcp_server"

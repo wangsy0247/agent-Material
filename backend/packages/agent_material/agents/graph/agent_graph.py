@@ -59,7 +59,13 @@ from typing_extensions import TypedDict
 
 from agent_material.agents.graph.checkpointer_factory import create_checkpointer
 from agent_material.utils.config_handler import agent_config
-from agent_material.utils.logger import logger
+from agent_material.observability.structured_logger import get_logger
+from agent_material.observability.metrics import (
+    graph_node_duration,
+    graph_node_iterations,
+)
+
+logger = get_logger("agent_graph")
 
 # ---- 敏感工具判定（可扩展） ----
 _SENSITIVE_TOOLS: set[str] = {"mp_download"}
@@ -636,6 +642,35 @@ def after_approval(state: AgentState) -> str:
 # ================================================================
 
 
+def _timed_node(name: str, fn):
+    """装饰器：为 LangGraph 节点函数添加延迟指标追踪。"""
+    if asyncio.iscoroutinefunction(fn):
+        async def wrapper(state, *args, **kwargs):
+            t0 = time.time()
+            result = await fn(state, *args, **kwargs)
+            elapsed = time.time() - t0
+            graph_node_duration.labels(node=name).observe(elapsed)
+            graph_node_iterations.labels(node=name).inc()
+            logger.debug(
+                "node_timing",
+                extra={"node": name, "duration_ms": elapsed * 1000},
+            )
+            return result
+    else:
+        def wrapper(state, *args, **kwargs):
+            t0 = time.time()
+            result = fn(state, *args, **kwargs)
+            elapsed = time.time() - t0
+            graph_node_duration.labels(node=name).observe(elapsed)
+            graph_node_iterations.labels(node=name).inc()
+            logger.debug(
+                "node_timing",
+                extra={"node": name, "duration_ms": elapsed * 1000},
+            )
+            return result
+    return wrapper
+
+
 def build_agent_graph(
     chat_model: Any,
     tools: list[BaseTool],
@@ -653,12 +688,12 @@ def build_agent_graph(
     """
     graph = StateGraph(AgentState)
 
-    # 节点注册
-    graph.add_node("memory", partial(memory_node, memory_manager=memory_manager))
-    graph.add_node("agent", partial(agent_node, chat_model=chat_model, tools=tools))
-    graph.add_node("human_approval", human_approval_node)
-    graph.add_node("tools", _make_tool_node_with_logging(tools))
-    graph.add_node("finalize", finalize_node)
+    # 节点注册（带延迟指标）
+    graph.add_node("memory", _timed_node("memory", partial(memory_node, memory_manager=memory_manager)))
+    graph.add_node("agent", _timed_node("agent", partial(agent_node, chat_model=chat_model, tools=tools)))
+    graph.add_node("human_approval", _timed_node("human_approval", human_approval_node))
+    graph.add_node("tools", _timed_node("tools", _make_tool_node_with_logging(tools)))
+    graph.add_node("finalize", _timed_node("finalize", finalize_node))
 
     if _SUMMARIZATION_ENABLED:
         from agent_material.memory.context_compressor import ContextCompressor
@@ -666,7 +701,7 @@ def build_agent_graph(
         compressor = ContextCompressor(model=chat_model)
         graph.add_node(
             "summarize",
-            partial(summarization_node, compressor=compressor),
+            _timed_node("summarize", partial(summarization_node, compressor=compressor)),
         )
 
     # 入口与边

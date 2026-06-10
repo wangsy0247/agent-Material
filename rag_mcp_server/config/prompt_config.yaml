@@ -1,1 +1,7 @@
 rag_prompt_path: "rag_mcp_server/prompts/rag_prompt.txt"
+chat_prompt_path: "rag_mcp_server/prompts/chat_prompt.txt"
+query_classification_prompt_path: "rag_mcp_server/prompts/query_classification.txt"
+query_expansion_prompt_path: "rag_mcp_server/prompts/query_expansion.txt"
+hyde_generation_prompt_path: "rag_mcp_server/prompts/hyde_generation.txt"
+stepback_generation_prompt_path: "rag_mcp_server/prompts/stepback_generation.txt"
+query_decomposition_prompt_path: "rag_mcp_server/prompts/query_decomposition.txt"

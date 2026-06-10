@@ -5,7 +5,14 @@ import time
 import traceback
 
 from rag_mcp_server.db.task_queue import TaskQueue, TaskType
-from rag_mcp_server.utils.logger import logger
+from rag_mcp_server.observability.structured_logger import get_logger
+from rag_mcp_server.observability.metrics import (
+    queue_depth,
+    queue_task_duration,
+    queue_worker_idle,
+)
+
+logger = get_logger("worker")
 
 
 class BackgroundWorker:
@@ -56,46 +63,68 @@ class BackgroundWorker:
 
     def _run(self):
         """Worker 主循环。"""
-        logger.info("[Worker] Worker 线程开始运行")
+        logger.info("worker_loop_started")
         while not self._stop_event.is_set():
             try:
+                # 更新队列深度指标
+                summary = self._queue.get_summary()
+                queue_depth.labels(status="pending").set(summary.get("pending", 0))
+                queue_depth.labels(status="processing").set(summary.get("processing", 0))
+                queue_depth.labels(status="failed").set(summary.get("failed", 0))
+                queue_depth.labels(status="completed").set(summary.get("completed", 0))
+
                 # 先复活可重试的失败任务
                 revived = self._queue.retry_failed(max_retries=3)
                 if revived:
-                    logger.info(f"[Worker] 复活了 {revived} 个可重试任务")
+                    logger.info("worker_revived_tasks", extra={"count": revived})
 
                 # 获取待处理任务
                 tasks = self._queue.dequeue(batch_size=1)
+                if tasks:
+                    queue_worker_idle.set(0)
                 for task in tasks:
                     self._process(task)
+                if not tasks:
+                    queue_worker_idle.inc(self.POLL_INTERVAL)
             except Exception as e:
-                logger.error(f"[Worker] 轮询异常: {e}")
+                logger.error("worker_loop_error", extra={"error": str(e)})
 
             self._stop_event.wait(self.POLL_INTERVAL)
 
-        logger.info("[Worker] Worker 线程已退出")
+        logger.info("worker_loop_exited")
 
     # ── 任务分发 ──────────────────────────────────────────
 
     def _process(self, task):
         """处理单个任务。"""
+        t0 = time.time()
+        task_type = task.task_type
         logger.info(
-            f"[Worker] 处理任务 #{task.id}: {task.task_type} | payload={task.payload}"
+            "worker_task_start",
+            extra={"task_id": task.id, "task_type": task_type, "payload": str(task.payload)[:200]},
         )
         try:
-            if task.task_type == TaskType.INGEST_FILE.value:
+            if task_type == TaskType.INGEST_FILE.value:
                 self._handle_ingest(task)
-            elif task.task_type == TaskType.DELETE_FILE.value:
+            elif task_type == TaskType.DELETE_FILE.value:
                 self._handle_delete(task)
             elif task.task_type == TaskType.REINDEX_ALL.value:
                 self._handle_reindex(task)
             else:
                 raise ValueError(f"未知任务类型: {task.task_type}")
             self._queue.complete(task.id)
-            logger.info(f"[Worker] 任务 #{task.id} 完成")
+            elapsed = time.time() - t0
+            queue_task_duration.labels(type=task_type).observe(elapsed)
+            logger.info(
+                "worker_task_done",
+                extra={"task_id": task.id, "duration_ms": elapsed * 1000},
+            )
         except Exception as e:
+            elapsed = time.time() - t0
+            queue_task_duration.labels(type=task_type).observe(elapsed)
             logger.error(
-                f"[Worker] 任务 #{task.id} 失败: {e}\n{traceback.format_exc()}"
+                "worker_task_failed",
+                extra={"task_id": task.id, "error": str(e), "duration_ms": elapsed * 1000},
             )
             self._queue.fail(task.id, str(e))
 

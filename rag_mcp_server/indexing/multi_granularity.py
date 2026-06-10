@@ -77,6 +77,7 @@ class MultiGranularityIndex:
                 use_jsonb=True,
             )
             logger.info(f"[MultiIndex] small collection 初始化完成: {self._small_name}")
+            self._ensure_vector_index()
         return self._small_store
 
     @property
@@ -89,7 +90,30 @@ class MultiGranularityIndex:
                 use_jsonb=True,
             )
             logger.info(f"[MultiIndex] large collection 初始化完成: {self._large_name}")
+            self._ensure_vector_index()
         return self._large_store
+
+    def _ensure_vector_index(self) -> None:
+        """确保 PGVector embedding 列上的向量索引已创建（幂等安全）。"""
+        index_config = vector_store_config.get("vector_index")
+        if not index_config:
+            return
+
+        try:
+            from rag_mcp_server.rag.vector_index import (
+                build_psycopg_conn_str,
+                create_vector_index,
+            )
+
+            if not self._conn_str:
+                return
+
+            psycopg_conn_str = build_psycopg_conn_str(self._conn_str)
+            create_vector_index(psycopg_conn_str, index_config)
+        except Exception as e:
+            logger.warning(
+                f"[MultiIndex] 向量索引创建异常，检索回退到顺序扫描: {e}"
+            )
 
     # ── 写入 ──────────────────────────────────────────────
 

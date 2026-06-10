@@ -27,7 +27,7 @@ def get_vector_store_config():
 
 
 def get_prompt_config():
-    prompt_config_path = get_abs_path("config/prompts_config.yaml")
+    prompt_config_path = get_abs_path("config/prompt_config.yaml")
     with open(prompt_config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 

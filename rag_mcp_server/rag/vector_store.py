@@ -1,4 +1,6 @@
 import os
+import time
+
 # 兼容 LangChain 0.3.x 和 1.x
 try:
     from langchain.retrievers import EnsembleRetriever
@@ -13,16 +15,15 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from pydantic import ConfigDict
 
+from rag_mcp_server.observability.metrics import (
+    retrieval_duration,
+    retrieval_docs,
+    postgres_query_duration,
+)
+
 from rag_mcp_server.config import vector_store_config
 from rag_mcp_server.models import embedding_model
 from rag_mcp_server.utils.logger import logger
-from rag_mcp_server.rag.file_loader import (
-    txt_loader,
-    md_loader,
-    html_loader,
-    docx_loader,
-    pptx_loader,
-)
 
 from langchain_postgres.vectorstores import PGVector
 
@@ -37,6 +38,9 @@ class VectorSimilarityThresholdRetriever(BaseRetriever):
     LangChain 的 `similarity_score_threshold` 在不同版本中对 score 的处理
     存在不一致（有时把 distance 直接当 similarity 比较），导致召回率异常。
     本检索器显式做转换：similarity = 1 - distance / 2，然后与阈值比较。
+
+    支持 HyDE 模式：设置 embedding_override 后，跳过内部 embed_query()，
+    直接使用预计算的 embedding 做向量检索。
 
     Args:
         vector_store: PGVector 向量库实例
@@ -58,14 +62,21 @@ class VectorSimilarityThresholdRetriever(BaseRetriever):
         self.vector_store = vector_store
         self.k = k
         self.score_threshold = score_threshold
+        # HyDE 模式：非 None 时使用此 embedding 替代 query embedding
+        self.embedding_override: list[float] | None = None
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun | None = None
     ) -> list[Document]:
-        import time
-        start = time.time()
-        # 获取原始 distance（PGVector 的 similarity_search_with_score 返回 distance）
-        docs_with_scores = self.vector_store.similarity_search_with_score(query, k=self.k)
+        t0 = time.time()
+
+        # HyDE 模式：使用预计算 embedding 做向量检索
+        if self.embedding_override is not None:
+            docs_with_scores = self.vector_store.similarity_search_with_score_by_vector(
+                self.embedding_override, k=self.k
+            )
+        else:
+            docs_with_scores = self.vector_store.similarity_search_with_score(query, k=self.k)
 
         results: list[Document] = []
         for doc, distance in docs_with_scores:
@@ -82,7 +93,10 @@ class VectorSimilarityThresholdRetriever(BaseRetriever):
             )
             results.append(docs_with_scores[0][0])
 
-        elapsed = time.time() - start
+        elapsed = time.time() - t0
+        retrieval_duration.labels(stage="vector_search").observe(elapsed)
+        retrieval_docs.labels(stage="vector_search").observe(len(results))
+        postgres_query_duration.labels(operation="vector_search").observe(elapsed)
         logger.debug(f"[PGVectorRetriever] 向量检索完成 | 返回 {len(results)} 条 | 耗时 {elapsed:.3f}s")
         return results
 
@@ -266,56 +280,107 @@ class VectorStore:
             base_retriever=self._hybrid_retriever, max_docs=max_rerank_docs
         )
 
-        # 4. CrossEncoder 重排序器：对截断后的结果精排
+        # 4. 重排序器：对截断后的结果精排
         enable_reranker = vector_store_config.get("enable_reranker", True)
-        if enable_reranker and RERANKER_AVAILABLE:
+        if enable_reranker:
             try:
-                model_path = vector_store_config.get(
-                    "reranker_model", "BAAI/bge-reranker-base"
-                )
+                reranker_cfg = vector_store_config.get("reranker", {})
+                provider = reranker_cfg.get("provider", "dashscope")
 
-                # 判断是本地路径还是 HuggingFace Hub 模型名
-                is_local = os.path.exists(model_path) and os.path.isdir(model_path)
-                if is_local:
-                    logger.info(f"检测到本地重排序模型: {model_path}")
+                if provider == "dashscope":
+                    from rag_mcp_server.rag.dashscope_reranker import DashScopeReranker
+
+                    compressor = DashScopeReranker(
+                        model=reranker_cfg.get("model", "qwen3-rerank"),
+                        top_n=reranker_cfg.get("top_n", 5),
+                    )
+                    self._compression_retriever = ContextualCompressionRetriever(
+                        base_compressor=compressor, base_retriever=truncated_retriever
+                    )
+                    logger.info(
+                        f"DashScope 重排序器初始化成功 | model={reranker_cfg.get('model', 'qwen3-rerank')} | "
+                        f"top_n={reranker_cfg.get('top_n', 5)}"
+                    )
+                elif provider == "local":
+                    self._compression_retriever = self._init_local_reranker(truncated_retriever)
                 else:
-                    logger.info(f"将从 HuggingFace Hub 加载重排序模型: {model_path}")
-
-                # 自动选择 device：GPU 优先，否则 CPU
-                try:
-                    import torch
-
-                    device = "cuda" if torch.cuda.is_available() else "cpu"
-                except ImportError:
-                    device = "cpu"
-                logger.info(f"重排序模型使用设备: {device}")
-
-                cross_encoder = HuggingFaceCrossEncoder(
-                    model_name=model_path,
-                    model_kwargs={"device": device},
-                )
-
-                # 直接赋值会被拒绝，必须使用 object.__setattr__ 绕过校验
-                if hasattr(cross_encoder, "score") and not hasattr(cross_encoder, "predict"):
-                    object.__setattr__(cross_encoder, "predict", cross_encoder.score)
-                compressor = CrossEncoderReranker(
-                    model=cross_encoder, top_n=vector_store_config.get("top_n", 3)
-                )
-                self._compression_retriever = ContextualCompressionRetriever(
-                    base_compressor=compressor, base_retriever=truncated_retriever
-                )
-                logger.info(
-                    f"重排序器初始化成功 | 最大重排序文档数: {max_rerank_docs}"
-                )
+                    logger.warning(f"未知的重排序 provider: {provider}，跳过重排序")
+                    self._compression_retriever = None
             except Exception as e:
                 logger.error(f"重排序器初始化失败: {e}")
                 self._compression_retriever = None
         else:
-            if not enable_reranker:
-                logger.info("重排序器已禁用（enable_reranker=false），使用混合检索结果直接返回")
-            elif not RERANKER_AVAILABLE:
-                logger.warning("重排序依赖未安装，跳过重排序")
+            logger.info("重排序器已禁用（enable_reranker=false），使用混合检索结果直接返回")
             self._compression_retriever = None
+
+        # 5. 向量索引（HNSW / IVFFlat）：加速 PGVector 向量检索
+        self._ensure_vector_index()
+
+    def _ensure_vector_index(self) -> None:
+        """确保 PGVector embedding 列上的向量索引已创建（幂等安全）。
+
+        首次调用时创建索引，后续调用为 no-op（IF NOT EXISTS）。
+        失败仅记录警告，不阻断检索链路。
+        """
+        index_config = vector_store_config.get("vector_index")
+        if not index_config:
+            return
+
+        try:
+            from rag_mcp_server.rag.vector_index import (
+                build_psycopg_conn_str,
+                create_vector_index,
+            )
+
+            conn_str = vector_store_config.get("connection_string", "")
+            if not conn_str:
+                logger.warning("[VectorStore] 未配置 connection_string，跳过向量索引创建")
+                return
+
+            psycopg_conn_str = build_psycopg_conn_str(conn_str)
+            create_vector_index(psycopg_conn_str, index_config)
+        except Exception as e:
+            logger.warning(f"[VectorStore] 向量索引创建异常，检索回退到顺序扫描: {e}")
+
+    def _init_local_reranker(self, truncated_retriever):
+        """本地 CrossEncoder 重排序器（local provider 降级路径）。
+
+        需要安装 sentence-transformers 和 torch。
+        """
+        if not RERANKER_AVAILABLE:
+            logger.warning("重排序依赖未安装（pip install sentence-transformers），跳过重排序")
+            return None
+
+        model_path = vector_store_config.get(
+            "reranker", {}
+        ).get("model_path", "BAAI/bge-reranker-base")
+
+        is_local = os.path.exists(model_path) and os.path.isdir(model_path)
+        if is_local:
+            logger.info(f"检测到本地重排序模型: {model_path}")
+        else:
+            logger.info(f"将从 HuggingFace Hub 加载重排序模型: {model_path}")
+
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
+        logger.info(f"重排序模型使用设备: {device}")
+
+        cross_encoder = HuggingFaceCrossEncoder(
+            model_name=model_path,
+            model_kwargs={"device": device},
+        )
+        if hasattr(cross_encoder, "score") and not hasattr(cross_encoder, "predict"):
+            object.__setattr__(cross_encoder, "predict", cross_encoder.score)
+        compressor = CrossEncoderReranker(
+            model=cross_encoder, top_n=vector_store_config.get("top_n", 3)
+        )
+        logger.info("本地 CrossEncoder 重排序器初始化成功")
+        return ContextualCompressionRetriever(
+            base_compressor=compressor, base_retriever=truncated_retriever
+        )
 
     def get_retriever(self):
         """返回检索器（首次调用时初始化，避免模块导入时触发 segfault）。
@@ -331,6 +396,30 @@ class VectorStore:
             self._init_retrievers()
             self._retrievers_initialized = True
         return self._compression_retriever or self._hybrid_retriever
+
+    def set_hyde_embedding(self, embedding: list[float] | None) -> None:
+        """设置/清除 HyDE embedding 覆盖，使向量检索使用假设文档的 embedding。
+
+        在多粒度模式下传播到 MultiGranularityRetriever 内部的向量检索器；
+        标准模式下传播到 EnsembleRetriever 内部的 VectorSimilarityThresholdRetriever。
+
+        Args:
+            embedding: 假设文档的 embedding 向量，传入 None 清除覆盖恢复默认行为
+        """
+        if self._multi_gran_enabled and self._multi_retriever is not None:
+            self._multi_retriever.set_hyde_embedding(embedding)
+        elif self._hybrid_retriever is not None:
+            # 标准模式：找到 EnsembleRetriever 中的 VectorSimilarityThresholdRetriever
+            if hasattr(self._hybrid_retriever, "retrievers"):
+                for r in self._hybrid_retriever.retrievers:
+                    if isinstance(r, VectorSimilarityThresholdRetriever):
+                        r.embedding_override = embedding
+                        logger.info(
+                            f"[VectorStore] HyDE embedding "
+                            f"{'设置' if embedding else '清除'}（标准模式）"
+                        )
+                        return
+            logger.warning("[VectorStore] 未找到向量检索器，无法设置 HyDE embedding")
 
     def _init_multi_retriever(self):
         """初始化多粒度检索器。"""

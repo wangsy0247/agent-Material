@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from __future__ import annotations
+
 import logging
+import time
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -15,6 +18,7 @@ from agent_material.mcp.session_pool import get_session_pool
 from agent_material.reflection import resolve_variable
 from agent_material.tools.sync import make_sync_tool_wrapper
 from agent_material.tools.types import Runtime
+from agent_material.observability.mcp_trace import inject_trace_context
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +125,24 @@ def _make_session_pool_tool(
         runtime: Runtime | None = None,
         **arguments: Any,
     ) -> Any:
+        t0 = time.time()
         thread_id = _extract_thread_id(runtime)
+
+        # ── 可观测性：注入 MCP Trace Context ──
+        try:
+            arguments = inject_trace_context(arguments)
+        except Exception:
+            pass
+
+        try:
+            from agent_material.observability.metrics import (
+                mcp_tool_call_total,
+                mcp_tool_call_duration,
+            )
+            _metrics_available = True
+        except ImportError:
+            _metrics_available = False
+
         session = await pool.get_session(server_name, thread_id, connection)
 
         if tool_interceptors:
@@ -168,6 +189,14 @@ def _make_session_pool_tool(
                 else:
                     text_parts.append(str(block))
             content = "\n".join(text_parts)
+
+        # ── 上报 MCP 工具调用指标 ──
+        if _metrics_available:
+            elapsed = time.time() - t0
+            status = "error" if call_tool_result.isError else "success"
+            mcp_tool_call_total.labels(server=server_name, tool=original_name, status=status).inc()
+            mcp_tool_call_duration.labels(server=server_name, tool=original_name).observe(elapsed)
+
         return content, artifact
 
     return StructuredTool(
