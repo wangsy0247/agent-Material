@@ -43,7 +43,7 @@ splitter_type: "semantic"       # 手动添加文档时的默认切分器
 
 # 检索配置
 k: 5                     # 向量/BM25 检索返回数量
-score_threshold: 0.3     # 向量相似度阈值
+score_threshold: 0.5     # 向量相似度阈值
 top_n: 3                 # 重排序后返回数量
 max_rerank_docs: 8       # 进入重排序器的最大文档数
 

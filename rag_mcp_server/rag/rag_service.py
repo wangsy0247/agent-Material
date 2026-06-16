@@ -27,13 +27,24 @@ def _get_run_config(
     tags: list[str] | None = None,
     extra_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """构建 LangChain run config（简化版，不依赖 LangSmith）。"""
+    """构建 LangChain run config（支持 LangFuse Callback 注入）。"""
     metadata: dict[str, Any] = {"query": query}
     if extra_metadata:
         metadata.update(extra_metadata)
     config: dict[str, Any] = {"run_name": run_name, "metadata": metadata}
     if tags:
         config["tags"] = tags
+
+    # 注入 LangFuse Callback Handler（若已初始化）
+    try:
+        from agent_material.utils.langfuse_setup import get_langfuse_handler
+        handler = get_langfuse_handler()
+        if handler:
+            callbacks = config.setdefault("callbacks", [])
+            if isinstance(callbacks, list):
+                callbacks.append(handler)
+    except ImportError:
+        pass
     return config
 
 

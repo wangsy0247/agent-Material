@@ -42,7 +42,7 @@ extension_pipeline:
 
 # ── 检索配置 ──────────────────────────────────────────────────
 k: 10                     # 向量/BM25 检索返回数量
-score_threshold: 0.3      # 向量相似度阈值
+score_threshold: 0.5      # 向量相似度阈值
 top_n: 5                  # 重排序后返回数量
 max_rerank_docs: 10       # 进入重排序器的最大文档数
 
@@ -52,7 +52,7 @@ enable_reranker: true
 reranker:
   provider: "dashscope"          # dashscope=阿里云API重排序, local=本地HuggingFace模型
   model: "qwen3-rerank"          # DashScope 重排序模型（gte-rerank 已下线）
-  top_n: 5                       # 重排序后返回数量
+  top_n: 3                       # 重排序后返回数量
 bm25_weight: 0.5          # BM25 检索权重
 vector_weight: 0.5        # 向量检索权重
 

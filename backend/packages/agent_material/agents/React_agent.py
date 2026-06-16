@@ -25,7 +25,7 @@ from agent_material.agents.graph.agent_graph import build_agent_graph
 from agent_material.agents.tools.agent_tools import get_all_tools
 from agent_material.models.model_factory import chat_model
 from agent_material.utils.config_handler import prompt_config
-from agent_material.utils.langsmith_setup import get_run_config
+from agent_material.utils.langfuse_setup import get_run_config
 from agent_material.observability.structured_logger import get_logger
 from agent_material.observability.metrics import (
     agent_iteration_count,

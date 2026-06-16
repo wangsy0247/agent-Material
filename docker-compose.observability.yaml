@@ -4,6 +4,10 @@
 # 启动: docker-compose -f docker-compose.observability.yaml up -d
 # 停止: docker-compose -f docker-compose.observability.yaml down
 # 日志: docker-compose -f docker-compose.observability.yaml logs -f
+#
+# 包含: Jaeger (追踪) + Prometheus (指标) + Grafana (可视化)
+#        + Loki + Promtail (日志聚合) + LangFuse (LLM 追踪)
+#        + pgvector (向量数据库)
 # =============================================================
 
 version: "3.3"
@@ -14,8 +18,8 @@ services:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/jaegertracing/all-in-one:latest
     container_name: jaeger
     ports:
-      - "16686:16686"   # Jaeger UI (浏览器打开 http://localhost:16686)
-      - "4318:4318"     # OTLP HTTP 接收端 (应用发送 Span 到这里)
+      - "16686:16686"   # http://localhost:16686
+      - "4318:4318"     # OTLP HTTP 接收端
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     restart: unless-stopped
@@ -37,12 +41,112 @@ services:
       - '--web.enable-lifecycle'
     restart: unless-stopped
 
+  # ── Loki: 日志聚合存储 ────────────────────────────────────
+  loki:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/grafana/loki:2.9.10
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  # ── Promtail: 日志采集代理，读 JSON 文件推送到 Loki ───────
+  promtail:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/grafana/promtail:2.9.5 
+    container_name: promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - ./logs:/logs:ro
+    command: -config.file=/etc/promtail/config.yml
+    restart: unless-stopped
+
+  # ── PostgreSQL + pgvector: 向量数据库 ─────────────────────
+  pgvector:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pgvector/pgvector:pg16
+    container_name: pgvector
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=langgraph
+    volumes:
+      - pg16_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d langgraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Redis: LangFuse v3 event queue
+  redis:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+
+  # ── ClickHouse: LangFuse v3 分析存储 ──────────────────────
+  clickhouse:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    environment:
+      - CLICKHOUSE_DB=langfuse
+      - CLICKHOUSE_USER=langfuse
+      - CLICKHOUSE_PASSWORD=langfuse
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    restart: unless-stopped
+
+  # MinIO: LangFuse v3 S3 event storage
+  minio:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  # ── LangFuse: LLM 追踪服务（复用 pgvector 数据库）─────────
+  langfuse:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/langfuse/langfuse:latest
+    container_name: langfuse
+    ports:
+      - "3001:3000"     # http://localhost:3001
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@pgvector:5432/langfuse
+      - NEXTAUTH_SECRET=mysecretchangeme1234567890
+      - NEXTAUTH_URL=http://localhost:3001
+      - SALT=mysaltchangeme1234567890
+      - ENCRYPTION_KEY=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - CLICKHOUSE_URL=http://langfuse:langfuse@clickhouse:8123
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://langfuse:langfuse@clickhouse:9000
+      - CLICKHOUSE_USER=langfuse
+      - CLICKHOUSE_PASSWORD=langfuse
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=langfuse
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - REDIS_CONNECTION_STRING=redis://redis:6379
+      - LANGFUSE_S3_EVENT_UPLOAD_POSTGRES_LOG_ENABLED=true
+    depends_on:
+      - pgvector
+      - clickhouse
+      - minio
+      - redis
+    restart: unless-stopped
+
   # ── Grafana: 统一可视化仪表板 ────────────────────────────
   grafana:
     image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/grafana/grafana:main
     container_name: grafana
     ports:
-      - "3000:3000"     # Grafana UI (浏览器打开 http://localhost:3000)
+      - "3000:3000"
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
@@ -56,5 +160,7 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
-
-
+  pg16_data:
+    external: true
+  clickhouse_data:
+  minio_data:

@@ -8,12 +8,12 @@ from langchain_anthropic import ChatAnthropic
 from langchain_community.chat_models import ChatTongyi
 from langchain_community.embeddings import DashScopeEmbeddings
 from agent_material.utils.config_handler import agent_config, rag_config
-from agent_material.utils.langsmith_setup import setup_langsmith
+from agent_material.utils.langfuse_setup import setup_langfuse
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 load_dotenv()
-# 程序启动时尝试初始化 LangSmith（静默失败不影响业务）
-setup_langsmith()
+# 程序启动时尝试初始化 LangFuse（静默失败不影响业务）
+setup_langfuse()
 
 
 class BaseModelFactory(ABC):
