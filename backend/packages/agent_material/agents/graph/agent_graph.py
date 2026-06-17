@@ -363,6 +363,7 @@ async def summarization_node(
             max_tokens=_SUMMARIZATION_CFG.get("max_tokens", 4000),
             protect_first_n=0,
             protect_last_n=_SUMMARIZATION_PRESERVE_LAST_N,
+            session_id=state.get("session_id"),
         )
     except Exception as e:
         logger.error(f"[summarization_node] ContextCompressor 压缩失败: {e}，跳过")

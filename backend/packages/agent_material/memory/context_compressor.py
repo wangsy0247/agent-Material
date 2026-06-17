@@ -151,6 +151,7 @@ class ContextCompressor:
         self._chain_first = None
         self._chain_update = None
         self._previous_summary: str | None = None
+        self._previous_session_id: str | None = None
         self._ineffective_count: int = 0
         self._cooldown_until: float = 0.0
         self._last_original_tokens: int = 0
@@ -203,6 +204,7 @@ class ContextCompressor:
         max_tokens: int = 8000,
         protect_first_n: int = 1,
         protect_last_n: int = 4,
+        session_id: str | None = None,
     ) -> ContextWindow:
         """压缩消息列表
 
@@ -217,11 +219,17 @@ class ContextCompressor:
             max_tokens: 压缩后目标最大 token 数
             protect_first_n: 保留前 N 条消息（通常是系统提示）
             protect_last_n: 保留后 N 条消息（最近对话）
+            session_id: 会话 ID，用于检测跨会话切换时重置迭代摘要
 
         Returns:
             压缩后的 ContextWindow
         """
         n: int = len(messages)
+
+        # 检测跨会话切换：不同会话不能共享迭代摘要
+        if session_id and session_id != self._previous_session_id:
+            self._previous_summary = None
+            self._previous_session_id = session_id
 
         if n <= protect_first_n + protect_last_n + 2:
             # 消息太少，不值得压缩，直接截断工具结果
@@ -310,8 +318,6 @@ class ContextCompressor:
         result.total_tokens = estimate_messages_tokens(
             [m.to_lc_message() for m in compressed_messages]
         )
-        result.compression_count = 1
-        result.last_compression_at = time.time()
 
         # 计算节省并更新反颠簸计数
         saved_tokens: int = original_tokens - result.total_tokens
@@ -525,6 +531,7 @@ class ContextCompressor:
     def reset(self) -> None:
         """重置压缩器状态（用于新会话或 /reset）"""
         self._previous_summary = None
+        self._previous_session_id = None
         self._ineffective_count = 0
         self._cooldown_until = 0.0
         self._last_original_tokens = 0

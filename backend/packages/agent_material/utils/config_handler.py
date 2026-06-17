@@ -50,6 +50,12 @@ def get_memory_config():
         return yaml.safe_load(f)
 
 
+def get_queue_config():
+    queue_config_path = get_abs_path("config/queue_config.yaml")
+    with open(queue_config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 rag_config = get_rag_config()
 agent_config = get_agent_config()
 vector_store_config = get_vector_store_config()
@@ -58,6 +64,7 @@ prompt_config = get_prompt_config()
 sc_config = get_sc_config()
 # mp_config = get_mp_config()
 memory_config = get_memory_config()
+queue_config = get_queue_config()
 
 if __name__ == "__main__":
     print(rag_config)

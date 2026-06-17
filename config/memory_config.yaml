@@ -10,10 +10,8 @@ manager:
   enable_compression: true          # 是否启用上下文压缩
 
 # ---- L1 短期记忆 (Short-term Memory) ----
-short_term:
-  compress_threshold: 0.75          # 触发压缩的阈值（占 max_tokens 比例）
-  protect_first_n: 1                # 保护头部消息数（通常保留系统提示）
-  protect_last_n: 4                 # 保护尾部消息数（保留最近对话）
+# 压缩已由 LangGraph summarization_node 接管，STM 仅维护消息列表和 Token 计数
+short_term: {}
 
 # ---- L2 中期记忆 (Session Store) ----
 session_store:

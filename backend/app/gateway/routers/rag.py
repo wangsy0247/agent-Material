@@ -2,7 +2,7 @@
 RAG 路由（REST API 直连版）
 
 为前端 RAG 管理页面提供直接的 REST API 调用能力，
-绕过 MCP 协议，直接调用 rag_mcp_server 内部模块。
+绕过 MCP 协议，直接调用 rag_engine 内部模块。
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _get_vector_store():
                 "或手动执行: export LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7"
             )
 
-        from rag_mcp_server.rag.vector_store import VectorStore
+        from agent_material.rag_engine.vector_store import VectorStore
 
         _VectorStore = VectorStore()
     return _VectorStore
@@ -58,7 +58,7 @@ def _get_vector_store():
 def _get_rag_service():
     global _RagService
     if _RagService is None:
-        from rag_mcp_server.rag.rag_service import RagService
+        from agent_material.rag_engine.rag_service import RagService
 
         _RagService = RagService()
     return _RagService
@@ -116,7 +116,7 @@ async def rag_stats(current_user: UserInfo = Depends(get_current_user)):
     """获取向量库统计信息：文档总数、配置参数等。"""
     try:
         store = _get_vector_store()
-        from rag_mcp_server.config import vector_store_config
+        from agent_material.utils.config_handler import vector_store_config
 
         def _mask_conn_str(conn_str: str) -> str:
             try:

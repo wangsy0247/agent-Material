@@ -111,28 +111,27 @@ async def lifespan(app: FastAPI):
 
     from agent_material.utils.config_handler import agent_config
 
-    # MCP 模式：使用 deer-flow 风格的缓存初始化
+    # MP 工具模式: local (RAG 进程内直连 + MCP 其他工具) / mcp (全部 MCP)
     mp_tool_mode = agent_config.get("mp_tool_mode", "local")
     _mcp_health_task: asyncio.Task | None = None
 
-    if mp_tool_mode == "mcp":
-        try:
-            from agent_material.mcp.cache import initialize_mcp_tools
-            tools = await initialize_mcp_tools()
-            logger.info(f"✅ MCP 连接完成 | 远程工具={[t.name for t in tools]}")
+    if mp_tool_mode == "local":
+        logger.info("🔧 MP 工具模式: 本地直连（RAG 工具进程内调用 agent_material.rag_engine）")
 
-            # 启动 MCP 健康检查后台任务（检测配置文件 mtime 变化）
-            _mcp_health_task = asyncio.create_task(
-                _mcp_health_monitor(), name="mcp-health-monitor"
-            )
-            logger.info("🩺 MCP 健康检查后台任务已启动")
-        except Exception as e:
-            logger.warning(f"⚠️ MCP 连接失败: {e} | Agent 将回退到本地模式")
-    else:
-        logger.info("🔧 MP 工具模式: 本地直连")
+    # MCP 工具初始化（material-project 等非 RAG 工具仍通过 MCP 加载）
+    try:
+        from agent_material.mcp.cache import initialize_mcp_tools
+        tools = await initialize_mcp_tools()
+        logger.info(f"✅ MCP 连接完成 | 远程工具={[t.name for t in tools]}")
 
-    # 注意：RAG 组件已解耦至 rag_mcp_server/，不再在主应用预热。
-    #       rag_mcp_server 会在首次 MCP Tool 调用时自行懒加载。
+        _mcp_health_task = asyncio.create_task(
+            _mcp_health_monitor(), name="mcp-health-monitor"
+        )
+        logger.info("🩺 MCP 健康检查后台任务已启动")
+    except Exception as e:
+        logger.warning(f"⚠️ MCP 连接失败: {e} | Agent 将仅使用本地工具")
+
+    # 注意：RAG 组件通过 rag_local_tools 进程内懒加载，无需预热。
     logger.info("=" * 50)
     yield
 
@@ -146,13 +145,12 @@ async def lifespan(app: FastAPI):
             pass
         logger.info("✅ MCP 健康检查任务已取消")
 
-    if mp_tool_mode == "mcp":
-        try:
-            from agent_material.mcp.cache import reset_mcp_tools_cache
-            reset_mcp_tools_cache()
-            logger.info("✅ MCP 缓存已重置")
-        except Exception as e:
-            logger.warning(f"⚠️ MCP 缓存重置失败: {e}")
+    try:
+        from agent_material.mcp.cache import reset_mcp_tools_cache
+        reset_mcp_tools_cache()
+        logger.info("✅ MCP 缓存已重置")
+    except Exception as e:
+        logger.warning(f"⚠️ MCP 缓存重置失败: {e}")
 
     # 关闭 Checkpointer 持久化资源
     try:

@@ -148,7 +148,66 @@ memory_store_size = Gauge(
 )
 
 # ══════════════════════════════════════════════════════════════════
-# 7. 流式输出指标 (Agent SSE 流式)
+# 7. RAG 检索指标 (从 rag_mcp_server 合并)
+# ══════════════════════════════════════════════════════════════════
+
+retrieval_duration = Histogram(
+    "rag_retrieval_duration_seconds", "检索各阶段延迟",
+    ["stage"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0],
+    registry=REGISTRY,
+)
+retrieval_docs = Histogram(
+    "rag_retrieval_docs_count", "各阶段返回的文档数",
+    ["stage"],
+    buckets=[1, 3, 5, 10, 20, 50, 100],
+    registry=REGISTRY,
+)
+retrieval_empty_total = Counter(
+    "rag_retrieval_empty_total", "零结果检索次数",
+    ["method"], registry=REGISTRY,
+)
+postgres_query_duration = Histogram(
+    "rag_postgres_query_duration_seconds", "PostgreSQL 查询延迟",
+    ["operation"],
+    buckets=[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
+    registry=REGISTRY,
+)
+
+# RAG 请求指标 (原 rag_mcp_server server 层)
+request_total = Counter(
+    "rag_request_total", "RAG 请求总数",
+    ["method", "status"], registry=REGISTRY,
+)
+request_duration = Histogram(
+    "rag_request_duration_seconds", "RAG 请求总延迟",
+    ["method"],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0],
+    registry=REGISTRY,
+)
+request_in_flight = Gauge(
+    "rag_request_in_flight", "当前正在处理的 RAG 请求数",
+    ["method"], registry=REGISTRY,
+)
+
+# RAG 任务队列指标
+queue_depth = Gauge(
+    "rag_queue_depth", "任务队列深度",
+    ["status"], registry=REGISTRY,
+)
+queue_task_duration = Histogram(
+    "rag_queue_task_duration_seconds", "单个后台任务处理耗时",
+    ["type"],
+    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0],
+    registry=REGISTRY,
+)
+queue_worker_idle = Gauge(
+    "rag_queue_worker_idle_seconds", "Worker 空闲时间",
+    registry=REGISTRY,
+)
+
+# ══════════════════════════════════════════════════════════════════
+# 9. 流式输出指标 (Agent SSE 流式)
 # ══════════════════════════════════════════════════════════════════
 
 stream_first_token_latency = Histogram(
@@ -171,7 +230,7 @@ stream_duration = Histogram(
 )
 
 # ══════════════════════════════════════════════════════════════════
-# 8. 辅助工具
+# 10. 辅助工具
 # ══════════════════════════════════════════════════════════════════
 
 

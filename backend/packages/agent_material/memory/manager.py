@@ -411,7 +411,6 @@ class MemoryManager:
             "messages_in_history": len(stm.messages),
             "total_tokens": stm.total_tokens,
             "max_tokens": stm.max_tokens,
-            "compression_count": stm._context.compression_count,
         }
 
     def get_stats(self, user_id: str = "default") -> dict:

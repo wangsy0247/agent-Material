@@ -161,6 +161,7 @@ class ReactAgent:
 
         full_answer = ""
         t_start = time.time()
+        final_state = initial_state
 
         async for chunk in self.graph.astream(
             initial_state, config, stream_mode="updates"
@@ -172,7 +173,7 @@ class ReactAgent:
             if "__interrupt__" in chunk:
                 interrupt_tuple = chunk["__interrupt__"]
                 interrupt_value = interrupt_tuple[0].value if interrupt_tuple else {}
-                agent_iteration_count.observe(state.get("iteration_count", 0))
+                agent_iteration_count.observe(final_state.get("iteration_count", 0))
                 logger.warning(
                     "agent_hitl_interrupt",
                     extra={
@@ -199,7 +200,7 @@ class ReactAgent:
                             yield text.strip() + "\n"
 
         # 记录指标
-        agent_iteration_count.observe(state.get("iteration_count", 0))
+        agent_iteration_count.observe(final_state.get("iteration_count", 0))
         agent_duration.labels(mode="stream").observe(time.time() - t_start)
 
         # 保存助手回复到记忆系统
@@ -212,7 +213,7 @@ class ReactAgent:
                 extra={
                     "session_id": active_session_id,
                     "user_id": user_id,
-                    "iterations": state.get("iteration_count", 0),
+                    "iterations": final_state.get("iteration_count", 0),
                     "duration_s": time.time() - t_start,
                 },
             )

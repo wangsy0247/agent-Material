@@ -86,5 +86,3 @@ class ContextWindow(BaseModel):
     messages: list[MessageRecord] = Field(default_factory=list, description="当前消息列表")
     total_tokens: int = Field(default=0, description="当前总token数")
     max_tokens: int = Field(default=8000, description="最大token预算")
-    compression_count: int = Field(default=0, description="已压缩次数")
-    last_compression_at: float | None = Field(default=None, description="上次压缩时间")

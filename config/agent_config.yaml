@@ -19,7 +19,7 @@ summarization:
   preserve_last_n: 6         # 压缩时保留最近 N 条消息
 
 # MP 工具运行模式: "local"(进程内直连) ｜ "mcp"(远程 MCP Server)
-mp_tool_mode: "mcp"
+mp_tool_mode: "local"
 
 # 敏感操作关键词列表（用于 HITL 人工审批匹配）
 # 同时支持精确匹配和前缀化工具的后缀匹配
