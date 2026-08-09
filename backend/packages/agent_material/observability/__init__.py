@@ -27,7 +27,6 @@ from agent_material.observability.metrics import (
     REGISTRY,
     StreamMetrics,
     get_metrics,
-    track_stage,
 )
 
 

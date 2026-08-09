@@ -114,7 +114,7 @@ def _split_all_chunks(
                     continue
 
             if writer is None:
-                logger.error(f"[MinerU] 未找到 PdfWriter")
+                logger.error("[MinerU] 未找到 PdfWriter")
                 continue
 
             for i in range(start - 1, min(end, len(reader.pages))):
@@ -323,7 +323,7 @@ def mineru_pdf_loader(file_path: str) -> list[Document]:
     parsed = _batch_extract(chunks, max_workers=BATCH_MAX_WORKERS)
 
     # Phase 3: 合并 + 清理
-    logger.info(f"[MinerU] Phase 3/3: 合并结果 & 清理临时文件")
+    logger.info("[MinerU] Phase 3/3: 合并结果 & 清理临时文件")
     full_md, ok, fail = _merge_and_cleanup(parsed, chunks)
 
     metadata = {

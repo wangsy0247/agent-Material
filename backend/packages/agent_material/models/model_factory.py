@@ -1,11 +1,8 @@
-import os
 
 from abc import ABC, abstractmethod
 from typing import Optional
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
-from langchain_anthropic import ChatAnthropic
-from langchain_community.chat_models import ChatTongyi
 from langchain_community.embeddings import DashScopeEmbeddings
 from agent_material.utils.config_handler import agent_config, rag_config
 from agent_material.utils.langfuse_setup import setup_langfuse

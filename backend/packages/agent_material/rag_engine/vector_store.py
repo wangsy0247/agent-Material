@@ -423,7 +423,6 @@ class VectorStore:
 
     def _init_multi_retriever(self):
         """初始化多粒度检索器。"""
-        from agent_material.rag_engine.indexing.multi_granularity import MultiGranularityIndex
         from agent_material.rag_engine.indexing.multi_gran_retriever import MultiGranularityRetriever
 
         mi = self._get_multi_index()

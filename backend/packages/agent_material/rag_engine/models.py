@@ -4,7 +4,6 @@ Embedding 模型统一使用 AsyncDashScopeEmbeddings（异步批量 + 速率限
 通过同步兼容接口 embed_documents() / embed_query() 与 LangChain PGVector 集成。
 """
 
-import os
 from typing import Optional
 
 from langchain_core.language_models import BaseChatModel

@@ -2,7 +2,6 @@
 
 import threading
 import time
-import traceback
 
 from agent_material.rag_engine.db.task_queue import TaskQueue, TaskType
 from agent_material.observability.structured_logger import get_logger

@@ -24,15 +24,18 @@ def init_otel(service_name: str | None = None, otlp_endpoint: str | None = None)
     })
     provider = TracerProvider(resource=resource)
 
-    try:
-        endpoint = otlp_endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces")
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        exporter = OTLPSpanExporter(endpoint=endpoint)
-        provider.add_span_processor(BatchSpanProcessor(exporter, max_queue_size=2048, max_export_batch_size=512, schedule_delay_millis=5000))
-    except ImportError:
-        _logger.warning("opentelemetry-exporter-otlp 未安装，使用 ConsoleSpanExporter")
-        from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    # 本地 Jaeger 已移除：仅当显式配置 OTEL_EXPORTER_OTLP_ENDPOINT 时才导出
+    # （如对接 Langfuse OTLP 端点或自建 collector）；否则 span 不导出、不报错。
+    endpoint = otlp_endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if endpoint:
+        try:
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            exporter = OTLPSpanExporter(endpoint=endpoint)
+            provider.add_span_processor(BatchSpanProcessor(exporter, max_queue_size=2048, max_export_batch_size=512, schedule_delay_millis=5000))
+        except ImportError:
+            _logger.warning("opentelemetry-exporter-otlp 未安装，OTel span 不导出")
+    else:
+        _logger.info("OTEL_EXPORTER_OTLP_ENDPOINT 未设置，OTel span 不导出（LLM 追踪走 LangFuse）")
 
     trace.set_tracer_provider(provider)
     return provider

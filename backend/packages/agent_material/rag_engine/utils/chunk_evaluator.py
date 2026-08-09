@@ -726,7 +726,7 @@ class ChunkEvaluator:
     def print_compare(report: CompareReport) -> None:
         """打印策略对比报告。"""
         print(f"\n{'='*60}")
-        print(f"  切分策略对比报告")
+        print("  切分策略对比报告")
         print(f"{'='*60}")
         print(f"  {'策略':<16} {'chunks':>6} {'边界':>6} {'均匀':>6} {'信息':>6} {'排名':>4}")
         print(f"  {'─'*16} {'─'*6} {'─'*6} {'─'*6} {'─'*6} {'─'*4}")

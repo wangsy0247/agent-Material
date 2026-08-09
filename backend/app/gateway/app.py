@@ -191,9 +191,12 @@ app = _FastAPIClass(
 # ==================== 中间件配置 ====================
 
 # CORS：允许前端跨域调用
+# 生产环境通过 AGENT_CORS_ORIGINS 环境变量收紧为具体域名（逗号分隔）；
+# 缺省 ["*"] 保持开发便利（注意 "*" 与 allow_credentials=True 组合时浏览器不允许带凭据）
+_cors_origins = [o.strip() for o in os.environ.get("AGENT_CORS_ORIGINS", "*").split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应限制为具体域名
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -272,7 +275,7 @@ async def api_info():
 
 @app.get("/metrics", summary="Prometheus 指标", include_in_schema=False)
 async def metrics():
-    """Prometheus 格式的指标端点，供 Grafana 抓取。"""
+    """Prometheus 格式的指标端点（可选，需自行部署 Prometheus 抓取）。"""
     from fastapi.responses import Response
     try:
         from agent_material.observability.metrics import get_metrics

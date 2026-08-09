@@ -9,7 +9,6 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 from agent_material.rag_engine.models import chat_model
 from agent_material.utils.config_handler import vector_store_config, prompt_config

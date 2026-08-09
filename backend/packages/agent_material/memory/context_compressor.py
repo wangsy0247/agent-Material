@@ -12,7 +12,6 @@
 
 import json
 import time
-from typing import Any
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser

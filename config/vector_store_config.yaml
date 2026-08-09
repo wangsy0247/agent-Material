@@ -23,7 +23,7 @@ splitters:
 
 character_name: agent
 # PostgreSQL + pgvector 连接字符串
-connection_string: "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres"
+connection_string: "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/postgres"
 
 document_directory: data
 # allow_type: [".pdf", ".txt", ".md", ".html", ".docx", ".pptx"]

@@ -2,7 +2,6 @@ import os
 import hashlib
 from typing import Union
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_core import documents
 from agent_material.utils.path_tools import get_abs_path
 from agent_material.utils.logger import logger
 

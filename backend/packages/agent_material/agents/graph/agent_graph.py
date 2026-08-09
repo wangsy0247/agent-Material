@@ -54,7 +54,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 from typing_extensions import TypedDict
 
 from agent_material.agents.graph.checkpointer_factory import create_checkpointer

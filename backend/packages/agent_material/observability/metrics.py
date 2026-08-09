@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager
-from typing import Any
 
 from prometheus_client import (
     CollectorRegistry,
@@ -266,21 +264,6 @@ class StreamMetrics:
             stream_total_chunks.labels(mode=self.mode).observe(self._chunk_count)
         if self._start_time and self._last_chunk_time:
             stream_duration.labels(mode=self.mode).observe(self._last_chunk_time - self._start_time)
-
-
-@contextmanager
-def track_stage(stage: str, doc_count: int = 0):
-    start = time.time()
-    try:
-        yield
-    finally:
-        elapsed = time.time() - start
-        # 复用 retrieval 类的 stage 概念，也可扩展
-        from agent_material.observability.metrics import REGISTRY
-        for m in REGISTRY.collect():
-            for s in m.samples:
-                if s.name == "agent_stage_duration_seconds" and s.labels.get("stage") == stage:
-                    return
 
 
 def get_metrics() -> bytes:

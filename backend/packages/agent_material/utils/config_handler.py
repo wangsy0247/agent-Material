@@ -1,4 +1,3 @@
-import os
 import yaml
 from agent_material.utils.path_tools import get_abs_path
 
@@ -69,6 +68,5 @@ queue_config = get_queue_config()
 if __name__ == "__main__":
     print(rag_config)
     print(agent_config)
-    print(chroma_config)
     print(prompt_config)
     print(sc_config)

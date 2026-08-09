@@ -3,10 +3,13 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agent_material.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
+from ..auth.dependencies import get_current_user
+from ..auth.schemas import UserInfo
+from ..schemas import MCPStatusResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["mcp"])
@@ -143,12 +146,43 @@ def _merge_preserving_secrets(
     summary="Get MCP Configuration",
     description="Retrieve the current Model Context Protocol (MCP) server configurations.",
 )
-async def get_mcp_configuration() -> McpConfigResponse:
+async def get_mcp_configuration(
+    current_user: UserInfo = Depends(get_current_user),
+) -> McpConfigResponse:
     """Get the current MCP configuration."""
     config = get_extensions_config()
 
     servers = {name: _mask_server_config(McpServerConfigResponse(**server.model_dump())) for name, server in config.mcp_servers.items()}
     return McpConfigResponse(mcp_servers=servers)
+
+
+@router.get(
+    "/mcp/status",
+    response_model=MCPStatusResponse,
+    summary="MCP 连接状态",
+    description="返回各 MCP server 的状态信息（静态配置版）。",
+)
+async def mcp_status(
+    current_user: UserInfo = Depends(get_current_user),
+) -> MCPStatusResponse:
+    """返回各 MCP server 状态：enabled / 传输类型 / 传输配置是否完整。
+
+    注：当前为静态配置信息版；实时连接健康检查（探活）需要 MCP 客户端
+    支持，后续补充。
+    """
+    config = get_extensions_config()
+    data = {}
+    for name, server in config.mcp_servers.items():
+        if server.type == "stdio":
+            transport_configured = bool(server.command)
+        else:  # sse / http
+            transport_configured = bool(server.url)
+        data[name] = {
+            "enabled": server.enabled,
+            "type": server.type,
+            "transport_configured": transport_configured,
+        }
+    return MCPStatusResponse(data=data)
 
 
 @router.put(
@@ -157,7 +191,10 @@ async def get_mcp_configuration() -> McpConfigResponse:
     summary="Update MCP Configuration",
     description="Update Model Context Protocol (MCP) server configurations and save to file.",
 )
-async def update_mcp_configuration(request: McpConfigUpdateRequest) -> McpConfigResponse:
+async def update_mcp_configuration(
+    request: McpConfigUpdateRequest,
+    current_user: UserInfo = Depends(get_current_user),
+) -> McpConfigResponse:
     """Update the MCP configuration.
 
     This will:

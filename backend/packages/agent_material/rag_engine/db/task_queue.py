@@ -7,7 +7,6 @@
 """
 
 import json
-import sqlite3
 import threading
 from dataclasses import dataclass
 from enum import Enum

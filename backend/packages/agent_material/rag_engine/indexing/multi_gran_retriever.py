@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
@@ -20,7 +19,6 @@ from agent_material.observability.metrics import (
     retrieval_docs,
     postgres_query_duration,
 )
-from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from pydantic import ConfigDict
 
 from agent_material.utils.config_handler import vector_store_config

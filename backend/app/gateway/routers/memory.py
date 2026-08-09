@@ -16,7 +16,6 @@ from ..schemas import (
 )
 from ..auth.dependencies import get_memory_manager, get_current_user
 from ..auth.schemas import UserInfo
-from agent_material.utils.logger import logger
 
 if TYPE_CHECKING:
     from agent_material.memory.manager import MemoryManager

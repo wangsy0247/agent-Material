@@ -9,14 +9,12 @@
 配置来源：config/memory_config.yaml -> long_term
 """
 
-import os
-import time
 from pathlib import Path
 
 from langchain_core.documents import Document
 
 from agent_material.memory.models import MemoryEntry
-from agent_material.memory.utils import estimate_tokens, format_timestamp, truncate_text
+from agent_material.memory.utils import format_timestamp, truncate_text
 from agent_material.utils.config_handler import memory_config
 from agent_material.utils.path_tools import get_abs_path
 from agent_material.utils.logger import logger

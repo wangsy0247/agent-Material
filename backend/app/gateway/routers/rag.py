@@ -7,8 +7,7 @@ RAG 路由（REST API 直连版）
 
 from __future__ import annotations
 
-import json
-import time
+import asyncio
 import traceback
 from typing import TYPE_CHECKING
 
@@ -18,7 +17,8 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import get_current_user
 from ..auth.schemas import UserInfo
-from ..schemas import BaseResponse, SSEEvent
+from ..schemas import BaseResponse
+from ..sse import HEARTBEAT_INTERVAL, format_heartbeat, format_sse_event as _sse
 
 if TYPE_CHECKING:
     pass
@@ -94,16 +94,6 @@ class RAGAddChunksRequest(BaseModel):
     chunks: list[str] = Field(..., min_length=1, description="已切分好的文本片段列表")
     sources: list[str] | None = Field(default=None, description="来源标识列表，与 chunks 一一对应；不传则自动分配")
     metadatas: list[dict] | None = Field(default=None, description="额外元数据列表，与 chunks 一一对应")
-
-
-# ------------------------------------------------------------------
-# SSE 辅助
-# ------------------------------------------------------------------
-
-
-def _sse(event_type: str, content: str | dict | list | None = None) -> str:
-    event = SSEEvent(type=event_type, content=content, timestamp=time.time())
-    return f"data: {event.model_dump_json()}\n\n"
 
 
 # ------------------------------------------------------------------
@@ -190,23 +180,44 @@ async def rag_query(
 
     SSE 事件类型：
     - `start`: 开始处理
+    - `status`: 阶段切换（{"phase": "retrieving" | "generating"}）
     - `sources`: 检索到的引用来源
-    - `token`: 大模型实时生成的 token
+    - `token`: 大模型实时生成的 token（data.index 从 1 递增）
     - `done`: 完成
     - `error`: 错误
+    - `cancelled`: 客户端断连/中止导致的取消（终态）
     """
 
     async def event_generator():
+        # 帧 id 计数器：run 内单调递增，供前端记录 lastEventId
+        event_id = 0
+        # token 序号：run 内从 1 递增，供前端乱序/丢帧检测
+        token_index = 0
+
+        def next_sse(event_type: str, content=None, index=None) -> str:
+            nonlocal event_id
+            event_id += 1
+            return _sse(event_type, content, event_id, index=index)
+
+        def token_sse(text: str) -> str:
+            nonlocal token_index
+            token_index += 1
+            return next_sse("token", text, index=token_index)
+
         try:
-            service = _get_rag_service()
+            # RagService 首次初始化是重量级同步操作，放线程避免阻塞 event loop
+            service = await asyncio.to_thread(_get_rag_service)
 
-            # 1. 先执行检索
-            docs = service.retriever_docx(request.query)
+            # 1. 阶段事件：开始检索
+            yield next_sse("status", {"phase": "retrieving"})
 
-            # 2. 发送 start 事件
-            yield _sse("start", {"query": request.query})
+            # 2. 先执行检索（同步调用，放线程避免阻塞 event loop）
+            docs = await asyncio.to_thread(service.retriever_docx, request.query)
 
-            # 3. 发送 sources 事件
+            # 3. 发送 start 事件
+            yield next_sse("start", {"query": request.query})
+
+            # 4. 发送 sources 事件
             sources = []
             for i, doc in enumerate(docs, start=1):
                 source = doc.metadata.get("source", "未知来源")
@@ -219,25 +230,71 @@ async def rag_query(
                         "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
                     }
                 )
-            yield _sse("sources", sources)
+            yield next_sse("sources", sources)
 
             if not docs:
-                yield _sse("token", "根据现有资料无法回答该问题。")
-                yield _sse("done")
+                yield token_sse("根据现有资料无法回答该问题。")
+                yield next_sse("done")
                 return
 
-            # 4. 流式生成
-            for chunk in service.get_summary_stream(request.query):
-                yield _sse("token", chunk)
+            # 5. 阶段事件：开始生成
+            yield next_sse("status", {"phase": "generating"})
 
-            yield _sse("done")
+            # 6. 流式生成：get_summary_stream 是同步生成器函数（惰性），
+            # 整个迭代都在线程中执行，经 asyncio.Queue 桥接回 async 侧逐 chunk 消费，
+            # 避免普通 for 迭代独占 event loop。
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue = asyncio.Queue()
+            _SENTINEL = None  # 结束哨兵
+
+            def _consume_stream():
+                try:
+                    for chunk in service.get_summary_stream(request.query):
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                    loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
+                except Exception as exc:  # 异常经队列传回 async 侧 re-raise
+                    loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+            consume_task = asyncio.create_task(asyncio.to_thread(_consume_stream))
+            try:
+                while True:
+                    try:
+                        # 超时发注释心跳帧：长时间无 token 时防代理/浏览器判死断连
+                        item = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
+                    except TimeoutError:
+                        yield format_heartbeat()
+                        continue
+                    if item is _SENTINEL:
+                        break
+                    if isinstance(item, Exception):
+                        raise item
+                    yield token_sse(item)
+            finally:
+                # 确保线程任务收尾（正常路径已结束；异常路径兜底等待）
+                await asyncio.shield(asyncio.gather(consume_task, return_exceptions=True))
+
+            yield next_sse("done")
+        except asyncio.CancelledError:
+            # 客户端断连/中止：尽力向当前连接发 cancelled 帧（连接已断开时
+            # 发送会失败，静默忽略），随后原样抛出结束流
+            try:
+                yield next_sse("cancelled", {"message": "run cancelled"})
+            except BaseException:
+                pass
+            raise
         except Exception as e:
             traceback_str = traceback.format_exc()
-            yield _sse("error", {"message": str(e), "detail": traceback_str})
+            # error 为终态：发完 error 帧直接结束，不再依赖连接关闭收尾
+            yield next_sse("error", {"message": str(e), "detail": traceback_str})
+            return
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # 关闭 nginx 代理缓冲，保证实时推送
+        },
     )
 
 

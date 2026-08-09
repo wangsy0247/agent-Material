@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
@@ -30,7 +30,6 @@ from agent_material.observability.structured_logger import get_logger
 from agent_material.observability.metrics import (
     agent_iteration_count,
     agent_duration,
-    agent_invocation_total,
 )
 from agent_material.utils.path_tools import get_abs_path
 from agent_material.utils.prompt_loader import get_prompts
@@ -110,6 +109,94 @@ class ReactAgent:
                         text += item["text"]
         return text
 
+    async def _stream_events(self, astream_iter, session_id: str, full_answer: list[str]):
+        """将 astream(stream_mode=["messages", "updates"]) 的 (mode, payload) 二元组
+        转换为结构化事件 dict。
+
+        - messages 模式（仅 agent 节点）：文本增量 → token；reasoning_content /
+          thinking block → thinking（仅用于流式展示，不参与 full_answer 拼接）
+        - updates 模式：agent 节点 AIMessage 带 tool_calls → tool_call；
+          tools 节点 ToolMessage → tool_result；__interrupt__ → approval_required
+        - full_answer 只累积"无 tool_calls 的最终轮 AIMessage 文本"（从 updates 取，
+          不从 token 流拼），保证存入记忆的是干净最终答案（修复中间推理混入记忆）
+
+        Args:
+            astream_iter: self.graph.astream(..., stream_mode=["messages", "updates"]) 迭代器
+            session_id: 会话ID（用于 approval_required 事件）
+            full_answer: 单元素 list，用于向调用方回传累积的最终答案
+        """
+        async for mode, payload in astream_iter:
+            if mode == "messages":
+                chunk, metadata = payload
+                if not isinstance(chunk, AIMessageChunk):
+                    continue
+                if metadata.get("langgraph_node") != "agent":
+                    continue
+                # 模型 reasoning 增量（qwen 等可能走 additional_kwargs.reasoning_content）
+                reasoning = chunk.additional_kwargs.get("reasoning_content")
+                if reasoning:
+                    yield {"type": "thinking", "content": reasoning}
+                content = chunk.content
+                if isinstance(content, str):
+                    if content:
+                        yield {"type": "token", "content": content}
+                elif isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "text" and block.get("text"):
+                            yield {"type": "token", "content": block["text"]}
+                        elif block.get("type") == "thinking" and block.get("thinking"):
+                            yield {"type": "thinking", "content": block["thinking"]}
+            elif mode == "updates":
+                if not isinstance(payload, dict):
+                    continue
+
+                # 检测 HITL interrupt 事件
+                if "__interrupt__" in payload:
+                    interrupt_tuple = payload["__interrupt__"]
+                    interrupt_value = interrupt_tuple[0].value if interrupt_tuple else {}
+                    yield {
+                        "type": "approval_required",
+                        "session_id": session_id,
+                        "tool_calls": interrupt_value.get("tool_calls", []),
+                        "message": interrupt_value.get("message", ""),
+                    }
+                    return
+
+                # agent 节点：tool_calls → tool_call 事件；最终轮文本 → 累积 full_answer
+                agent_update = payload.get("agent")
+                if agent_update:
+                    for msg in agent_update.get("messages", []):
+                        if not isinstance(msg, AIMessage):
+                            continue
+                        if msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                yield {
+                                    "type": "tool_call",
+                                    "name": tc.get("name"),
+                                    "args": tc.get("args"),
+                                }
+                        else:
+                            text = self._extract_text_from_message(msg)
+                            if text:
+                                full_answer[0] += text
+
+                # tools 节点：ToolMessage → tool_result 事件（截断 500 字，带截断标记）
+                tools_update = payload.get("tools")
+                if tools_update:
+                    for msg in tools_update.get("messages", []):
+                        if isinstance(msg, ToolMessage):
+                            content = (
+                                msg.content if isinstance(msg.content, str) else str(msg.content)
+                            )
+                            yield {
+                                "type": "tool_result",
+                                "name": msg.name,
+                                "content": content[:500],
+                                "truncated": len(content) > 500,
+                            }
+
     async def excutor_stream(self, query, session_id: str | None = None, user_id: str = "default"):
         """执行 Agent 流式推理，集成记忆系统与 HITL。
 
@@ -125,7 +212,7 @@ class ReactAgent:
             user_id: 用户ID（多租户隔离）
 
         Yields:
-            文本片段（逐 token 输出）或 HITL 事件字典
+            结构化事件 dict：{"type": "token"|"thinking"|"tool_call"|"tool_result"|"approval_required", ...}
         """
         active_session_id = self._ensure_session(session_id, user_id=user_id)
 
@@ -159,54 +246,36 @@ class ReactAgent:
             ),
         }
 
-        full_answer = ""
+        full_answer = [""]
         t_start = time.time()
         final_state = initial_state
 
-        async for chunk in self.graph.astream(
-            initial_state, config, stream_mode="updates"
-        ):
-            if not isinstance(chunk, dict):
-                continue
-
-            # 检测 HITL interrupt 事件
-            if "__interrupt__" in chunk:
-                interrupt_tuple = chunk["__interrupt__"]
-                interrupt_value = interrupt_tuple[0].value if interrupt_tuple else {}
+        astream_iter = self.graph.astream(
+            initial_state, config, stream_mode=["messages", "updates"]
+        )
+        async for event in self._stream_events(astream_iter, active_session_id, full_answer):
+            if event["type"] == "approval_required":
                 agent_iteration_count.observe(final_state.get("iteration_count", 0))
                 logger.warning(
                     "agent_hitl_interrupt",
                     extra={
                         "session_id": active_session_id,
-                        "tools": interrupt_value.get("tool_calls", []),
+                        "tools": event.get("tool_calls", []),
                     },
                 )
-                yield {
-                    "type": "approval_required",
-                    "session_id": active_session_id,
-                    "tool_calls": interrupt_value.get("tool_calls", []),
-                    "message": interrupt_value.get("message", ""),
-                }
+                yield event
                 return
-
-            # 只处理 agent 节点生成的新消息
-            agent_update = chunk.get("agent")
-            if agent_update:
-                for msg in agent_update.get("messages", []):
-                    if isinstance(msg, AIMessage):
-                        text = self._extract_text_from_message(msg)
-                        if text:
-                            full_answer += text
-                            yield text.strip() + "\n"
+            yield event
 
         # 记录指标
         agent_iteration_count.observe(final_state.get("iteration_count", 0))
         agent_duration.labels(mode="stream").observe(time.time() - t_start)
 
-        # 保存助手回复到记忆系统
-        if self.memory_manager and full_answer:
+        # 保存助手回复到记忆系统（干净最终答案，不含中间推理）
+        answer = full_answer[0].strip()
+        if self.memory_manager and answer:
             self.memory_manager.add_assistant_message(
-                active_session_id, full_answer.strip(), user_id=user_id
+                active_session_id, answer, user_id=user_id
             )
             logger.info(
                 "agent_stream_done",
@@ -221,10 +290,11 @@ class ReactAgent:
     async def excutor(self, query, session_id: str | None = None, user_id: str = "default") -> str | dict:
         """执行 Agent 非流式推理，返回完整回答或 HITL 事件。"""
         chunks = []
-        async for chunk in self.excutor_stream(query, session_id=session_id, user_id=user_id):
-            if isinstance(chunk, dict):
-                return chunk
-            chunks.append(chunk)
+        async for event in self.excutor_stream(query, session_id=session_id, user_id=user_id):
+            if event.get("type") == "approval_required":
+                return event
+            if event.get("type") == "token":
+                chunks.append(event["content"])
         return "".join(chunks)
 
     # ------------------------------------------------------------------
@@ -249,7 +319,7 @@ class ReactAgent:
             user_id: 用户ID（多租户隔离）
 
         Yields:
-            文本片段或新的 HITL 事件字典
+            结构化事件 dict：{"type": "token"|"thinking"|"tool_call"|"tool_result"|"approval_required", ...}
         """
         thread_id = session_id
 
@@ -262,52 +332,35 @@ class ReactAgent:
             ),
         }
 
-        full_answer = ""
+        full_answer = [""]
 
-        async for chunk in self.graph.astream(
+        astream_iter = self.graph.astream(
             Command(resume=approval_result),
             config,
-            stream_mode="updates",
-        ):
-            if not isinstance(chunk, dict):
-                continue
-
-            # 检测 HITL interrupt 事件
-            if "__interrupt__" in chunk:
-                interrupt_tuple = chunk["__interrupt__"]
-                interrupt_value = interrupt_tuple[0].value if interrupt_tuple else {}
-                yield {
-                    "type": "approval_required",
-                    "session_id": session_id,
-                    "tool_calls": interrupt_value.get("tool_calls", []),
-                    "message": interrupt_value.get("message", ""),
-                }
+            stream_mode=["messages", "updates"],
+        )
+        async for event in self._stream_events(astream_iter, session_id, full_answer):
+            if event["type"] == "approval_required":
+                yield event
                 return
+            yield event
 
-            # 只处理 agent 节点生成的新消息
-            agent_update = chunk.get("agent")
-            if agent_update:
-                for msg in agent_update.get("messages", []):
-                    if isinstance(msg, AIMessage):
-                        text = self._extract_text_from_message(msg)
-                        if text:
-                            full_answer += text
-                            yield text.strip() + "\n"
-
-        # 保存助手回复
-        if self.memory_manager and full_answer:
+        # 保存助手回复（干净最终答案，不含中间推理）
+        answer = full_answer[0].strip()
+        if self.memory_manager and answer:
             self.memory_manager.add_assistant_message(
-                session_id, full_answer.strip(), user_id=user_id
+                session_id, answer, user_id=user_id
             )
             logger.info(f"[ReactAgent] HITL 恢复后对话已保存 | session={session_id} | user={user_id}")
 
     async def resume(self, session_id: str, approval_result: dict, user_id: str = "default") -> str | dict:
         """恢复被 HITL 挂起的 Agent 执行（非流式）。"""
         chunks = []
-        async for chunk in self.resume_stream(session_id, approval_result, user_id=user_id):
-            if isinstance(chunk, dict):
-                return chunk
-            chunks.append(chunk)
+        async for event in self.resume_stream(session_id, approval_result, user_id=user_id):
+            if event.get("type") == "approval_required":
+                return event
+            if event.get("type") == "token":
+                chunks.append(event["content"])
         return "".join(chunks)
 
 
@@ -317,10 +370,13 @@ if __name__ == "__main__":
     agent = ReactAgent()
 
     async def main():
-        async for chunk in agent.excutor_stream("帮我下载一种MOF材料"):
-            if isinstance(chunk, dict):
-                print(f"\n[HITL] {chunk}")
+        async for event in agent.excutor_stream("帮我下载一种MOF材料"):
+            event_type = event.get("type")
+            if event_type == "approval_required":
+                print(f"\n[HITL] {event}")
+            elif event_type == "token":
+                print(event["content"], end="", flush=True)
             else:
-                print(chunk, end="", flush=True)
+                print(f"\n[{event_type}] {event}")
 
     asyncio.run(main())

@@ -3,10 +3,8 @@
 """
 
 import time
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from ..schemas import HealthResponse
-from ..auth.dependencies import get_current_user
-from ..auth.schemas import UserInfo
 
 router = APIRouter(prefix="/system", tags=["系统管理"])
 

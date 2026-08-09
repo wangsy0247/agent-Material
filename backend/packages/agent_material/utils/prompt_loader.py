@@ -1,7 +1,5 @@
-import os
 from agent_material.utils.path_tools import get_abs_path
 from agent_material.utils.logger import logger
-from agent_material.utils.config_handler import prompt_config
 
 
 def get_prompts(prompt_path: str):

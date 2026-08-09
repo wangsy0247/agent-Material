@@ -1,0 +1,45 @@
+# =============================================================
+# 基础设施 — Docker Compose
+#
+# 启动: docker-compose up -d
+# 停止: docker-compose down
+# 日志: docker-compose logs -f
+#
+# 仅包含: pgvector (向量数据库 + LangGraph checkpointer)
+#
+# 说明: 本地可观测性组件（Jaeger / Prometheus / Grafana / Loki /
+#       Promtail / 自部署 LangFuse）已移除，LLM 追踪改用云端
+#       LangFuse（https://cloud.langfuse.com），在 .env 中配置:
+#         LANGFUSE_PUBLIC_KEY="pk-lf-..."
+#         LANGFUSE_SECRET_KEY="sk-lf-..."
+#         LANGFUSE_HOST="https://cloud.langfuse.com"
+# =============================================================
+
+version: "3.3"
+
+services:
+  # ── PostgreSQL + pgvector: 向量数据库 ─────────────────────
+  # 注意：本机 5432 被其它项目（multiagent-studio）的容器占用，
+  # 故映射到 5433；连接配置见 config/vector_store_config.yaml
+  # 与 .env 的 POSTGRES_CHECKPOINTER_URL。
+  pgvector:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pgvector/pgvector:pg16
+    container_name: agent_material_pgvector
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=langgraph
+    volumes:
+      - pg16_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d langgraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pg16_data:
+    external: true

@@ -1,13 +1,13 @@
 """LangFuse 可观测性配置模块 — 替代 LangSmith。
 
-LangFuse 开源 (MIT)，支持 Docker 自部署，无需翻墙。
+默认使用云端 LangFuse（https://cloud.langfuse.com），
 提供 LangChain Callback Handler 自动追踪 LLM / Chain / Agent 调用。
 
 使用方式:
-  1. 在 .env 中设置:
-     LANGFUSE_PUBLIC_KEY="pk-xxx"
-     LANGFUSE_SECRET_KEY="sk-xxx"
-     LANGFUSE_HOST="http://localhost:3001"
+  1. 在 .env 中设置（云端项目管理页生成密钥对）:
+     LANGFUSE_PUBLIC_KEY="pk-lf-..."
+     LANGFUSE_SECRET_KEY="sk-lf-..."
+     LANGFUSE_HOST="https://cloud.langfuse.com"   # 自部署时改为自建地址
   2. 程序启动时调用 setup_langfuse()
   3. 在 chain.invoke(config={"callbacks": [langfuse_handler]}) 中传入
 
@@ -43,7 +43,7 @@ def setup_langfuse(
     Args:
         public_key: LangFuse Public Key，默认从 LANGFUSE_PUBLIC_KEY 读取
         secret_key: LangFuse Secret Key，默认从 LANGFUSE_SECRET_KEY 读取
-        host: LangFuse 服务地址，默认 http://localhost:3001
+        host: LangFuse 服务地址，默认 https://cloud.langfuse.com
         enabled: 是否启用追踪
 
     Returns:
@@ -62,7 +62,7 @@ def setup_langfuse(
             logger.info("[LangFuse] LANGFUSE_SECRET_KEY 未设置，追踪未启用")
             return False
 
-        host = host or os.environ.get("LANGFUSE_HOST", "http://localhost:3001")
+        host = host or os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
         os.environ.setdefault("LANGFUSE_HOST", host)
 
         from langfuse import Langfuse

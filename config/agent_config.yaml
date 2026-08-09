@@ -9,7 +9,7 @@ checkpointer:
     db_path: "logs/langgraph_checkpoints.db"
   # postgres 配置（当 type=postgres 时生效，需 PostgreSQL 服务 + langgraph-checkpoint-postgres）
   postgres:
-    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://postgres:postgres@localhost:5432/langgraph}"
+    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://postgres:postgres@localhost:5433/langgraph}"
 
 # ---- Summarization 配置（长对话压缩） ----
 summarization:

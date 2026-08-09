@@ -81,21 +81,29 @@ class RAGQueryResponse(BaseModel):
 # ==================== SSE 事件模型 ====================
 
 class SSEEvent(BaseModel):
-    """SSE 事件通用结构"""
+    """SSE 事件通用结构
+
+    事件分三类（对齐 docs/FASTAPI 分类法）：
+    - 状态类：start / status / thinking
+    - 内容类：token / tool_call / tool_result / sources
+    - 终结类：done / error / cancelled / approval_required（互斥为终态）
+    """
     type: Literal[
         "start",              # 开始处理
-        "status",             # 状态更新
+        "status",             # 状态更新（记忆/上下文/阶段 phase）
         "thinking",           # Agent 思考过程
         "tool_call",          # 工具调用
         "tool_result",        # 工具返回结果
-        "token",              # 大模型生成 token
-        "answer",             # 完整答案片段
+        "token",              # 大模型生成 token（带 index 序号）
+        "answer",             # 完整答案片段（deprecated：后端无发射点，前端仅兜底）
         "sources",            # RAG 引用来源
         "approval_required",  # HITL 敏感操作需人工确认
         "error",              # 错误
         "done",               # 正常完成
+        "cancelled",          # 用户中止/断连导致的取消（终态）
     ] = Field(..., description="事件类型")
     content: str | dict | list | None = Field(default=None, description="事件内容")
+    index: int | None = Field(default=None, description="token 事件序号（run 内从 1 递增，用于乱序/丢帧检测）")
     timestamp: float | None = Field(default=None, description="时间戳")
 
 
