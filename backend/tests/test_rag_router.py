@@ -237,9 +237,8 @@ class TestRagSearch:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        # 注意：端点构造 BaseResponse(total=len(results))，但 BaseResponse 无
-        # total 字段，pydantic 默认 extra=ignore 会静默丢弃，故响应里无 total
-        assert "total" not in body
+        # BaseResponse.total 字段已补齐，列表响应应携带总数
+        assert body["total"] == 1
         assert len(body["data"]) == 1
         item = body["data"][0]
         assert item["index"] == 1
@@ -457,8 +456,7 @@ class TestRagSources:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        # 同上：total 被 response_model 静默丢弃，不出现于响应体
-        assert "total" not in body
+        assert body["total"] == 2
         assert len(body["data"]) == 2
         assert body["data"][0] == {"source": "data/a.pdf", "count": 10}
 

@@ -318,14 +318,14 @@ class MemoryManager:
 
     # ==================== 长期记忆操作 ====================
 
-    def recall_memory(self, user_id: str = "default", query: str = "", top_k: int | None = None) -> list[MemoryEntry]:
-        """召回相关记忆（按用户隔离）"""
+    def recall_memory(self, user_id: str = "default", query: str = "", category: str | None = None, top_k: int | None = None) -> list[MemoryEntry]:
+        """召回相关记忆（按用户隔离，可按 category 过滤）"""
         lt = self._get_long_term(user_id)
         if not lt:
             return []
 
         top_k = top_k or _LONG_TERM_CFG.get("recall_top_k", 5)
-        return lt.recall(query, top_k=top_k)
+        return lt.recall(query, category=category, top_k=top_k)
 
     def add_memory(self, user_id: str = "default", entry: MemoryEntry | None = None) -> bool:
         """添加长期记忆（按用户隔离）

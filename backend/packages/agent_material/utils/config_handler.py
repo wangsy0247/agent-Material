@@ -34,7 +34,8 @@ def get_prompt_config():
 def get_sc_config():
     sc_config_path = get_abs_path("config/sc_config.yaml")
     with open(sc_config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        # 空文件时 safe_load 返回 None，统一兜底为空 dict，避免调用方按 dict 使用报错
+        return yaml.safe_load(f) or {}
 
 
 # def get_mp_config():

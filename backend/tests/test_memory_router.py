@@ -127,8 +127,8 @@ class FakeMemoryManager:
     async def end_session(self, session_id, user_id=None, reason=None):
         self.end_calls.append((session_id, user_id, reason))
 
-    def recall_memory(self, user_id, query, top_k=5):
-        self.recall_calls.append((user_id, query, top_k))
+    def recall_memory(self, user_id, query, category=None, top_k=5):
+        self.recall_calls.append((user_id, query, category, top_k))
         return self._recall_entries
 
     def get_stats(self, user_id=None):
@@ -289,7 +289,8 @@ class TestEndSession:
         assert resp.status_code == 401
 
     def test_end_success_200(self, authed_client):
-        mm = FakeMemoryManager()
+        store = FakeSessionStore(session_info=FakeSessionInfo(session_id="s-mine"))
+        mm = FakeMemoryManager(store=store)
         _override_mm(mm)
         try:
             resp = authed_client.post("/api/v1/memory/sessions/s-mine/end")
@@ -297,6 +298,19 @@ class TestEndSession:
             assert resp.json()["code"] == 200
             # reason 固定为 user_close，user_id 来自认证用户
             assert mm.end_calls == [("s-mine", FAKE_USER_ID, "user_close")]
+            # 归属校验在结束之前执行
+            assert store.get_session_calls == [("s-mine", FAKE_USER_ID)]
+        finally:
+            _clear_mm()
+
+    def test_end_not_found_or_not_owned_404(self, authed_client):
+        """会话不存在或属于他人（get_session 返回 None）→ 404，且不触发结束动作"""
+        mm = FakeMemoryManager(store=FakeSessionStore(session_info=None))
+        _override_mm(mm)
+        try:
+            resp = authed_client.post("/api/v1/memory/sessions/s-other/end")
+            assert resp.status_code == 404
+            assert mm.end_calls == []
         finally:
             _clear_mm()
 
@@ -392,8 +406,22 @@ class TestRecallMemory:
             assert entry["confidence"] == round(0.123456789, 4)
             assert entry["created_at"] == 1234.5
             assert entry["tags"] == ["dp", "材料"]
-            # user_id / query / top_k 透传
-            assert mm.recall_calls == [(FAKE_USER_ID, "深度势能", 3)]
+            # user_id / query / category（默认 None）/ top_k 透传
+            assert mm.recall_calls == [(FAKE_USER_ID, "深度势能", None, 3)]
+        finally:
+            _clear_mm()
+
+    def test_recall_category_passthrough(self, authed_client):
+        """category 参数必须透传到 mm.recall_memory（修复前被路由丢弃）"""
+        mm = FakeMemoryManager(recall_entries=[FakeMemoryEntry(category="preference")])
+        _override_mm(mm)
+        try:
+            resp = authed_client.post(
+                "/api/v1/memory/recall",
+                json={"query": "深度势能", "category": "preference", "top_k": 5},
+            )
+            assert resp.status_code == 200
+            assert mm.recall_calls == [(FAKE_USER_ID, "深度势能", "preference", 5)]
         finally:
             _clear_mm()
 
@@ -445,6 +473,27 @@ class TestMemoryStats:
             assert mm.stats_calls == [FAKE_USER_ID]
         finally:
             _clear_mm()
+
+
+# ------------------------------------------------------------------
+# MemoryManager.recall_memory 的 category 透传（包级单元测试）
+# ------------------------------------------------------------------
+
+class TestManagerRecallCategoryPassthrough:
+    def test_category_forwarded_to_long_term(self):
+        from agent_material.memory.manager import MemoryManager
+
+        calls = []
+
+        class FakeLongTerm:
+            def recall(self, query, category=None, top_k=None):
+                calls.append((query, category, top_k))
+                return []
+
+        mm = MemoryManager.__new__(MemoryManager)  # 绕过 __init__ 的重型初始化
+        mm._get_long_term = lambda user_id: FakeLongTerm()
+        mm.recall_memory(user_id="u1", query="深度势能", category="fact", top_k=3)
+        assert calls == [("深度势能", "fact", 3)]
 
 
 if __name__ == "__main__":

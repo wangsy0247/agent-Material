@@ -118,10 +118,9 @@ class TestConfigHandler:
         assert "db_path" in config["queue"]
         assert "poll_interval" in config["queue"]
 
-    def test_sc_config_empty_file_returns_none(self):
-        # config/sc_config.yaml 当前是 0 字节空文件，yaml.safe_load 返回 None。
-        # 如实记录现状：调用方若按 dict 使用会得到 None。
-        assert get_sc_config() is None
+    def test_sc_config_empty_file_returns_empty_dict(self):
+        # config/sc_config.yaml 仅有注释无配置项，get_sc_config 兜底为空 dict
+        assert get_sc_config() == {}
 
     def test_module_level_config_dicts(self):
         import agent_material.utils.config_handler as ch
@@ -149,7 +148,12 @@ class TestBaseResponse:
 
     def test_serialization(self):
         dumped = BaseResponse(data=[1, 2]).model_dump()
-        assert dumped == {"code": 200, "message": "success", "data": [1, 2]}
+        assert dumped == {"code": 200, "message": "success", "data": [1, 2], "total": None}
+
+    def test_total_for_list_responses(self):
+        """列表类响应可携带总数（修复前 total 被静默丢弃）"""
+        resp = BaseResponse(data=[1, 2], total=2)
+        assert resp.model_dump()["total"] == 2
 
 
 # ==================== Agent 请求模型 ====================

@@ -14,6 +14,7 @@ class BaseResponse(BaseModel):
     code: int = Field(default=200, description="状态码")
     message: str = Field(default="success", description="状态信息")
     data: Any = Field(default=None, description="响应数据")
+    total: int | None = Field(default=None, description="结果总数（列表类响应可选）")
 
 
 class HealthResponse(BaseResponse):

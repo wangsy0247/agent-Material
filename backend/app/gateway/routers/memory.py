@@ -79,7 +79,10 @@ async def end_session(
     current_user: UserInfo = Depends(get_current_user),
     mm: "MemoryManager" = Depends(get_memory_manager),
 ):
-    """结束指定会话并保存，触发自动记忆提取"""
+    """结束指定会话并保存，触发自动记忆提取（带用户归属校验）"""
+    info = mm.session_store.get_session(session_id, user_id=current_user.user_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="会话不存在")
     await mm.end_session(session_id=session_id, user_id=current_user.user_id, reason="user_close")
     return BaseResponse(code=200, message="会话已结束")
 
@@ -134,7 +137,12 @@ async def recall_memory(
     mm: "MemoryManager" = Depends(get_memory_manager),
 ):
     """根据查询召回当前用户的相关长期记忆"""
-    entries = mm.recall_memory(user_id=current_user.user_id, query=request.query, top_k=request.top_k)
+    entries = mm.recall_memory(
+        user_id=current_user.user_id,
+        query=request.query,
+        category=request.category,
+        top_k=request.top_k,
+    )
     
     data = []
     for e in entries:
