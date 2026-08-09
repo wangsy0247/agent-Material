@@ -33,14 +33,20 @@ docs/                设计与排障文档
 环境要求：Python ≥ 3.10（开发环境为 Anaconda `langchain` 环境）。
 
 ```bash
-# 1. 安装依赖（核心包以 editable 方式安装）
+# 一键初始化：安装依赖、从 .env.example 创建 .env、生成 AUTH_SECRET_KEY、
+# 校验 config/ 下 8 个 YAML 配置、创建运行时目录
+make setup
+
+# 编辑 .env 填入 DASHSCOPE_API_KEY 等密钥后启动（默认热重载）
+make run
+```
+
+也可以手动执行等效步骤：
+
+```bash
 pip install -e backend/packages/agent_material
 pip install -e .
-
-# 2. 配置环境变量
 cp .env.example .env   # 填入 DASHSCOPE_API_KEY 等
-
-# 3. 启动服务（脚本会自动加载 .env）
 bash scripts/start_server.sh        # 开发模式（热重载）
 bash scripts/start_server.sh prod   # 生产模式
 ```

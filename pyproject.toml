@@ -23,6 +23,10 @@ dependencies = [
     "pytest-asyncio>=0.24.0",
 ]
 
+[tool.setuptools]
+# 根项目仅用于聚合依赖与 pytest 配置，不包含可分发的 Python 包
+packages = []
+
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 pythonpath = ["backend/packages"]
