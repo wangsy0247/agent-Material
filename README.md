@@ -25,7 +25,6 @@ mp_material_server/  Materials Project MCP 服务（stdio）
 config/              YAML 配置（agent / rag / memory / 向量库等）
 evaluation_data/     ragas 评估数据集与评分
 scripts/             启动与运维脚本
-docs/                设计与排障文档
 ```
 
 ## 快速开始
@@ -75,9 +74,6 @@ python -m pytest backend/tests
 
 - `data/`：知识库 PDF 文献（自行放入，经 RAG 管理页索引）
 - `datas/`：本地文档镜像与清洗测试数据
+- `docs/`：本地设计与排障笔记（个人文档，不入库）
 - `chroma_db/`：向量库（索引后自动重建）
 - `logs/`、`workspace/`、`downloads/`：日志、工作区、MCP 下载产物
-
-## 文档
-
-`docs/` 下有各子系统的设计与排障记录：SSE 流式协议、MCP 并发调用修复、记忆压缩、可观测性分析、升级路线图（`docs/upgrade-roadmap.md`）等。
