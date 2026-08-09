@@ -87,3 +87,6 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# 运行时临时文件
+tmp/
