@@ -1,7 +1,5 @@
 # Agent Material — 材料科学领域 LLM Agent
 
-[![Tests](https://github.com/wangsy0247/agent-Material/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/wangsy0247/agent-Material/actions/workflows/test.yml)
-
 基于 FastAPI + LangGraph + ChromaDB 的材料科学智能体系统，集 RAG 文献检索、MCP 工具调用（Materials Project 数据库）、多轮记忆与流式对话于一体，前端为无构建依赖的原生 JS 单页应用。
 
 ## 功能特性
