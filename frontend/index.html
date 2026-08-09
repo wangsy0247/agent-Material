@@ -7,14 +7,10 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <!-- Markdown 渲染（本地，无需翻墙） -->
     <script src="/static/vendor/marked/marked.min.js"></script>
-    <!-- 代码高亮（本地，无需翻墙） -->
+    <!-- HTML 消毒（本地，防 XSS） -->
+    <script src="/static/vendor/dompurify/purify.min.js"></script>
+    <!-- 代码高亮样式（JS 按需动态加载，见 app.js ensureHljs） -->
     <link rel="stylesheet" href="/static/vendor/highlight.js/styles/github-dark.min.css">
-    <script src="/static/vendor/highlight.js/highlight.min.js"></script>
-    <!-- 常用语言高亮支持（本地，无需翻墙） -->
-    <script src="/static/vendor/highlight.js/languages/python.min.js"></script>
-    <script src="/static/vendor/highlight.js/languages/bash.min.js"></script>
-    <script src="/static/vendor/highlight.js/languages/json.min.js"></script>
-    <script src="/static/vendor/highlight.js/languages/yaml.min.js"></script>
 </head>
 <body>
     <div class="app">
@@ -57,6 +53,9 @@
                 <button class="btn-toggle" id="btnToggleRight" title="切换参考资料">📚</button>
             </div>
 
+            <!-- 连接异常横幅（onStale 触发显示，续流恢复后隐藏） -->
+            <div class="stale-banner" id="staleBanner" style="display: none;">⚠️ 连接异常，正在重连…</div>
+
             <div class="chat-messages" id="chatMessages">
                 <div class="welcome-screen" id="welcomeScreen">
                     <div class="welcome-icon">🔬</div>
@@ -82,25 +81,8 @@
                 </div>
             </div>
 
-            <!-- 审批面板（HITL 敏感操作确认） -->
-            <div class="approval-panel" id="approvalPanel" style="display: none;">
-                <div class="approval-content">
-                    <div class="approval-icon">⚠️</div>
-                    <div class="approval-info">
-                        <div class="approval-title">敏感操作需要确认</div>
-                        <div class="approval-desc" id="approvalDesc">Agent 请求执行一项敏感操作，请确认是否允许。</div>
-                        <div class="approval-detail" id="approvalDetail"></div>
-                    </div>
-                    <div class="approval-actions">
-                        <button class="btn-approval btn-reject" id="btnReject" title="拒绝执行">
-                            <span>✕</span> 拒绝
-                        </button>
-                        <button class="btn-approval btn-approve" id="btnApprove" title="确认执行">
-                            <span>✓</span> 确认
-                        </button>
-                    </div>
-                </div>
-            </div>
+            <!-- 回到底部按钮（用户上翻时出现） -->
+            <button class="back-to-bottom" id="backToBottom" style="display: none;">↓ 回到底部</button>
 
             <div class="chat-input-area">
                 <div class="input-wrap">
@@ -179,6 +161,9 @@
         </div>
     </div>
 
+    <script src="/static/js/stream_client.js"></script>
+    <script src="/static/js/toast.js"></script>
+    <script src="/static/js/common.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

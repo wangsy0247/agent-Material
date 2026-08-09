@@ -23,57 +23,49 @@ const $ = (id) => document.getElementById(id);
 // 认证 & API
 // ============================================
 
-async function _doRefresh() {
-    const res = await fetch(`${API_BASE}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: state.refreshToken }),
-    });
-    if (!res.ok) throw new Error('刷新令牌失效');
-    const data = await res.json();
-    state.token = data.access_token;
-    state.refreshToken = data.refresh_token;
-    localStorage.setItem('agent_token', data.access_token);
-    localStorage.setItem('agent_refresh_token', data.refresh_token);
-    return data.access_token;
+// 登录失效：提示并跳回登录页（稍作延迟让用户看到提示）
+function relogin() {
+    Toast.error('登录已过期，请重新登录');
+    setTimeout(() => { window.location.href = '/'; }, 1200);
 }
 
-async function ensureTokenValid() {
-    if (!state.token || !state.refreshToken) return;
-    try {
-        const payload = JSON.parse(atob(state.token.split('.')[1]));
-        const exp = payload.exp * 1000;
-        if (Date.now() + 5 * 60 * 1000 >= exp) {
-            await _doRefresh();
-        }
-    } catch (e) {
-        console.warn('Token 解析失败', e);
-    }
-}
+// 认证上下文（公共逻辑见 common.js AppCommon.createAuthContext）：
+// token 存取注入本页 state，刷新失败/最终 401 走 relogin()
+const authCtx = AppCommon.createAuthContext({
+    getToken: () => state.token,
+    getRefreshToken: () => state.refreshToken,
+    setTokens(access, refresh) {
+        state.token = access;
+        state.refreshToken = refresh;
+        localStorage.setItem('agent_token', access);
+        localStorage.setItem('agent_refresh_token', refresh);
+    },
+    onAuthFail: () => relogin(),
+});
 
 async function apiFetch(path, options = {}) {
-    await ensureTokenValid();
+    await authCtx.ensureTokenValid();
     const headers = { 'Content-Type': 'application/json' };
     if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
     const res = await fetch(`${API_BASE}${path}`, { headers, ...options });
     if (res.status === 401) {
         if (state.refreshToken) {
             try {
-                await _doRefresh();
+                await authCtx.refresh();
                 return apiFetch(path, options);
             } catch {
-                alert('登录已过期，请重新登录');
-                window.location.href = '/';
-                throw new Error('登录已过期');
+                relogin();
+                throw AppCommon.friendlyError('登录已过期');
             }
         }
-        alert('登录已过期，请重新登录');
-        window.location.href = '/';
-        throw new Error('登录已过期');
+        relogin();
+        throw AppCommon.friendlyError('登录已过期');
     }
     if (!res.ok) {
         const err = await res.text();
-        throw new Error(err);
+        const error = new Error(err);
+        error.status = res.status; // 带状态码，供 formatError 友好化
+        throw error;
     }
     return res.json();
 }
@@ -82,33 +74,16 @@ async function apiFetch(path, options = {}) {
 // 工具函数
 // ============================================
 
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function renderMarkdown(text) {
-    if (!text) return '';
-    marked.setOptions({ breaks: true, gfm: true });
-    let html = marked.parse(text);
-    html = html.replace(/<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g, (match, lang, code) => {
-        const highlighted = hljs.highlightAuto(code, lang ? [lang] : undefined).value;
-        return `<pre><code class="hljs language-${lang || ''}">${highlighted}</code></pre>`;
-    });
-    return html;
-}
-
 function setLoading(el, text = '加载中...') {
     el.innerHTML = `<div class="rag-loading"><div class="rag-spinner"></div><span>${text}</span></div>`;
 }
 
 function setError(el, text) {
-    el.innerHTML = `<div class="rag-error">❌ ${escapeHtml(text)}</div>`;
+    el.innerHTML = `<div class="rag-error">❌ ${AppCommon.escapeHtml(text)}</div>`;
 }
 
 function setSuccess(el, text) {
-    el.innerHTML = `<div class="rag-success">✅ ${escapeHtml(text)}</div>`;
+    el.innerHTML = `<div class="rag-success">✅ ${AppCommon.escapeHtml(text)}</div>`;
 }
 
 // ============================================
@@ -140,15 +115,15 @@ async function loadStats() {
         grid.innerHTML = `
             <div class="rag-stat-item">
                 <div class="rag-stat-label">向量库文档数</div>
-                <div class="rag-stat-value">${d.document_count ?? '-'}</div>
+                <div class="rag-stat-value">${AppCommon.escapeHtml(String(d.document_count ?? '-'))}</div>
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">Collection</div>
-                <div class="rag-stat-value" style="font-size:14px;">${escapeHtml(d.collection_name || '-')}</div>
+                <div class="rag-stat-value" style="font-size:14px;">${AppCommon.escapeHtml(d.collection_name || '-')}</div>
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">Chunk Size</div>
-                <div class="rag-stat-value">${d.chunk_size ?? '-'}</div>
+                <div class="rag-stat-value">${AppCommon.escapeHtml(String(d.chunk_size ?? '-'))}</div>
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">重排序</div>
@@ -156,19 +131,19 @@ async function loadStats() {
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">Top N</div>
-                <div class="rag-stat-value">${d.top_n ?? '-'}</div>
+                <div class="rag-stat-value">${AppCommon.escapeHtml(String(d.top_n ?? '-'))}</div>
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">相似度阈值</div>
-                <div class="rag-stat-value">${d.score_threshold ?? '-'}</div>
+                <div class="rag-stat-value">${AppCommon.escapeHtml(String(d.score_threshold ?? '-'))}</div>
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">向量权重</div>
-                <div class="rag-stat-value">${d.vector_weight ?? '-'}</div>
+                <div class="rag-stat-value">${AppCommon.escapeHtml(String(d.vector_weight ?? '-'))}</div>
             </div>
             <div class="rag-stat-item">
                 <div class="rag-stat-label">BM25 权重</div>
-                <div class="rag-stat-value">${d.bm25_weight ?? '-'}</div>
+                <div class="rag-stat-value">${AppCommon.escapeHtml(String(d.bm25_weight ?? '-'))}</div>
             </div>
         `;
         // 配置表
@@ -187,10 +162,10 @@ async function loadStats() {
             ['Score Threshold', d.score_threshold],
         ];
         tbody.innerHTML = configItems.map(([k, v]) => `
-            <tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v ?? '-'))}</td></tr>
+            <tr><td>${AppCommon.escapeHtml(k)}</td><td>${AppCommon.escapeHtml(String(v ?? '-'))}</td></tr>
         `).join('');
     } catch (e) {
-        setError(grid, e.message);
+        setError(grid, AppCommon.formatError(e));
     }
 }
 
@@ -220,15 +195,15 @@ async function doSearch() {
         results.innerHTML = data.map((item) => `
             <div class="rag-result-item">
                 <div class="rag-result-header">
-                    <span class="rag-result-source">#${item.index} ${escapeHtml(item.source)}</span>
+                    <span class="rag-result-source">#${AppCommon.escapeHtml(String(item.index))} ${AppCommon.escapeHtml(item.source)}</span>
                     <span class="rag-result-score">相似度 ${((item.score || 0) * 100).toFixed(1)}%</span>
                 </div>
-                <div class="rag-result-snippet">${escapeHtml(item.snippet)}</div>
+                <div class="rag-result-snippet">${AppCommon.escapeHtml(item.snippet)}</div>
             </div>
         `).join('');
     } catch (e) {
         status.innerHTML = '';
-        setError(results, e.message);
+        setError(results, AppCommon.formatError(e));
     }
 }
 
@@ -257,64 +232,24 @@ async function doQuery() {
     const answerEl = $('queryAnswer');
     const sourcesWrap = $('querySources');
     const sourcesList = $('querySourcesList');
-    let fullText = '';
 
-    const headers = { 'Content-Type': 'application/json' };
-    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    const { handler, typewriter } = createQueryEventHandler(answerEl, sourcesWrap, sourcesList, status);
 
     try {
-        await ensureTokenValid();
-        if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
-
-        const res = await fetch(`${API_BASE}/rag/query`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ query }),
+        await authCtx.sseConnect({
+            url: `${API_BASE}/rag/query`,
+            body: { query },
+            onEvent: handler,
             signal: state.abortController.signal,
         });
-        if (!res.ok) {
-            const err = await res.text();
-            throw new Error(err);
-        }
-        status.innerHTML = '';
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        await new Promise((resolve, reject) => {
-            const read = () => {
-                reader.read().then(({ done, value }) => {
-                    if (done) { resolve(); return; }
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n\n');
-                    buffer = lines.pop() || '';
-
-                    for (const chunk of lines) {
-                        const line = chunk.trim();
-                        if (!line.startsWith('data:')) continue;
-                        try {
-                            const data = JSON.parse(line.slice(5).trim());
-                            handleQueryEvent(data, answerEl, sourcesWrap, sourcesList, fullText);
-                            if (data.type === 'token' && typeof data.content === 'string') {
-                                fullText += data.content;
-                            }
-                        } catch (e) {
-                            console.warn('SSE parse error:', line, e);
-                        }
-                    }
-                    read();
-                }).catch(reject);
-            };
-            read();
-        });
     } catch (e) {
+        status.innerHTML = '';
         if (e.name === 'AbortError') {
-            status.innerHTML = '';
-            answerEl.innerHTML += '<p style="color:var(--text-secondary)">⏹️ 已中断</p>';
+            // 用户中止：保留已生成内容 + "已停止"标记
+            typewriter.finish();
+            appendStoppedMark(answerEl);
         } else {
-            status.innerHTML = '';
-            setError(resultEl, e.message);
+            setError(resultEl, AppCommon.formatError(e));
         }
     } finally {
         state.isQuerying = false;
@@ -322,43 +257,113 @@ async function doQuery() {
     }
 }
 
-function handleQueryEvent(event, answerEl, sourcesWrap, sourcesList, currentText) {
-    switch (event.type) {
-        case 'start':
-            break;
-        case 'sources': {
-            const sources = Array.isArray(event.content) ? event.content : [];
-            if (sources.length) {
-                sourcesWrap.style.display = 'block';
-                sourcesList.innerHTML = sources.map((s) => `
-                    <div class="rag-result-item" style="margin-bottom:6px;padding:10px;">
-                        <div class="rag-result-header">
-                            <span class="rag-result-source">#${s.index} ${escapeHtml(s.source)}</span>
-                            <span class="rag-result-score">相似度 ${((s.score || 0) * 100).toFixed(1)}%</span>
-                        </div>
-                        <div class="rag-result-snippet">${escapeHtml(s.snippet)}</div>
-                    </div>
-                `).join('');
+// 在回答区尾部追加"已停止"标记（cancelled / 用户中止共用）
+function appendStoppedMark(answerEl) {
+    if (answerEl.querySelector('.rag-stopped-mark')) return;
+    const mark = document.createElement('p');
+    mark.className = 'rag-stopped-mark';
+    mark.textContent = '⏹️ 已停止';
+    answerEl.appendChild(mark);
+}
+
+// 构建问答事件处理器：fullText 累积收在闭包内
+// 流式期间 Typewriter 增量 append 文本节点（不再逐 token 全量重写 innerHTML）
+function createQueryEventHandler(answerEl, sourcesWrap, sourcesList, statusEl) {
+    let fullText = '';
+    let streamSpan = null;
+    let streamNode = null;
+
+    const PHASE_LABELS = { retrieving: '🔍 检索中…', generating: '✍️ 生成中…' };
+    let phaseShown = false;
+    function setPhase(phase) {
+        if (phase) phaseShown = true;
+        if (statusEl) statusEl.textContent = PHASE_LABELS[phase] || phase || '';
+    }
+
+    const typewriter = StreamClient.Typewriter((delta) => {
+        if (!streamNode) {
+            answerEl.innerHTML = '';
+            streamSpan = document.createElement('span');
+            streamSpan.className = 'rag-stream-text';
+            streamNode = document.createTextNode('');
+            streamSpan.appendChild(streamNode);
+            answerEl.appendChild(streamSpan);
+        }
+        streamNode.appendData(delta);
+    });
+
+    function handler(event) {
+        if (!event) return;
+        switch (event.type) {
+            case 'start':
+                break;
+            case 'status': {
+                // 阶段状态（检索中/生成中）
+                if (event.content?.phase) setPhase(event.content.phase);
+                break;
             }
-            break;
-        }
-        case 'token': {
-            const token = event.content || '';
-            // 流式时显示纯文本，最后渲染 Markdown
-            answerEl.innerHTML = escapeHtml(currentText + token).replace(/\n/g, '<br>');
-            break;
-        }
-        case 'done': {
-            // 最终渲染 Markdown
-            answerEl.innerHTML = renderMarkdown(currentText);
-            break;
-        }
-        case 'error': {
-            const msg = event.content?.message || '未知错误';
-            answerEl.innerHTML += `<p style="color:var(--error)">❌ 错误: ${escapeHtml(msg)}</p>`;
-            break;
+            case 'sources': {
+                const sources = Array.isArray(event.content) ? event.content : [];
+                if (sources.length) {
+                    sourcesWrap.style.display = 'block';
+                    sourcesList.innerHTML = sources.map((s) => `
+                        <div class="rag-result-item" style="margin-bottom:6px;padding:10px;">
+                            <div class="rag-result-header">
+                                <span class="rag-result-source">#${AppCommon.escapeHtml(String(s.index))} ${AppCommon.escapeHtml(s.source)}</span>
+                                <span class="rag-result-score">相似度 ${((s.score || 0) * 100).toFixed(1)}%</span>
+                            </div>
+                            <div class="rag-result-snippet">${AppCommon.escapeHtml(s.snippet)}</div>
+                        </div>
+                    `).join('');
+                }
+                break;
+            }
+            case 'token': {
+                const token = event.content || '';
+                // 旧后端不发 phase：首个 token 到达时清掉初始 loading
+                if (!phaseShown && statusEl) statusEl.innerHTML = '';
+                fullText += token;
+                typewriter.push(token);
+                break;
+            }
+            case 'answer': {
+                // 完整答案兜底：仅在没有任何 token 累积时整体渲染
+                if (!fullText && event.content) {
+                    const text = typeof event.content === 'string' ? event.content : (event.content.text || '');
+                    if (text) {
+                        fullText = text;
+                        typewriter.push(text);
+                    }
+                }
+                break;
+            }
+            case 'done': {
+                typewriter.finish();
+                setPhase('');
+                // 最终渲染 Markdown（renderMarkdown 内已过 DOMPurify）
+                answerEl.innerHTML = AppCommon.renderMarkdown(fullText);
+                AppCommon.highlightCodeBlocks(answerEl); // 异步补高亮（hljs 按需加载）
+                break;
+            }
+            case 'cancelled': {
+                // 用户中止/断连：保留已生成内容 + "已停止"标记
+                typewriter.finish();
+                setPhase('');
+                appendStoppedMark(answerEl);
+                break;
+            }
+            case 'error': {
+                const msg = event.content?.message || '未知错误';
+                typewriter.finish();
+                setPhase('');
+                // error 为终态：先把已累积文本定格为纯文本，再追加错误提示，避免半渲染状态
+                answerEl.innerHTML = AppCommon.escapeHtml(fullText).replace(/\n/g, '<br>')
+                    + `<p style="color:var(--error)">❌ 错误: ${AppCommon.escapeHtml(msg)}</p>`;
+                break;
+            }
         }
     }
+    return { handler, typewriter };
 }
 
 // ============================================
@@ -376,7 +381,7 @@ async function doLoadDocuments() {
         setSuccess(result, `加载完成 | 加载前: ${d.before} 条 | 加载后: ${d.after} 条 | 新增: ${d.loaded} 条`);
         if (state.currentTab === 'overview') loadStats();
     } catch (e) {
-        setError(result, e.message);
+        setError(result, AppCommon.formatError(e));
     } finally {
         btn.disabled = false;
     }
@@ -406,7 +411,7 @@ async function doAddDocuments() {
         $('addDocsSource').value = '';
         if (state.currentTab === 'overview') loadStats();
     } catch (e) {
-        setError(result, e.message);
+        setError(result, AppCommon.formatError(e));
     } finally {
         btn.disabled = false;
     }
@@ -419,7 +424,7 @@ async function doDeleteBySource() {
         setError(result, '请输入来源路径或标识');
         return;
     }
-    if (!confirm(`确定要删除来源为 "${source}" 的所有文档片段吗？`)) return;
+    if (!(await Toast.confirm(`确定要删除来源为 "${source}" 的所有文档片段吗？`))) return;
 
     const btn = $('btnDeleteSource');
     btn.disabled = true;
@@ -433,7 +438,7 @@ async function doDeleteBySource() {
         $('deleteSource').value = '';
         if (state.currentTab === 'overview') loadStats();
     } catch (e) {
-        setError(result, e.message);
+        setError(result, AppCommon.formatError(e));
     } finally {
         btn.disabled = false;
     }
@@ -481,8 +486,8 @@ function bindEvents() {
 // ============================================
 function init() {
     if (!state.token) {
-        alert('请先登录');
-        window.location.href = '/';
+        Toast.error('请先登录');
+        setTimeout(() => { window.location.href = '/'; }, 1200);
         return;
     }
     bindEvents();
@@ -510,13 +515,13 @@ async function loadDocsList() {
             return;
         }
         tbody.innerHTML = data.map((item, i) => `
-            <tr data-source="${escapeHtml(item.source)}">
-                <td class="col-check"><input type="checkbox" class="rag-doc-checkbox doc-checkbox" data-source="${escapeHtml(item.source)}"></td>
+            <tr data-source="${AppCommon.escapeHtml(item.source)}">
+                <td class="col-check"><input type="checkbox" class="rag-doc-checkbox doc-checkbox" data-source="${AppCommon.escapeHtml(item.source)}"></td>
                 <td class="col-num">${i + 1}</td>
-                <td class="rag-doc-source">${escapeHtml(item.source)}</td>
-                <td class="col-count">${item.chunk_count ?? '-'}</td>
+                <td class="rag-doc-source">${AppCommon.escapeHtml(item.source)}</td>
+                <td class="col-count">${AppCommon.escapeHtml(String(item.chunk_count ?? '-'))}</td>
                 <td class="col-action">
-                    <button class="rag-btn-small rag-btn-danger-small btn-delete-doc" data-source="${escapeHtml(item.source)}">删除</button>
+                    <button class="rag-btn-small rag-btn-danger-small btn-delete-doc" data-source="${AppCommon.escapeHtml(item.source)}">删除</button>
                 </td>
             </tr>
         `).join('');
@@ -537,8 +542,8 @@ async function loadDocsList() {
         });
     } catch (e) {
         status.innerHTML = '';
-        setError(status, e.message);
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--error);padding:24px;">加载失败: ${escapeHtml(e.message)}</td></tr>`;
+        setError(status, AppCommon.formatError(e));
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--error);padding:24px;">加载失败: ${AppCommon.escapeHtml(AppCommon.formatError(e))}</td></tr>`;
     }
 }
 
@@ -570,7 +575,7 @@ function toggleSelectAll(e) {
 }
 
 async function doDeleteSingleDoc(source) {
-    if (!confirm(`确定要删除文献 "${source}" 吗？`)) return;
+    if (!(await Toast.confirm(`确定要删除文献 "${source}" 吗？`))) return;
     const status = $('docsListStatus');
     setLoading(status, '删除中...');
     try {
@@ -583,14 +588,14 @@ async function doDeleteSingleDoc(source) {
         loadDocsList();
         if (state.currentTab === 'overview') loadStats();
     } catch (e) {
-        setError(status, e.message);
+        setError(status, AppCommon.formatError(e));
     }
 }
 
 async function doBatchDelete() {
     const sources = Array.from(state.selectedDocs);
     if (!sources.length) return;
-    if (!confirm(`确定要删除选中的 ${sources.length} 篇文献吗？此操作不可恢复。`)) return;
+    if (!(await Toast.confirm(`确定要删除选中的 ${sources.length} 篇文献吗？此操作不可恢复。`))) return;
     const status = $('docsListStatus');
     setLoading(status, '批量删除中...');
     try {
@@ -603,7 +608,7 @@ async function doBatchDelete() {
         loadDocsList();
         if (state.currentTab === 'overview') loadStats();
     } catch (e) {
-        setError(status, e.message);
+        setError(status, AppCommon.formatError(e));
     }
 }
 
@@ -635,7 +640,7 @@ async function doAddChunks() {
         if (state.currentTab === 'overview') loadStats();
         if (state.currentTab === 'docs') loadDocsList();
     } catch (e) {
-        setError(result, e.message);
+        setError(result, AppCommon.formatError(e));
     } finally {
         btn.disabled = false;
     }
