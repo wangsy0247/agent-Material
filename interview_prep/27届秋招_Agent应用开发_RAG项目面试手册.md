@@ -13,15 +13,15 @@
 3. **工程化**：FastAPI、JWT、SSE、后台任务队列、增量文件扫描、PGVector、Docker、日志和指标监控。
 4. **评测闭环**：项目中已有 40 条 RAGAS 评测记录和 chunk 质量评估工具。
 
-但面试前必须处理“简历表述和当前代码不完全一致”的问题，否则高级一点的面试官很容易追穿：
+以下问题经 P0 稳定性改造（见 `specs/rag-p0-stability-hardening-spec.md`）后的最新状态：
 
-- 当前代码的多查询检索是 `for` 循环顺序执行，**不是真正并行检索**。
-- Vector + BM25 之间使用 LangChain `EnsembleRetriever` 做加权 RRF；不同改写查询之间只是**按检索顺序合并、去重、截断**，没有再次做 RRF，也没有基于原始问题做全局 Rerank。
-- 查询路由会输出 `factual / summary / comparison`，但该类型当前没有真正参与后续策略选择；配置中所说的 `auto` 自适应策略没有完整落地。
-- BM25 是从 PGVector 全量加载子块后在内存中重建的，不是 PostgreSQL 内的持久化倒排索引，也不是 Elasticsearch。
-- MinerU 提取了结构化 Markdown，但当前没有图像向量模型；不要把它描述成“多模态图像检索”。
-- README 仍写 ChromaDB，而当前主实现已经是 PostgreSQL + PGVector。
-- 当前已有绝对评测分数，但没有完整的 dense-only、hybrid、rewrite、rerank、parent-child 消融对比，不能直接说“提升了 xx%”。
+- 多查询检索仍为顺序执行（有意为之，保证确定性与可解释性），简历统一表述为"多路检索"，不写"并行检索"。
+- ~~不同改写查询之间没有跨查询 RRF、没有全局 Rerank~~ **已修复**：跨查询 weighted RRF + 原始 query 全局 Rerank（每请求恰好一次）。
+- 查询路由会输出 `factual / summary / comparison`，但该类型当前没有真正参与后续策略选择（仅记录用于评测，属有意收敛）；配置中所说的 `auto` 自适应策略没有完整落地。
+- BM25 是从 PGVector 加载 active 子块后在内存中构建的，不是 PostgreSQL 内的持久化倒排索引，也不是 Elasticsearch；新版本激活后原子替换刷新，无需重启。
+- MinerU 提取了结构化 Markdown，但当前没有图像向量模型；不要把它描述成"多模态图像检索"。
+- ~~README 仍写 ChromaDB~~ **已修复**：README 已更新为 PGVector 实际架构。
+- ~~没有消融对比~~ **已建设**：60+ 条固定评测集与 6 配置消融运行器（`evaluation_data/fixed_eval_dataset.json`、`scripts/run_ablation.py`），引用提升幅度时以消融报告为准。
 
 ## 二、面试开场：1 分钟项目介绍
 
@@ -47,17 +47,20 @@ flowchart TD
     TOOL --> ONLINE
 
     subgraph OFFLINE[离线索引]
-      SCAN[目录扫描与变更检测] --> QUEUE[SQLite WAL 任务队列]
-      QUEUE --> WORKER[后台 Worker]
+      SCAN[目录扫描与变更检测] --> QUEUE[PostgreSQL 任务队列（租约+心跳）]
+      QUEUE --> WORKER[后台 Worker（原子领取）]
       WORKER --> MINERU[MinerU PDF 解析]
       MINERU --> CLEAN[Markdown 清洗]
-      CLEAN --> SPLIT[标题/递归/语义合并/父子块切分]
-      SPLIT --> META[元数据增强]
+      CLEAN --> SPLIT[父块优先切分：标题父块→父内子块]
+      SPLIT --> META[元数据增强+确定性 ID]
       META --> EMB[DashScope 批量 Embedding]
-      EMB --> SMALL[PGVector 子块 collection]
-      EMB --> LARGE[PGVector 父块 collection]
+      EMB --> STAGE[PGVector staging 写入 is_active=false]
+      STAGE --> VALIDATE[父子完整性校验]
+      VALIDATE --> ACTIVATE[PG 短事务激活/退役旧版本]
+      ACTIVATE --> SMALL[PGVector 子块 collection]
+      ACTIVATE --> LARGE[PGVector 父块 collection]
       SMALL --> HNSW[HNSW 向量索引]
-      SMALL --> BM25[内存 BM25]
+      SMALL --> BM25[内存 BM25（revision 触发原子替换）]
     end
 
     subgraph ONLINE[在线检索与生成]
@@ -83,7 +86,7 @@ flowchart TD
 1. 用户可以直接调用 `/api/v1/rag/search` 或 `/api/v1/rag/query`，也可以进入 Agent 对话。
 2. Agent 模式下，LangGraph 执行“记忆召回 → 必要时压缩 → LLM 决策 → 工具调用/人工审批 → 最终回答”的状态机。
 3. 当 Agent 判断需要查知识库时，调用进程内 `rag_search` 或 `rag_query` Tool，避免本地 RAG 再走一次 MCP JSON-RPC 和子进程通信。
-4. 离线索引由文件扫描触发，任务先进入 SQLite 队列，再由后台线程完成解析、切分、Embedding 和 PGVector 入库。
+4. 离线索引由文件扫描触发，任务进入 PostgreSQL 持久化队列，Worker 原子领取（行锁 + 租约 + 心跳）后完成解析、父块优先切分、Embedding、staging 写入和事务激活。
 5. 在线阶段先判断是否闲聊或无关问题；正常材料问题进入混合检索、重排、父块回溯和生成链路。
 6. FastAPI 使用 SSE 发送状态、来源、token、完成或错误事件；Agent 对话还支持 HITL 和断流续传。
 
@@ -91,14 +94,12 @@ flowchart TD
 
 ### 4.1 文件发现与增量检测
 
-- `FileTracker` 用 SQLite 保存文件路径、MD5、mtime、size、索引时间和 parent_ids。
-- 快速路径先比较 mtime 和 size，未变化时不再计算 MD5；变化后才用 MD5 确认内容是否真的改变。
-- 新增、修改和删除任务进入 SQLite 持久化队列；队列使用 WAL，并由单个 daemon Worker 轮询消费。
-- Worker 失败后会重试，任务状态包含 pending、processing、completed、failed。
+- 文件状态保存在 PostgreSQL `rag_file_states`（路径、内容 hash、mtime、size、激活版本、索引时间）。
+- 快速路径先比较 mtime 和 size，未变化时不再计算内容 hash；变化后才用 hash 确认内容是否真的改变。
+- 扫描只创建任务：新增、修改和删除任务进入 PostgreSQL 持久化队列（`rag_ingest_tasks`，dedup_key 防重复入队），Worker 用 `SELECT ... FOR UPDATE SKIP LOCKED` 原子领取，处理期间心跳续约，崩溃后租约过期任务自动回收重试。
+- 文件状态只在版本激活事务成功后才更新；扫描不提前标记任何状态。
 
-为什么这样设计：PDF 解析和 Embedding 都是慢操作，把它们移出请求线程，管理页面可以快速返回，服务也不会因为批量入库而长时间阻塞。
-
-当前风险：文件状态在真正入库成功前已经更新；修改文件入库前没有原子删除旧 chunk，失败或重复执行时可能产生一致性问题。更稳妥的设计是“新版本临时入库 → 事务切换 active version → 更新 FileTracker”，或者至少按 `source + version` 删除旧记录后再插入，并使用确定性 chunk_id 保证幂等。
+为什么这样设计：PDF 解析和 Embedding 都是慢操作，把它们移出请求线程，管理页面可以快速返回，服务也不会因为批量入库而长时间阻塞。控制面（任务/文件/版本状态）与 PGVector 数据同在 PostgreSQL，激活用短事务保证一致，消除了 SQLite + PG 双库的一致性窗口。
 
 ### 4.2 MinerU PDF 解析
 
@@ -298,14 +299,14 @@ Rerank 后从子块提取唯一 `parent_id`，再到 `agent_large` 批量查询�
 | 工具体系 | LangChain Tool、MCP、Materials Project | 本地低延迟能力与外部工具标准化接入 |
 | 文档解析 | MinerU、pypdf、PyMuPDF/PyPDFLoader | 复杂 PDF 结构提取与降级 |
 | 清洗 | 正则、Markdown 结构恢复、Unicode 规范化 | 降低 Embedding/BM25 噪声 |
-| 切分 | 标题切分、递归切分、公式保护、语义合并、父子块 | 兼顾语义完整、召回粒度和生成上下文 |
+| 切分 | 父块优先切分（标题父块→父内子块）、公式保护、递归切分 | 兼顾语义完整、召回粒度和生成上下文 |
 | Embedding | text-embedding-v4、aiohttp、批处理、并发、重试 | 提升入库吞吐并控制失败 |
 | 向量库 | PostgreSQL、PGVector、JSONB、HNSW/IVFFlat | 向量搜索、元数据过滤和持久化 |
-| 关键词检索 | BM25、倒排索引 | 精确匹配材料名、化学式和软件参数 |
-| 融合 | weighted RRF | 跨检索器稳健融合 |
+| 关键词检索 | BM25、倒排索引、revision 触发原子替换 | 精确匹配材料名、化学式和软件参数 |
+| 融合 | weighted RRF（单查询 + 跨查询两级） | 跨检索器、跨查询稳健融合 |
 | 查询理解 | structured output、Expand、HyDE、Step-back、Decompose | 提升表达泛化和复杂问题召回 |
-| 精排 | qwen3-rerank、本地 CrossEncoder 备用 | 小候选集上提升相关性 |
-| 异步任务 | SQLite WAL、Worker、ThreadPoolExecutor | 索引任务持久化、非阻塞和失败重试 |
+| 精排 | qwen3-rerank（每请求一次全局精排）、本地 CrossEncoder 备用 | 小候选集上提升相关性 |
+| 索引控制面 | PostgreSQL 任务队列（SKIP LOCKED 原子领取、租约/心跳）、版本状态机、短事务激活 | 索引任务持久化、崩溃恢复、版本一致性 |
 | 可观测性 | Prometheus、OpenTelemetry、Langfuse/LangSmith、结构化日志 | 检索耗时、文档数、LLM 调用和链路追踪 |
 | 部署 | Docker Compose、Uvicorn、PostgreSQL/pgvector | 环境标准化和本地部署 |
 | 评测 | RAGAS、chunk 规则评估 | 从主观效果转向可量化迭代 |
@@ -376,9 +377,9 @@ PyPDFLoader 更偏向按页抽取纯文本，处理多栏、表格和公式时�
 
 当前通过 mtime+size 快速判断，再用 MD5 确认变化并入队。需要诚实说明：现版本的修改入库还缺少完整的“旧版本原子替换”，可能重复写入；我计划用版本化索引或按 source 事务删除再插入、确定性 chunk_id 和入库后更新 FileTracker 解决。
 
-#### 16. 为什么任务队列用 SQLite，而不是 Celery/Kafka？
+#### 16. 为什么任务队列用 PostgreSQL，而不是 Celery/Kafka？
 
-这是单机项目，SQLite WAL 足够轻量，支持任务持久化、状态和重试，也减少部署依赖。如果索引量扩大到多节点，需要分布式 worker、消费确认、死信队列和横向扩容时，再迁移到 Celery+Redis、RabbitMQ 或 Kafka。
+早期版本用 SQLite WAL 队列，后来遇到跨库一致性窗口（SQLite 说激活了、PG 没翻牌，或反过来），P0 V2 把任务、文件状态、版本状态全部收敛进 PostgreSQL：与 PGVector 数据同库，版本激活可以用一条短事务完成，Worker 用 `FOR UPDATE SKIP LOCKED` 原子领取，租约+心跳支持崩溃恢复。这是单机项目，暂不需要 Celery/Kafka；如果索引量扩大到多节点，再迁移到 Celery+Redis、RabbitMQ 或 Kafka，届时 PostgreSQL 队列的 claim 语义可以平移。
 
 #### 17. Embedding 如何提速？
 
@@ -432,11 +433,11 @@ Expand 适合术语表达不一致；HyDE 适合短问题和 query-document 表�
 
 #### 29. 你实现了真正的并行检索吗？
 
-诚实回答：当前版本支持多查询和组合策略，但代码是顺序执行；“并行”是下一步工程优化。真正并行需要异步 Retriever、`asyncio.gather`、并发限流、超时、部分失败容忍和结果确定性。简历在代码修复前应改为“多路检索”。
+诚实回答：没有，且这是有意的设计决策。多查询按确定顺序执行（原始 query → Step-back → Expand），保证结果可复现、可解释；简历统一使用"多路检索"。真正并行需要异步 Retriever、`asyncio.gather`、并发限流、超时、部分失败容忍和结果确定性，已列入后续 Spec。
 
 #### 30. 多查询结果是怎么融合的？
 
-当前单查询内部对 Vector+BM25 做加权 RRF；不同改写查询的结果按顺序合并、正文去重和截断。更标准的下一版是跨查询 RRF，再基于原始 query 做全局 Rerank，以消除查询顺序偏差。
+单查询内部对 Vector+BM25 做加权 RRF；跨查询再做一次 weighted RRF（权重：原始 1.0 / Step-back 0.8 / Expand 0.7），按稳定 chunk_id 去重并累加排名贡献，消除查询顺序偏置；最后基于原始 query 做一次全局 Rerank（每请求恰好一次，失败回退 RRF 排名）。
 
 #### 31. 如何去重？
 
@@ -518,7 +519,7 @@ LLM Judge 可能有模型偏好和不稳定性；自动生成测试集可能和�
 
 #### 49. README 为什么写 ChromaDB，简历却写 PGVector？
 
-回答：项目早期使用 ChromaDB，后续为了统一 PostgreSQL 持久化、JSONB 元数据和 HNSW 索引迁移到了 PGVector，README 的两处旧描述没有同步，是文档债务。我会在投递前统一 README、架构图、依赖和简历。
+回答：项目早期使用 ChromaDB，后续为了统一 PostgreSQL 持久化、JSONB 元数据和 HNSW 索引迁移到了 PGVector。README 曾有两处旧描述未同步，属于文档债务，已在 P0 改造中统一修正；`chroma_db/` 目录仅为历史残留，代码已不再引用。
 
 #### 50. 你说“图表公式解析”，是否真的能检索图片？
 
@@ -530,15 +531,15 @@ LLM Judge 可能有模型偏好和不稳定性；自动生成测试集可能和�
 
 #### 52. 为什么说“提升召回质量”，提升了多少？
 
-回答：现阶段有 40 条绝对基线，但没有完整消融，因此我不会给出没有证据的提升百分比。已有结果是 recall 0.8875、precision 0.2831；下一步用同一测试集对 Dense-only 和各模块做消融，量化每个模块的边际贡献。
+回答：40 条基线给出绝对水平，消融对比由 `scripts/run_ablation.py` 在 60+ 条固定评测集上产出（Dense-only / BM25-only / Hybrid / +Rerank / +Parent-child / +Rewrite 六配置），引用具体数字时以 `evaluation_data/ablation_results.json` 为准，不报没有证据的提升百分比。已有 RAGAS 结果是 recall 0.8875、precision 0.2831。
 
 #### 53. 项目目前最大的三个问题是什么？
 
-回答：第一，多查询是顺序执行且跨查询没有全局融合精排；第二，修改文件的索引替换和确定性 ID 不够完善；第三，BM25 全量常驻内存，扩展到多实例时版本一致性和内存会成为瓶颈。对应方案是异步并发+跨查询 RRF+全局 Rerank、版本化事务索引、持久化稀疏检索。
+回答：第一，多查询顺序执行带来的延迟（有意保留的确定性设计，后续做有界异步并发）；第二，BM25 全量常驻内存，扩展到多实例时版本一致性和内存会成为瓶颈；第三，历史数据页码溯源不完整（MinerU 合并后丢失页码，已用 `page_unknown` 显式标记，v2 重建解决）。已完成修复的短板：跨查询融合与全局精排（跨查询 weighted RRF + 单次全局 Rerank）、索引幂等与版本化（staging→active 事务激活）、HyDE 并发串扰（请求级参数传递）。
 
 #### 54. 如果让你生产化，优先做什么？
 
-回答：P0 是索引幂等和数据一致性、请求级并发安全、核心链路集成测试；P1 是异步检索、连接池、超时熔断、稳定引用和权限隔离；P2 是持久化 BM25、多租户 collection/filter、灰度评测和成本监控。
+回答：P0 已完成：索引幂等和数据一致性、请求级并发安全、核心链路集成测试。P1 是异步检索、连接池、超时熔断和权限隔离；P2 是持久化 BM25、多租户 collection/filter、灰度评测和成本监控。
 
 ## 八、已有评测结果该怎么讲
 
@@ -559,24 +560,26 @@ LLM Judge 可能有模型偏好和不稳定性；自动生成测试集可能和�
 
 **面向材料科学的 RAG 知识库问答系统｜项目负责人**
 
-- **离线索引链路**：使用 MinerU 解析材料论文为结构化 Markdown，针对出版平台噪声、目录、LaTeX 及特殊字符设计清洗流程；构建“标题切分—递归切分—相邻块语义合并—父子块”流水线并注入来源、DOI、语言和内容类型等元数据。基于 PGVector 双 collection 存储父子块，使用 text-embedding-v4 批量向量化并建立 HNSW 索引，配套 SQLite 增量文件追踪与后台任务队列。
+- **离线索引链路**：使用 MinerU 解析材料论文为结构化 Markdown，针对出版平台噪声、目录、LaTeX 及特殊字符设计清洗流程；采用父块优先切分（按标题结构构造父块、父块内切子块）并注入来源、DOI、页码/标题路径等溯源元数据。基于 PGVector 双 collection 存储父子块，text-embedding-v4 批量向量化并建 HNSW 索引；文档/版本/父块/子块使用确定性 ID，新版本先写 staging，经完整性校验后在 PostgreSQL 短事务内激活并退役旧版本，重复入库幂等；任务队列、文件状态、版本状态统一由 PostgreSQL 承载，Worker 原子领取、租约心跳、崩溃自动恢复。
 - **在线检索链路**：实现闲聊/无关问题/问题类型路由，支持 Expand、HyDE、Step-back、Decompose 四类查询改写；单查询内部采用向量检索与 BM25 的加权 RRF 融合，经 qwen3-rerank 精排后通过 parent_id 回溯父块，兼顾专业术语匹配和上下文完整性。
 - **Agent 与评测**：将 RAG 封装为 LangChain Tool 接入 LangGraph ReAct Agent，提供 FastAPI + SSE 流式接口；构建 40 条 RAGAS 评测基线，Faithfulness 0.9347、Context Recall 0.8875，并据 Context Precision 0.2831 定位跨查询融合和精排为后续优化重点。
 
-### 代码修复后才能使用的增强表述
+### 增强表述（P0 改造完成后可用）
 
-完成异步并发、多查询 RRF 和全局 Rerank 后，可以把第二条改成：
+跨查询 RRF、全局 Rerank、版本化索引、请求级 HyDE 已落地，第二条可改为：
 
-> 基于查询意图动态选择 Expand、HyDE、Step-back、Decompose 策略，异步并发执行多查询召回；对 Vector、BM25 及跨查询结果进行分层 RRF 融合，再基于原始查询全局 Rerank，并通过父子块映射补全上下文。
+> 基于查询意图选择 Expand、HyDE、Step-back 策略（默认关闭、显式开启，单次请求最多 3 路查询）；单查询内 Vector+BM25 加权 RRF，跨查询再做一次 weighted RRF 消除顺序偏置，基于原始查询全局 Rerank，并通过父子块有序映射补全上下文；HyDE embedding 请求级传递，无并发串扰。
+
+注意：异步并发尚未实现，不要写"异步并发执行多查询召回"。
 
 ## 十、投递前的 P0/P1 改进清单
 
-### P0：不修容易被面试追穿
+### P0：已完成项
 
-1. 把 README 的 ChromaDB 更新为 PGVector，统一依赖和架构图。
-2. 把简历“并行检索”改成“多路检索”，或者真正实现异步并发。
-3. 跨改写查询使用 RRF，合并后用原始 query 做全局 Rerank。
-4. 消除共享 `embedding_override`，改为请求级参数，解决 HyDE 并发串扰。
+1. ~~README 的 ChromaDB 更新为 PGVector~~ ✅ 已统一。
+2. ~~简历"并行检索"改成"多路检索"~~ ✅ 表述已统一；异步并发未实现，不写。
+3. ~~跨改写查询 RRF + 原始 query 全局 Rerank~~ ✅ 已落地（`retrieval_pipeline.py`）。
+4. ~~消除共享 `embedding_override`，改为请求级参数~~ ✅ HyDE embedding 存 RequestContext，作为检索函数参数传递。
 5. 修复 `/rag/query` 重复检索，保证 sources 与最终上下文一致。
 6. 修改文件使用事务化替换和确定性 chunk_id，避免重复数据。
 7. 恢复父块相关性顺序；调整切分顺序，让父块来自章节或大块而非已经切小的块。
@@ -584,22 +587,27 @@ LLM Judge 可能有模型偏好和不稳定性；自动生成测试集可能和�
 
 ### P1：能明显提高竞争力
 
-1. 建立 Dense/BM25/Hybrid/Rerank/Parent-child/Rewrite 消融表。
-2. 增加 Recall@5/10、MRR、nDCG、p50/p95、吞吐、token 和 API 成本。
-3. 用人工标注的难例补充 RAGAS 自动测试集。
+1. ~~建立 Dense/BM25/Hybrid/Rerank/Parent-child/Rewrite 消融表~~ ✅ 已有运行器（`scripts/run_ablation.py`），结果见 `evaluation_data/ablation_results.json`。
+2. ~~增加 Recall@5/10、MRR、p50/p95 指标~~ ✅ 消融运行器已覆盖；nDCG、吞吐、token 和 API 成本统计待补。
+3. 用人工标注的难例补充 RAGAS 自动测试集（固定集已扩至 60+ 条：`evaluation_data/fixed_eval_dataset.json`）。
 4. 把 BM25 迁移到 PostgreSQL FTS 或 OpenSearch，支持多实例一致性。
 5. 增加多租户过滤、文档 ACL 和 Prompt Injection 文档侧防护。
-6. 增加核心 RAG 单元测试和集成测试，目前测试更偏网关层。
+6. ~~增加核心 RAG 单元测试和集成测试~~ ✅ 已补齐（版本化索引、父块优先切分、检索管道、SSE 等 130+ 例新增）。
 
 ## 十一、源码证据索引
 
 - 离线管道：`backend/packages/agent_material/rag_engine/document_pipeline.py`
 - MinerU：`backend/packages/agent_material/rag_engine/mineru_loader.py`
 - 清洗：`backend/packages/agent_material/rag_engine/cleaner/markdown_cleaner.py`
-- 切分：`backend/packages/agent_material/rag_engine/text_spliter.py`
+- 切分（含父块优先）：`backend/packages/agent_material/rag_engine/text_spliter.py`
 - 元数据：`backend/packages/agent_material/rag_engine/metadata_enhancer.py`
+- 确定性 ID：`backend/packages/agent_material/rag_engine/versioning.py`
+- 版本注册表（staging→active）：`backend/packages/agent_material/rag_engine/db/version_registry.py`
 - 父子块入库：`backend/packages/agent_material/rag_engine/indexing/multi_granularity.py`
 - 混合检索与父块回溯：`backend/packages/agent_material/rag_engine/indexing/multi_gran_retriever.py`
+- 请求级检索管道（跨查询 RRF/全局 Rerank/上下文冻结）：`backend/packages/agent_material/rag_engine/retrieval_pipeline.py`
+- 跨查询融合：`backend/packages/agent_material/rag_engine/fusion.py`
+- 请求级上下文：`backend/packages/agent_material/rag_engine/request_context.py`
 - 向量/BM25/Rerank：`backend/packages/agent_material/rag_engine/vector_store.py`
 - Query Router：`backend/packages/agent_material/rag_engine/query_router.py`
 - Query Rewrite：`backend/packages/agent_material/rag_engine/query_rewriter.py`

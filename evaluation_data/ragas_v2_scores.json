@@ -1,0 +1,992 @@
+{
+  "dataset": "/mnt/d/Langchain_study/Agent智能体/Agent Material/evaluation_data/fixed_eval_dataset.json",
+  "filled": "/mnt/d/Langchain_study/Agent智能体/Agent Material/evaluation_data/ragas_v2_filled.json",
+  "concurrency": 5,
+  "evaluation_time_s": 3417.3,
+  "partial": false,
+  "timestamp": "2026-08-10T12:19:13.731425+00:00",
+  "notes": [
+    "四指标均值（summary）仅统计 answerable 题；unanswerable 题的 ground_truth 为'无法回答'类说明，与 RAGAS 指标语义不同，单独归入 unanswerable 节点，不混入均值。",
+    "评估 LLM=qwen3.6-plus(t=0)，embedding=text-embedding-v4，与旧基线 ragas_eval_scores.json（40 题）同模型，但评测集扩为 91 题固定集，绝对值与旧基线可比性受限（题集不同）。",
+    "contexts 取 ctx.context_docs（实际进入 prompt 的冻结块）。"
+  ],
+  "scored_count": 91,
+  "answerable_count": 81,
+  "summary": {
+    "faithfulness": {
+      "mean": 0.9231,
+      "median": 1.0,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 81
+    },
+    "context_recall": {
+      "mean": 0.8395,
+      "median": 1.0,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 81
+    },
+    "context_precision": {
+      "mean": 0.8621,
+      "median": 1.0,
+      "min": 0.0,
+      "max": 1.0,
+      "count": 81
+    },
+    "answer_correctness": {
+      "mean": 0.7134,
+      "median": 0.7507,
+      "min": 0.0603,
+      "max": 0.9886,
+      "count": 81
+    }
+  },
+  "unanswerable": {
+    "count": 10,
+    "summary": {
+      "faithfulness": {
+        "mean": 0.55,
+        "median": 0.8333,
+        "min": 0.0,
+        "max": 1.0,
+        "count": 10
+      },
+      "context_recall": {
+        "mean": 0.4,
+        "median": 0.5,
+        "min": 0.0,
+        "max": 1.0,
+        "count": 10
+      },
+      "context_precision": {
+        "mean": 0.275,
+        "median": 0.3333,
+        "min": 0.0,
+        "max": 1.0,
+        "count": 10
+      },
+      "answer_correctness": {
+        "mean": 0.6411,
+        "median": 0.6661,
+        "min": 0.282,
+        "max": 0.9112,
+        "count": 10
+      }
+    },
+    "details": [
+      {
+        "index": 81,
+        "question": "Gaussian 软件中用 B3LYP/6-31G(d) 方法做几何优化时，输入文件里的路由段和基组该怎么写？",
+        "question_type": "unanswerable",
+        "route_decision": "rag",
+        "faithfulness": 0.6667,
+        "context_recall": 1.0,
+        "context_precision": 0.3333,
+        "answer_correctness": 0.6382
+      },
+      {
+        "index": 82,
+        "question": "VASP 的 INCAR 中 ISIF=3 与 IBRION=2 组合用于哪类计算，这两个参数分别控制什么？",
+        "question_type": "unanswerable",
+        "route_decision": "rag",
+        "faithfulness": 1.0,
+        "context_recall": 0.5,
+        "context_precision": 0.3333,
+        "answer_correctness": 0.6661
+      },
+      {
+        "index": 83,
+        "question": "用 ABACUS 以 PBE 泛函计算体相硅（Si）的带隙，具体数值是多少 eV？",
+        "question_type": "unanswerable",
+        "route_decision": "rag",
+        "faithfulness": 1.0,
+        "context_recall": 0.5,
+        "context_precision": 1.0,
+        "answer_correctness": 0.5861
+      },
+      {
+        "index": 84,
+        "question": "在铜衬底上用化学气相沉积（CVD）法生长单层石墨烯，推荐的衬底温度和甲烷/氢气流量比是多少？",
+        "question_type": "unanswerable",
+        "route_decision": "rag",
+        "faithfulness": 1.0,
+        "context_recall": 0.5,
+        "context_precision": 0.5,
+        "answer_correctness": 0.282
+      },
+      {
+        "index": 85,
+        "question": "在 LAMMPS 中调用 EAM 势函数文件时，pair_style 和 pair_coeff 命令应该怎么写？",
+        "question_type": "unanswerable",
+        "route_decision": "rag",
+        "faithfulness": 1.0,
+        "context_recall": 1.0,
+        "context_precision": 0.0,
+        "answer_correctness": 0.6912
+      },
+      {
+        "index": 86,
+        "question": "如何用 VESTA 把晶体结构导出为 VASP 的 POSCAR 格式，具体操作步骤是什么？",
+        "question_type": "unanswerable",
+        "route_decision": "rag",
+        "faithfulness": 0.8333,
+        "context_recall": 0.5,
+        "context_precision": 0.5833,
+        "answer_correctness": 0.5236
+      },
+      {
+        "index": 87,
+        "question": "今天北京的天气怎么样，出门需要带伞吗？",
+        "question_type": "unanswerable",
+        "route_decision": "irrelevant",
+        "faithfulness": 0.0,
+        "context_recall": 0.0,
+        "context_precision": 0.0,
+        "answer_correctness": 0.7697
+      },
+      {
+        "index": 88,
+        "question": "红烧肉怎么做才能肥而不腻、入口即化？",
+        "question_type": "unanswerable",
+        "route_decision": "irrelevant",
+        "faithfulness": 0.0,
+        "context_recall": 0.0,
+        "context_precision": 0.0,
+        "answer_correctness": 0.7676
+      },
+      {
+        "index": 89,
+        "question": "2024 年欧洲杯足球赛的冠军是哪支球队？",
+        "question_type": "unanswerable",
+        "route_decision": "irrelevant",
+        "faithfulness": 0.0,
+        "context_recall": 0.0,
+        "context_precision": 0.0,
+        "answer_correctness": 0.9112
+      },
+      {
+        "index": 90,
+        "question": "怎么训练一只边境牧羊犬接飞盘？大概需要多长时间？",
+        "question_type": "unanswerable",
+        "route_decision": "irrelevant",
+        "faithfulness": 0.0,
+        "context_recall": 0.0,
+        "context_precision": 0.0,
+        "answer_correctness": 0.5754
+      }
+    ]
+  },
+  "details": [
+    {
+      "index": 0,
+      "question": "ABACUS 计算电子能带结构时，KPT 文件需要采用什么模式，symmetry 参数应如何设置？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 0.8333,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6529
+    },
+    {
+      "index": 1,
+      "question": "使用 Atomkit 生成 ABACUS 体相结构的 K 路径时，依次输入的 5 个参数分别代表什么含义？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9007
+    },
+    {
+      "index": 2,
+      "question": "ABACUS 非自洽计算能带时，INPUT 文件中 calculation、init_chg、out_band 三个参数分别需要如何配置？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8461
+    },
+    {
+      "index": 3,
+      "question": "ABACUS 能带计算输出的 BANDS_1.dat 文件中，各列数据分别代表什么？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 0.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_correctness": 0.1203
+    },
+    {
+      "index": 4,
+      "question": "计算铁的能带与态密度时，针对其磁性需要做哪两项关键的输入设置？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9072
+    },
+    {
+      "index": 5,
+      "question": "ABACUS 中想要同时输出 DOS 和 PDOS，需要将 out_dos 参数设置为多少？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.5,
+      "answer_correctness": 0.9751
+    },
+    {
+      "index": 6,
+      "question": "ABACUS 输出的 PDOS 文件是什么格式？文件中<orbital>标签内的 l、m、z 三个属性分别代表什么？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9692
+    },
+    {
+      "index": 7,
+      "question": "使用 abacus-plot 绘制 PDOS 时，配置文件中的 efermi 参数可以从哪里获取？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8596
+    },
+    {
+      "index": 8,
+      "question": "ABACUS 输出的实空间电荷密度、波函数数据采用什么文件格式？通常用什么软件可视化？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_correctness": 0.1546
+    },
+    {
+      "index": 9,
+      "question": "平面波基组下，指定计算特定能带的分解电荷密度，需要设置哪个核心参数？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 0.8,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6996
+    },
+    {
+      "index": 10,
+      "question": "LCAO 基组下计算能带分解电荷密度需要分两步执行，分别是什么？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.8333,
+      "answer_correctness": 0.7831
+    },
+    {
+      "index": 11,
+      "question": "参数 if_separate_k 分别设为 true 和 false 时，电荷密度的输出有什么区别？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7609
+    },
+    {
+      "index": 12,
+      "question": "进行能带分解电荷密度计算时，为什么建议关闭晶格对称性？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7187
+    },
+    {
+      "index": 13,
+      "question": "电子局域函数 ELF 的取值范围是什么？不同取值分别代表什么物理意义？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 0.6667,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7981
+    },
+    {
+      "index": 14,
+      "question": "自旋极化计算体系中，ABACUS 会输出哪几个 ELF 相关的 cube 文件？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8763
+    },
+    {
+      "index": 15,
+      "question": "LCAO 基组下计算 ELF 时，为什么要在 χ 的分子上添加微小修正值？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7007
+    },
+    {
+      "index": 16,
+      "question": "执行 Bader 电荷分析前，需要在 ABACUS 的 INPUT 中设置什么参数输出电荷密度？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.8333,
+      "answer_correctness": 0.6241
+    },
+    {
+      "index": 17,
+      "question": "自旋极化体系为什么不能直接对两个自旋通道的电荷密度分别做 Bader 分析？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7595
+    },
+    {
+      "index": 18,
+      "question": "自旋极化体系执行 Bader 电荷分析的正确操作流程是什么？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.8333,
+      "answer_correctness": 0.7135
+    },
+    {
+      "index": 19,
+      "question": "Bader 分析输出的 ACF.dat 文件中，如何计算得到原子携带的净电荷量？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 0.75,
+      "context_recall": 1.0,
+      "context_precision": 0.5833,
+      "answer_correctness": 0.8021
+    },
+    {
+      "index": 20,
+      "question": "ABACUS 结合 pymatgen 计算弹性常数时，默认会生成多少种应变构型？是如何得到的？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 0.9286,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.5782
+    },
+    {
+      "index": 21,
+      "question": "弹性常数计算中，对应变后的结构执行 ABACUS 计算时，calculation 应设置为什么类型？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.5833,
+      "answer_correctness": 0.8589
+    },
+    {
+      "index": 22,
+      "question": "Phonopy 有限位移法中，命令 phonopy -d --dim=\"2 2 2\" --abacus 的作用是什么？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6585
+    },
+    {
+      "index": 23,
+      "question": "计算声子谱的微扰结构受力时，ABACUS 的 INPUT 中 calculation 和 cal_force 分别如何设置？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6958
+    },
+    {
+      "index": 24,
+      "question": "用于 ShengBTE 计算的二阶力常数文件，Phonopy 输出时必须开启什么设置？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8705
+    },
+    {
+      "index": 25,
+      "question": "ABACUS+Phonopy 输出的 FORCE_CONSTANTS 与 ShengBTE 要求的单位有什么差异？如何转换？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8369
+    },
+    {
+      "index": 26,
+      "question": "计算三阶力常数转换结构文件时，为什么不能使用 dpdata 进行格式转换？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8842
+    },
+    {
+      "index": 27,
+      "question": "ABACUS 的 Wannier90 接口目前对两种基组的支持状态分别是什么？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.5,
+      "answer_correctness": 0.7158
+    },
+    {
+      "index": 28,
+      "question": "ABACUS 对接 Wannier90 的非自洽计算中，必须开启的两个输出参数是什么？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7097
+    },
+    {
+      "index": 29,
+      "question": "Candela 软件分析 ABACUS 分子动力学轨迹时，支持计算哪四类核心性质？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9491
+    },
+    {
+      "index": 30,
+      "question": "USPEX 结合 ABACUS 进行结构预测时，提交 ABACUS 任务为什么要指定 OMP_NUM_THREADS？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.919
+    },
+    {
+      "index": 31,
+      "question": "ABACUS 为 Hefei-NAMD 提供输入的 MD 计算中，需要开启哪两个参数输出必要物理量？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7658
+    },
+    {
+      "index": 32,
+      "question": "pyabacus 目前提供了哪五个核心模块？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8882
+    },
+    {
+      "index": 33,
+      "question": "pyabacus 的 hsolver 模块中实现了哪三种对角化算法？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8089
+    },
+    {
+      "index": 34,
+      "question": "ABACUS 的 C++ 代码规范中，普通变量、私有类成员变量、全局变量分别遵循什么命名规则？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.5685
+    },
+    {
+      "index": 35,
+      "question": "Doxygen 可以识别哪三种格式的 C++ 注释？",
+      "question_type": "factual",
+      "route_decision": "irrelevant",
+      "faithfulness": 0.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_correctness": 0.0603
+    },
+    {
+      "index": 36,
+      "question": "ABACUS v3.7.0 之后，新增输入参数的存储方式发生了什么核心变化？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 0.3333,
+      "answer_correctness": 0.4192
+    },
+    {
+      "index": 37,
+      "question": "ABACUS 的模块代码中，异构计算相关的代码应当存放在什么子目录下？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.4194
+    },
+    {
+      "index": 38,
+      "question": "ABACUS formatter-2.0 工具库包含哪三部分核心功能？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8998
+    },
+    {
+      "index": 39,
+      "question": "ABACUS 项目根目录的.clang-format 文件依赖哪个版本的 clang-format 工具？",
+      "question_type": "factual",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.57
+    },
+    {
+      "index": 40,
+      "question": "ABACUS 中的 SDFT 是什么方法？它主要用于模拟什么样的体系？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.864
+    },
+    {
+      "index": 41,
+      "question": "温稠密物质（WDM）指的是什么？其温度量级大约是多少？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.384
+    },
+    {
+      "index": 42,
+      "question": "MDFT 是什么方法？它和 SDFT 的关系是什么？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 0.9231,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7993
+    },
+    {
+      "index": 43,
+      "question": "赝势文件名如 Al_ONCV_PBE-1.0.upf 中的 ONCV 代表什么含义？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.3809
+    },
+    {
+      "index": 44,
+      "question": "数值原子轨道基组命名中的 DZP 和 TZDP 分别代表什么？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7507
+    },
+    {
+      "index": 45,
+      "question": "什么是 UPF 格式？截至 v3.2.3，ABACUS 的 Kohn-Sham 密度泛函理论计算主要支持什么格式、什么类型的赝势？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9115
+    },
+    {
+      "index": 46,
+      "question": "Bader charge（Bader 电荷）是如何定义和计算的？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 0.9286,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6623
+    },
+    {
+      "index": 47,
+      "question": "编译 ABACUS 时 ELPA 库是什么作用？如果 ELPA 难以安装应如何处理？",
+      "question_type": "terminology",
+      "route_decision": "rag",
+      "faithfulness": 0.8333,
+      "context_recall": 0.6667,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6413
+    },
+    {
+      "index": 48,
+      "question": "文档中给出的 eV 与开尔文（K）之间的换算关系是什么？",
+      "question_type": "formula_table",
+      "route_decision": "irrelevant",
+      "faithfulness": 0.0,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_correctness": 0.1141
+    },
+    {
+      "index": 49,
+      "question": "SDFT 计算中 nche_sto 参数是什么含义？推荐的取值判据是什么？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9749
+    },
+    {
+      "index": 50,
+      "question": "用 ABACUS+pymatgen 计算金刚石弹性常数时，输出的体弹性模量、剪切模量、杨氏模量和泊松比分别是多少？单位是什么？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 0.5,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8567
+    },
+    {
+      "index": 51,
+      "question": "ABACUS 隐式溶剂模型中 eb_k 参数的含义是什么？如何用 imp_sol 计算体系的溶剂化能？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6883
+    },
+    {
+      "index": 52,
+      "question": "STRU 文件中晶格常数（LATTICE_CONSTANT）的单位换算规则是什么？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.5,
+      "answer_correctness": 0.766
+    },
+    {
+      "index": 53,
+      "question": "ABACUS+Phonopy 计算声子谱时，输出的 pho.dat 文件各列分别是什么数据？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 0.875,
+      "context_recall": 1.0,
+      "context_precision": 0.5,
+      "answer_correctness": 0.8781
+    },
+    {
+      "index": 54,
+      "question": "对比 ABACUS 和 VASP 做 SCF 计算时，能量截断值 Ecut 的单位有什么差异？",
+      "question_type": "formula_table",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9094
+    },
+    {
+      "index": 55,
+      "question": "请总结 ABACUS Toolchain 是什么，它支持哪些编译安装功能和愿景？",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.776
+    },
+    {
+      "index": 56,
+      "question": "请概述 ABACUS 中 SDFT（随机波函数密度泛函理论）方法的原理和主要适用场景。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7422
+    },
+    {
+      "index": 57,
+      "question": "请总结隐式溶剂模型的基本思想以及它相比显式溶剂方法的优点。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8455
+    },
+    {
+      "index": 58,
+      "question": "请概述 Bader charge（Bader 电荷）分析的基本思想。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6405
+    },
+    {
+      "index": 59,
+      "question": "请总结文档中介绍的编译安装 ABACUS 的主要途径有哪些。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 0.8947,
+      "context_recall": 0.3333,
+      "context_precision": 0.5833,
+      "answer_correctness": 0.5533
+    },
+    {
+      "index": 60,
+      "question": "请概述结合 ABACUS 与 Phonopy 计算声子谱的整体流程。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 0.95,
+      "context_recall": 0.6667,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7456
+    },
+    {
+      "index": 61,
+      "question": "请概述使用 ABACUS 的 Wannier90 接口计算最大局域化 Wannier 函数的运行流程。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.5,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8261
+    },
+    {
+      "index": 62,
+      "question": "请总结 ABACUS 分子动力学模拟的输出文件以及 MD 续算功能的使用方法。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 0.9474,
+      "context_recall": 0.5,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7399
+    },
+    {
+      "index": 63,
+      "question": "请概述 pyabacus 项目是什么，它提供哪些模块？",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.5,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7134
+    },
+    {
+      "index": 64,
+      "question": "请总结无轨道密度泛函理论（OFDFT）的基本思想、优势以及 ABACUS 中实现的动能泛函。",
+      "question_type": "summary",
+      "route_decision": "rag",
+      "faithfulness": 0.95,
+      "context_recall": 0.3333,
+      "context_precision": 0.8333,
+      "answer_correctness": 0.561
+    },
+    {
+      "index": 65,
+      "question": "SDFT 和传统 KSDFT 在高温计算中有什么区别？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.5739
+    },
+    {
+      "index": 66,
+      "question": "在 ABACUS 中 PW 基组和 LCAO 基组各有什么特点，应该如何选择？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 0.8947,
+      "context_recall": 0.3333,
+      "context_precision": 1.0,
+      "answer_correctness": 0.5097
+    },
+    {
+      "index": 67,
+      "question": "数值原子轨道基组中 DZP 和 TZDP 有什么区别？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 0.9474,
+      "context_recall": 0.6667,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8908
+    },
+    {
+      "index": 68,
+      "question": "ABACUS 中 SDFT 计算的参数 method_sto 取 1 和取 2 有什么区别？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.5,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9704
+    },
+    {
+      "index": 69,
+      "question": "显式溶剂模型和隐式溶剂模型有什么区别，各适合什么场景？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.72
+    },
+    {
+      "index": 70,
+      "question": "Mulliken、Hirshfeld 和 Bader 等布居分析方法各自存在什么问题？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8383
+    },
+    {
+      "index": 71,
+      "question": "在超算平台上基于 GCC 编译 ABACUS 和基于 Intel oneAPI 编译 ABACUS 有什么区别？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 0.8125,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
+      "answer_correctness": 0.3121
+    },
+    {
+      "index": 72,
+      "question": "ABACUS 中 SDFT 和 MDFT 有什么区别，如何通过输入参数区分？",
+      "question_type": "comparison",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 0.5833,
+      "answer_correctness": 0.7148
+    },
+    {
+      "index": 73,
+      "question": "用 ABACUS 计算二维材料的非自旋极化能带（如 4.7.3 节 nanoribbon 算例）需要先后进行哪两步计算？这两步的 INPUT 文件中 calculation、nspin、out_chg、init_chg 分别该如何设置？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.8771
+    },
+    {
+      "index": 74,
+      "question": "在 4.7.3 节的二维 nanoribbon 算例中，把 nspin 从 1 改成 2 后能带图会发生什么变化？若要进一步施加 0.1 V/A 的电场，应通过 INPUT 中哪个参数设置，其单位需要注意什么？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.5909
+    },
+    {
+      "index": 75,
+      "question": "用 ABACUS 的 SDFT 方法（如 186_PW_SDOS_10D10S 算例）计算态密度时，必须打开哪个输出参数？计算结果输出到哪个文件？dos_edelta_ev 和 dos_sigma 两个参数分别控制什么？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9886
+    },
+    {
+      "index": 76,
+      "question": "用 ABACUS+Phonopy 以有限位移法计算 FCC Al 声子谱时，如何生成微扰构型？之后用 ABACUS 计算这些构型的受力时 INPUT 中 calculation 和 cal_force 应如何设置？算完后用什么命令生成 FORCE_SET 文件？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.6258
+    },
+    {
+      "index": 77,
+      "question": "ABACUS+Phonopy 流程中执行 phonopy -p band.conf --abacus 之后会得到什么文件？进一步用 phonopy-bandplot --gnuplot 生成的 pho.dat 中，第一列和第二列分别是什么含义？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 0.5,
+      "context_precision": 0.3333,
+      "answer_correctness": 0.4133
+    },
+    {
+      "index": 78,
+      "question": "用 ABACUS+ShengBTE 计算晶格热导率时，Phonopy 输出的 FORCE_CONSTANTS 文件为什么还要用 au2si.py 转换？转换得到什么文件？另外 band.conf 中哪个关于力常数的设置必须打开，否则会怎样？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 0.7778,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.9849
+    },
+    {
+      "index": 79,
+      "question": "ABACUS 对接 Wannier90 时需要分别准备 SCF 和 NSCF 两套计算，这两步的 INPUT 各有哪条关键设置？NSCF 的 KPT 文件又有什么额外要求？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 1.0,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "answer_correctness": 0.7896
+    },
+    {
+      "index": 80,
+      "question": "用 ABACUS+pymatgen 计算金刚石弹性常数时，结构弛豫后如何产生应变构型、共产生多少个？每个应变构型的 ABACUS 计算中 calculation 应设为什么、为什么？最后用哪个脚本得到弹性常数？",
+      "question_type": "multi_hop",
+      "route_decision": "rag",
+      "faithfulness": 0.5556,
+      "context_recall": 0.5,
+      "context_precision": 0.5,
+      "answer_correctness": 0.5649
+    }
+  ]
+}

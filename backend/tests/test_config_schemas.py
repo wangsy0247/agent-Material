@@ -148,7 +148,13 @@ class TestBaseResponse:
 
     def test_serialization(self):
         dumped = BaseResponse(data=[1, 2]).model_dump()
-        assert dumped == {"code": 200, "message": "success", "data": [1, 2], "total": None}
+        assert dumped == {
+            "code": 200,
+            "message": "success",
+            "data": [1, 2],
+            "total": None,
+            "degradation_events": None,
+        }
 
     def test_total_for_list_responses(self):
         """列表类响应可携带总数（修复前 total 被静默丢弃）"""

@@ -69,6 +69,7 @@ class FakeVectorStore:
     def load_document(self):
         self.load_document_calls += 1
         self._document_count += 3  # 模拟加载了 3 条
+        return [1, 2, 3]  # Spec V2：返回已入队 task_id 列表
 
     def add_documents(self, docs):
         self.added_documents.extend(docs)
@@ -98,12 +99,57 @@ class FakeRagService:
         self._stream_chunks = stream_chunks if stream_chunks is not None else ["你好", "世界"]
         self.retriever_queries = []
 
+    # ── 新路径（single_retrieval_sse 开启）──
+
+    def prepare(self, query, enable_rewrite=False, rewrite_strategy=""):
+        self.retriever_queries.append(query)
+        return FakeRequestContext(query, self._docs)
+
+    def stream_answer(self, ctx):
+        yield from self._stream_chunks
+
+    # ── 旧路径（single_retrieval_sse 关闭时回滚使用）──
+
     def retriever_docx(self, query):
         self.retriever_queries.append(query)
         return self._docs
 
     def get_summary_stream(self, query):
         yield from self._stream_chunks
+
+
+class FakeRequestContext:
+    """RequestContext 替身：携带 sources / resolved_parents / 冻结上下文。"""
+
+    def __init__(self, query, docs):
+        self.original_query = query
+        self.route_decision = "rag"
+        self.context_docs = list(docs)
+        self.resolved_parents = list(docs)
+        self.reranked_children = list(docs)
+        self.degradation_events = []
+        self.final_context = (
+            "".join(f"[参考资料{i}] 来源：x\n{d.page_content}\n\n"
+                    for i, d in enumerate(docs, start=1))
+        )
+        self.sources = [
+            {
+                "index": i,
+                "source": d.metadata.get("source", "未知来源"),
+                "source_filename": d.metadata.get("source", "未知来源"),
+                "page_start": d.metadata.get("page_start"),
+                "page_end": d.metadata.get("page_end"),
+                "page_unknown": False,
+                "heading_path": None,
+                "parent_id": d.metadata.get("parent_id"),
+                "score": d.metadata.get("score", 0.0),
+                "snippet": d.page_content,
+            }
+            for i, d in enumerate(docs, start=1)
+        ]
+
+    def summary(self):
+        return {"request_id": "fake"}
 
 
 # ------------------------------------------------------------------
@@ -260,7 +306,7 @@ class TestRagSearch:
 
     def test_search_service_error_500(self, authed_client, monkeypatch):
         class _ErrService(FakeRagService):
-            def retriever_docx(self, query):
+            def prepare(self, query, enable_rewrite=False, rewrite_strategy=""):
                 raise RuntimeError("检索后端异常")
 
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: _ErrService())
@@ -306,7 +352,7 @@ class TestRagQuery:
 
     def test_query_error_frame_on_exception(self, authed_client, monkeypatch):
         class _ErrService(FakeRagService):
-            def retriever_docx(self, query):
+            def prepare(self, query, enable_rewrite=False, rewrite_strategy=""):
                 raise RuntimeError("检索爆炸")
 
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: _ErrService())
@@ -329,11 +375,11 @@ class TestRagLoadDocuments:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        assert body["message"] == "文档加载完成"
+        # Spec V2 11："任务已接收"语义，不再暗示"加载完成"
+        assert "加载完成" not in body["message"]
         data = body["data"]
-        assert data["before"] == 42
-        assert data["after"] == 45
-        assert data["loaded"] == 3
+        assert data["task_ids"] == [1, 2, 3]
+        assert data["accepted"] == 3
         assert fake_store.load_document_calls == 1
 
     def test_load_documents_error_500(self, authed_client, monkeypatch):
@@ -353,6 +399,15 @@ class TestRagLoadDocuments:
 
 
 class TestRagAddDocuments:
+    @pytest.fixture(autouse=True)
+    def _legacy_mode(self, monkeypatch):
+        """pg_control_plane 关闭 → 旧同步直写路径（回滚语义）。"""
+        monkeypatch.setattr(
+            config_handler,
+            "vector_store_config",
+            {"feature_flags": {"pg_control_plane": False}},
+        )
+
     def test_add_documents_with_sources(self, authed_client, fake_store):
         resp = authed_client.post(
             "/api/v1/rag/add-documents",
@@ -395,6 +450,15 @@ class TestRagAddDocuments:
 
 
 class TestRagAddChunks:
+    @pytest.fixture(autouse=True)
+    def _enable_add_chunks(self, monkeypatch):
+        """P0 默认 410 关闭；这些用例显式开启旧直写逻辑（内部/回滚用）。"""
+        monkeypatch.setattr(
+            config_handler,
+            "vector_store_config",
+            {"feature_flags": {"enable_add_chunks": True}},
+        )
+
     def test_add_chunks_success(self, authed_client, fake_store):
         resp = authed_client.post(
             "/api/v1/rag/add-chunks",
