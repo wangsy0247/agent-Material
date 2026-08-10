@@ -7,6 +7,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from agent_material.rag_engine.vector_store import VectorStore
+from agent_material.rag_engine.request_context import RequestContext
 from agent_material.utils.prompt_loader import get_prompts
 from agent_material.rag_engine.models import chat_model
 from agent_material.utils.config_handler import vector_store_config, prompt_config
@@ -19,6 +20,14 @@ from agent_material.observability.metrics import (
     llm_call_duration,
     llm_token_total,
 )
+
+#: 无关问题固定拒答文案
+IRRELEVANT_REPLY = (
+    "当前问题与材料科学知识库领域无关，暂时无法回答。"
+    "请提出材料科学、计算材料学或相关领域的问题。"
+)
+#: 无检索上下文时的固定回复
+NO_CONTEXT_REPLY = "根据现有资料无法回答该问题。"
 
 
 def _get_run_config(
@@ -70,6 +79,7 @@ class RagService:
         self._router = None
         self._rewriter = None
         self._chat_prompt = None
+        self._pipeline = None  # 请求级检索管道（single_retrieval_sse 路径）
 
         # ── 配置 ──
         self._routing_config = vector_store_config.get("query_routing", {})
@@ -108,6 +118,26 @@ class RagService:
             text = get_prompts(get_abs_path(path)) or ""
             self._chat_prompt = PromptTemplate.from_template(text)
         return self._chat_prompt
+
+    def _get_pipeline(self):
+        """请求级检索管道（延迟初始化，依赖注入，无共享可变状态）。"""
+        if self._pipeline is None:
+            from agent_material.rag_engine.retrieval_pipeline import RetrievalPipeline
+
+            self._pipeline = RetrievalPipeline(
+                retriever_getter=lambda: self.retriever,
+                rewriter=self._get_rewriter(),
+                config=vector_store_config,
+                logger=self._logger,
+            )
+        return self._pipeline
+
+    @staticmethod
+    def _single_retrieval_enabled() -> bool:
+        """single_retrieval_sse 开关：关闭时走旧路径（回滚兼容）。"""
+        return vector_store_config.get("feature_flags", {}).get(
+            "single_retrieval_sse", False
+        )
 
     # ── 检索器 ────────────────────────────────────────────────
 
@@ -470,6 +500,169 @@ class RagService:
         )
         return merged[:final_top_k]
 
+    # ── 请求级 prepare / stream_answer（ONL-001/002/003）───────
+
+    def prepare(
+        self,
+        query: str,
+        enable_rewrite: bool = False,
+        rewrite_strategy: str = "",
+    ) -> RequestContext:
+        """请求级检索准备：路由 → （新路径）检索管道全流程 或（旧路径）现有逻辑。
+
+        全程只执行一次检索，结果冻结进 RequestContext（final_context/sources）。
+        chat/irrelevant 高置信时标记 route_decision 后直接返回（不检索）。
+        """
+        ctx = RequestContext(original_query=query)
+        routing_enabled = self._routing_config.get("enabled", True)
+        model_name = chat_model.model_name if chat_model else "unknown"
+
+        # ── 阶段 1：查询路由（失败 → 正常 RAG + degradation）──
+        ctx.route_decision = "rag"
+        if routing_enabled:
+            t0 = time.time()
+            try:
+                classification = self._get_router().classify(query)
+                ctx.record_duration("route_classify", t0)
+                ctx.route_result = classification
+                retrieval_duration.labels(stage="route_classify").observe(time.time() - t0)
+                llm_call_total.labels(model=model_name, purpose="classify").inc()
+
+                threshold = self._routing_config.get("confidence_threshold", 0.6)
+                if (
+                    self._routing_config.get("irrelevant_detection", True)
+                    and classification.is_irrelevant
+                    and classification.confidence >= threshold
+                ):
+                    ctx.route_decision = "irrelevant"
+                    return ctx
+                if (
+                    self._routing_config.get("chat_detection", True)
+                    and classification.is_chat
+                    and classification.confidence >= threshold
+                ):
+                    ctx.route_decision = "chat"
+                    return ctx
+                # question_type（factual/summary/comparison）仅记录，不改变策略（ONL-003）
+            except Exception as e:
+                ctx.add_degradation("router", str(e), "normal_rag")
+                self._logger.warning(f"查询路由失败: {e}，回退到正常 RAG 流程")
+
+        # ── 阶段 2：检索 ──
+        t_retrieve = time.time()
+        if self._single_retrieval_enabled():
+            # 新路径：请求级检索管道（plan→branches→fuse→rerank→parents→freeze）
+            ctx.rewrite_strategy = (
+                self._resolve_strategy(rewrite_strategy) if enable_rewrite else ""
+            )
+            pipeline = self._get_pipeline()
+            pipeline.plan_queries(
+                ctx, enable_rewrite=enable_rewrite, strategy=ctx.rewrite_strategy
+            )
+            pipeline.retrieve_branches(ctx)
+            pipeline.fuse(ctx)
+            pipeline.global_rerank(ctx)
+            pipeline.resolve_parents(ctx)
+            pipeline.build_context(ctx)
+        else:
+            # 旧路径（回滚兼容）：现有 _retrieve_with_strategy / retriever_docx
+            if enable_rewrite:
+                strategy = self._resolve_strategy(rewrite_strategy)
+                ctx.rewrite_strategy = strategy
+                context_docx = self._retrieve_with_strategy(query, strategy)
+            else:
+                context_docx = self.retriever_docx(query)
+            self._freeze_legacy_context(ctx, context_docx)
+        ctx.record_duration("retrieve_total", t_retrieve)
+        retrieval_duration.labels(stage="total").observe(time.time() - t_retrieve)
+        return ctx
+
+    def _freeze_legacy_context(self, ctx: RequestContext, context_docx: list[Document]):
+        """旧路径结果冻结：保持原有上下文拼接格式与 sources 结构。"""
+        context = ""
+        sources: list[dict] = []
+        for i, doc in enumerate(context_docx, start=1):
+            source = doc.metadata.get("source", "未知来源")
+            source_name = (
+                os.path.basename(source) if isinstance(source, str) else "未知来源"
+            )
+            context += f"[参考资料{i}] 来源：{source_name}\n{doc.page_content}\n\n"
+            content = doc.page_content
+            sources.append(
+                {
+                    "index": i,
+                    "source": source,
+                    "source_filename": source_name,
+                    "page_start": doc.metadata.get("page_start"),
+                    "page_end": doc.metadata.get("page_end"),
+                    "page_unknown": bool(doc.metadata.get("page_unknown", False)),
+                    "heading_path": doc.metadata.get("heading_path"),
+                    "parent_id": doc.metadata.get("parent_id") or None,
+                    "score": doc.metadata.get(
+                        "rerank_score", doc.metadata.get("score", 0.0)
+                    ),
+                    "snippet": content[:300] + "..." if len(content) > 300 else content,
+                }
+            )
+        ctx.freeze_context(context, context_docx, sources)
+
+    def stream_answer(self, ctx: RequestContext):
+        """基于冻结上下文流式生成（不再检索）。
+
+        chat → chat prompt 直答流；irrelevant → 固定拒答文案；
+        rag → ctx.final_context 拼 prompt 流式生成（无上下文 → 无法回答文案）。
+        """
+        model_name = chat_model.model_name if chat_model else "unknown"
+
+        if ctx.route_decision == "irrelevant":
+            yield IRRELEVANT_REPLY
+            return
+
+        if ctx.route_decision == "chat":
+            chain = self._get_chat_prompt() | self.model | StrOutputParser()
+            with llm_call_duration.labels(model=model_name, purpose="direct_answer").time():
+                llm_call_total.labels(model=model_name, purpose="direct_answer").inc()
+                for chunk in chain.stream(
+                    {"input": ctx.original_query},
+                    config=_get_run_config(
+                        run_name="direct_answer",
+                        query=ctx.original_query,
+                        tags=["chat", "no_rag"],
+                    ),
+                ):
+                    yield chunk
+            return
+
+        # rag 路径
+        if not ctx.final_context:
+            yield NO_CONTEXT_REPLY
+            return
+
+        t_gen = time.time()
+        llm_call_total.labels(model=model_name, purpose="generate").inc()
+        output_chars = 0
+        for chunk in self._get_chain().stream(
+            {"input": ctx.original_query, "context": ctx.final_context},
+            config=_get_run_config(
+                run_name="rag_generate_stream",
+                query=ctx.original_query,
+                tags=["rag", "stream"],
+                extra_metadata={"context_doc_count": len(ctx.context_docs)},
+            ),
+        ):
+            output_chars += len(chunk)
+            yield chunk
+        llm_call_duration.labels(model=model_name, purpose="generate").observe(
+            time.time() - t_gen
+        )
+        llm_token_total.labels(model=model_name, type="input").inc(
+            len(ctx.final_context) // 2
+        )
+        llm_token_total.labels(model=model_name, type="output").inc(output_chars // 2)
+        llm_token_total.labels(model=model_name, type="total").inc(
+            len(ctx.final_context) // 2 + output_chars // 2
+        )
+
     # ── RAG 生成 ──────────────────────────────────────────────
 
     def get_summary(
@@ -489,6 +682,11 @@ class RagService:
         Returns:
             生成的回答文本
         """
+        if self._single_retrieval_enabled():
+            ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
+            self._logger.info("request_summary", extra=ctx.summary())
+            return "".join(self.stream_answer(ctx))
+
         routing_enabled = self._routing_config.get("enabled", True)
         model_name = chat_model.model_name if chat_model else "unknown"
 
@@ -507,10 +705,7 @@ class RagService:
                     and classification.confidence
                     >= self._routing_config.get("confidence_threshold", 0.6)
                 ):
-                    return (
-                        "当前问题与材料科学知识库领域无关，暂时无法回答。"
-                        "请提出材料科学、计算材料学或相关领域的问题。"
-                    )
+                    return IRRELEVANT_REPLY
 
                 # 闲聊直接回答
                 if (
@@ -574,6 +769,12 @@ class RagService:
         rewrite_strategy: str = "",
     ):
         """流式生成 RAG 回答（自动路由 + 可选改写）。"""
+        if self._single_retrieval_enabled():
+            ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
+            self._logger.info("request_summary", extra=ctx.summary())
+            yield from self.stream_answer(ctx)
+            return
+
         routing_enabled = self._routing_config.get("enabled", True)
 
         # ── 阶段 1：查询路由（自动）──
@@ -587,7 +788,7 @@ class RagService:
                     and classification.confidence
                     >= self._routing_config.get("confidence_threshold", 0.6)
                 ):
-                    yield "当前问题与材料科学知识库领域无关，暂时无法回答。请提出材料科学、计算材料学或相关领域的问题。"
+                    yield IRRELEVANT_REPLY
                     return
 
                 if (

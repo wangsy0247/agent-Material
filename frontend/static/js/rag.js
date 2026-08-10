@@ -378,7 +378,7 @@ async function doLoadDocuments() {
     try {
         const res = await apiFetch('/rag/load-documents', { method: 'POST' });
         const d = res.data || {};
-        setSuccess(result, `加载完成 | 加载前: ${d.before} 条 | 加载后: ${d.after} 条 | 新增: ${d.loaded} 条`);
+        setSuccess(result, `已接收 ${d.accepted ?? (d.task_ids || []).length} 个索引任务，后台异步执行中`);
         if (state.currentTab === 'overview') loadStats();
     } catch (e) {
         setError(result, AppCommon.formatError(e));

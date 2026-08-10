@@ -8,6 +8,9 @@ RAG 路由（REST API 直连版）
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import threading
 import traceback
 from typing import TYPE_CHECKING
 
@@ -23,7 +26,37 @@ from ..sse import HEARTBEAT_INTERVAL, format_heartbeat, format_sse_event as _sse
 if TYPE_CHECKING:
     pass
 
+logger = logging.getLogger("rag_router")
+
 router = APIRouter(prefix="/rag", tags=["RAG 知识库"])
+
+
+def _single_retrieval_enabled() -> bool:
+    """single_retrieval_sse 开关：开启时 /rag/query 与 /rag/search 走单次检索新路径。"""
+    try:
+        from agent_material.utils import config_handler
+
+        return bool(
+            config_handler.vector_store_config.get("feature_flags", {}).get(
+                "single_retrieval_sse", False
+            )
+        )
+    except Exception:
+        return False
+
+
+def _feature_flag(name: str, default: bool = False) -> bool:
+    """读取 vector_store_config.feature_flags 开关（调用时取，便于测试替换）。"""
+    try:
+        from agent_material.utils import config_handler
+
+        return bool(
+            config_handler.vector_store_config.get("feature_flags", {}).get(
+                name, default
+            )
+        )
+    except Exception:
+        return default
 
 # ------------------------------------------------------------------
 # 延迟初始化（避免模块导入时触发重量级初始化）
@@ -145,9 +178,60 @@ async def rag_search(
     request: RAGSearchRequest,
     current_user: UserInfo = Depends(get_current_user),
 ):
-    """根据查询内容从向量数据库检索最相关的文档片段。"""
+    """根据查询内容从向量数据库检索最相关的文档片段。
+
+    single_retrieval_sse 开关开启时走 service.prepare 的请求级检索管道
+    （不生成回答），返回 resolved_parents（父块级，与 /rag/query 的生成上下文
+    同源；无父块时回退 reranked_children 子块），并附带溯源字段与降级事件。
+    """
     try:
         service = _get_rag_service()
+
+        # ── 新路径：请求级检索管道（单次检索，含全局 Rerank 与父块回溯）──
+        if _single_retrieval_enabled():
+            ctx = await asyncio.to_thread(service.prepare, request.query)
+            docs = ctx.resolved_parents or ctx.reranked_children
+            if not docs:
+                return BaseResponse(code=200, message="未检索到相关文档", data=[])
+
+            results = []
+            for i, doc in enumerate(docs, start=1):
+                m = doc.metadata or {}
+                source = m.get("source", "未知来源")
+                results.append(
+                    {
+                        "index": i,
+                        "rank": i,
+                        "chunk_id": m.get("chunk_id"),
+                        "parent_id": m.get("parent_id"),
+                        "document_id": m.get("document_id"),
+                        "version_id": m.get("version_id"),
+                        "source": source,
+                        "source_filename": m.get("source_filename")
+                        or (os.path.basename(source) if isinstance(source, str) else None),
+                        "page_start": m.get("page_start"),
+                        "page_end": m.get("page_end"),
+                        "page_unknown": bool(m.get("page_unknown", False)),
+                        "heading_path": m.get("heading_path"),
+                        "rerank_score": m.get("rerank_score"),
+                        "score": m.get(
+                            "rerank_score", m.get("rrf_score", m.get("score", 0.0))
+                        ),
+                        "snippet": doc.page_content[:300] + "..."
+                        if len(doc.page_content) > 300
+                        else doc.page_content,
+                        "metadata": m,
+                    }
+                )
+            resp = BaseResponse(
+                code=200, message="success", data=results, total=len(results)
+            )
+            if ctx.degradation_events:
+                resp.degradation_events = ctx.degradation_events
+            logger.info("rag_search_summary %s", ctx.summary())
+            return resp
+
+        # ── 旧路径（回滚兼容）──
         docs = service.retriever_docx(request.query)
         if not docs:
             return BaseResponse(code=200, message="未检索到相关文档", data=[])
@@ -204,56 +288,90 @@ async def rag_query(
             token_index += 1
             return next_sse("token", text, index=token_index)
 
+        ctx = None
+        # 客户端断连/取消标志（Spec V2 12.3）：async 侧捕获取消后 set，
+        # 消费线程每轮检查并尽快 break + 关闭底层 stream，终止 LLM 生成
+        cancel_event = threading.Event()
         try:
             # RagService 首次初始化是重量级同步操作，放线程避免阻塞 event loop
             service = await asyncio.to_thread(_get_rag_service)
+            use_new = _single_retrieval_enabled()
 
             # 1. 阶段事件：开始检索
             yield next_sse("status", {"phase": "retrieving"})
 
-            # 2. 先执行检索（同步调用，放线程避免阻塞 event loop）
-            docs = await asyncio.to_thread(service.retriever_docx, request.query)
+            if use_new:
+                # 新路径（ONL-002）：全程只调一次 service.prepare，
+                # sources 与 LLM 上下文来自同一份冻结上下文
+                ctx = await asyncio.to_thread(service.prepare, request.query)
+                # chat/irrelevant 无检索结果；rag 空结果发空 sources 数组
+                no_context = ctx.route_decision == "rag" and not ctx.final_context
+                sources = ctx.sources
+            else:
+                # 旧路径（回滚兼容）：先检索一次构造 sources
+                docs = await asyncio.to_thread(service.retriever_docx, request.query)
+                no_context = not docs
+                sources = []
+                for i, doc in enumerate(docs, start=1):
+                    source = doc.metadata.get("source", "未知来源")
+                    score = doc.metadata.get("score", 0.0)
+                    sources.append(
+                        {
+                            "index": i,
+                            "source": source,
+                            "score": score,
+                            "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
+                        }
+                    )
 
-            # 3. 发送 start 事件
+            # 2. 发送 start 事件
             yield next_sse("start", {"query": request.query})
 
-            # 4. 发送 sources 事件
-            sources = []
-            for i, doc in enumerate(docs, start=1):
-                source = doc.metadata.get("source", "未知来源")
-                score = doc.metadata.get("score", 0.0)
-                sources.append(
-                    {
-                        "index": i,
-                        "source": source,
-                        "score": score,
-                        "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
-                    }
-                )
+            # 3. 发送 sources 事件
             yield next_sse("sources", sources)
 
-            if not docs:
+            if no_context:
                 yield token_sse("根据现有资料无法回答该问题。")
                 yield next_sse("done")
+                if ctx is not None:
+                    logger.info("rag_query_summary %s", ctx.summary())
                 return
 
-            # 5. 阶段事件：开始生成
+            # 4. 阶段事件：开始生成
             yield next_sse("status", {"phase": "generating"})
 
-            # 6. 流式生成：get_summary_stream 是同步生成器函数（惰性），
+            # 5. 流式生成：stream_answer/get_summary_stream 是同步生成器函数（惰性），
             # 整个迭代都在线程中执行，经 asyncio.Queue 桥接回 async 侧逐 chunk 消费，
             # 避免普通 for 迭代独占 event loop。
             loop = asyncio.get_running_loop()
             queue: asyncio.Queue = asyncio.Queue()
             _SENTINEL = None  # 结束哨兵
+            # 取消标志见生成器顶部 cancel_event（线程每轮检查）
 
             def _consume_stream():
+                stream = None
                 try:
-                    for chunk in service.get_summary_stream(request.query):
+                    if use_new:
+                        # 不再检索，仅消费冻结上下文
+                        stream = service.stream_answer(ctx)
+                    else:
+                        stream = service.get_summary_stream(request.query)
+                    for chunk in stream:
+                        if cancel_event.is_set():
+                            logger.info("[RAG] 检测到取消标志，终止后台 LLM 流式生成")
+                            break
                         loop.call_soon_threadsafe(queue.put_nowait, chunk)
-                    loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
                 except Exception as exc:  # 异常经队列传回 async 侧 re-raise
                     loop.call_soon_threadsafe(queue.put_nowait, exc)
+                finally:
+                    # 尽快关闭底层 stream/response（能关则关），释放 LLM 连接
+                    if stream is not None and hasattr(stream, "close"):
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+                    # 无论正常/异常/取消都放哨兵，保证 async 侧不泄漏等待
+                    loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
             consume_task = asyncio.create_task(asyncio.to_thread(_consume_stream))
             try:
@@ -270,13 +388,19 @@ async def rag_query(
                         raise item
                     yield token_sse(item)
             finally:
-                # 确保线程任务收尾（正常路径已结束；异常路径兜底等待）
+                # 先置取消标志（取消路径下让消费线程尽快退出），再收尾线程任务
+                # （正常路径线程已结束，set 幂等无害）
+                cancel_event.set()
                 await asyncio.shield(asyncio.gather(consume_task, return_exceptions=True))
 
             yield next_sse("done")
+            if ctx is not None:
+                logger.info("rag_query_summary %s", ctx.summary())
         except asyncio.CancelledError:
-            # 客户端断连/中止：尽力向当前连接发 cancelled 帧（连接已断开时
+            # 客户端断连/中止：先置取消标志终止后台 LLM 生成线程（若已进入
+            # 生成阶段），再尽力向当前连接发 cancelled 帧（连接已断开时
             # 发送会失败，静默忽略），随后原样抛出结束流
+            cancel_event.set()
             try:
                 yield next_sse("cancelled", {"message": "run cancelled"})
             except BaseException:
@@ -300,24 +424,81 @@ async def rag_query(
 
 @router.post("/load-documents", summary="扫描并加载文档", response_model=BaseResponse)
 async def rag_load_documents(current_user: UserInfo = Depends(get_current_user)):
-    """扫描配置的 data/ 目录，加载新增或修改的文档到向量库。"""
+    """扫描配置的 data/ 目录，为新增/修改/消失的文档创建索引任务（异步执行）。
+
+    Spec V2 11：返回"任务已接收"语义 —— data 含 task_ids，
+    最终索引结果通过 GET /rag/tasks/{task_id} 查询。
+    """
     try:
         store = _get_vector_store()
-        before = store.get_document_count()
-        store.load_document()
-        after = store.get_document_count()
-        loaded = after - before
+        task_ids = store.load_document() or []
         return BaseResponse(
             code=200,
-            message="文档加载完成",
+            message=f"已接收 {len(task_ids)} 个索引任务，后台异步执行，"
+                    "结果请通过 /rag/tasks/{task_id} 查询",
             data={
-                "before": before,
-                "after": after,
-                "loaded": loaded,
+                "task_ids": task_ids,
+                "accepted": len(task_ids),
             },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"加载文档失败: {e}")
+
+
+@router.get("/tasks/{task_id}", summary="查询索引任务状态", response_model=BaseResponse)
+async def rag_task_status(
+    task_id: int,
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """查询后台索引任务状态（pg 模式查 PG 任务表，sqlite 模式查 SQLite 队列）。
+
+    返回任务类型、状态、当前阶段、重试次数、失败原因等（可运维性要求）。
+    """
+    try:
+        store = _get_vector_store()
+        status = store.get_task_status(task_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+        return BaseResponse(code=200, message="success", data=status)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询任务状态失败: {e}")
+
+
+@router.get("/kb-state", summary="查询知识库 revision 状态", response_model=BaseResponse)
+async def rag_kb_state(current_user: UserInfo = Depends(get_current_user)):
+    """返回 rag_kb_state 的 active_revision / bm25_revision（Spec 15 可运维性）。
+
+    pg_control_plane 关闭（SQLite 回滚路径）时无 kb_state，data 返回 None。
+    """
+    try:
+        store = _get_vector_store()
+        state = store.get_kb_state()
+        if state is None:
+            return BaseResponse(
+                code=200,
+                message="pg_control_plane 未开启（SQLite 控制面无 rag_kb_state）",
+                data=None,
+            )
+        return BaseResponse(code=200, message="success", data=state)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询知识库状态失败: {e}")
+
+
+@router.get("/consistency-check", summary="在线数据一致性检测", response_model=BaseResponse)
+async def rag_consistency_check(current_user: UserInfo = Depends(get_current_user)):
+    """执行一致性检测 SQL（Spec 15 可运维性），结果均应为 0：
+
+    - multiple_active_version_documents：同一 document_id 多个 active version 的文档数
+    - orphan_active_children：active child 找不到 active parent 的子块数
+    """
+    try:
+        store = _get_vector_store()
+        result = await asyncio.to_thread(store.run_consistency_check)
+        return BaseResponse(code=200, message="success", data=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"一致性检测失败: {e}")
 
 
 @router.post("/add-documents", summary="手动添加文档", response_model=BaseResponse)
@@ -325,19 +506,40 @@ async def rag_add_documents(
     request: RAGAddDocumentsRequest,
     current_user: UserInfo = Depends(get_current_user),
 ):
-    """手动向向量库添加文本内容。"""
-    try:
-        from langchain_core.documents import Document
+    """手动向向量库添加文本内容。
 
+    pg_control_plane 开启（Spec V2 11）：文本封装为 ingest_text 任务进入
+    统一版本化索引队列（切分 → staging → validate → activate），
+    返回 task_ids，最终结果通过 /rag/tasks/{task_id} 查询；
+    关闭时保持旧的同步直写行为（回滚路径）。
+    """
+    try:
         sources = request.sources or [f"manual_{i}" for i in range(len(request.documents))]
         if len(sources) != len(request.documents):
             raise HTTPException(status_code=400, detail="sources 长度必须与 documents 一致")
+
+        store = _get_vector_store()
+
+        if _feature_flag("pg_control_plane"):
+            task_ids = []
+            for text, src in zip(request.documents, sources):
+                task_id = store.enqueue_ingest_text(text, src)
+                if task_id is not None:
+                    task_ids.append(task_id)
+            return BaseResponse(
+                code=200,
+                message=f"已接收 {len(task_ids)} 个文本入库任务，后台异步执行，"
+                        "结果请通过 /rag/tasks/{task_id} 查询",
+                data={"task_ids": task_ids, "accepted": len(task_ids)},
+            )
+
+        # ── 旧路径（pg_control_plane 关闭时回滚）──
+        from langchain_core.documents import Document
 
         docs = [
             Document(page_content=text, metadata={"source": src})
             for text, src in zip(request.documents, sources)
         ]
-        store = _get_vector_store()
         store.add_documents(docs)
         return BaseResponse(
             code=200,
@@ -350,12 +552,22 @@ async def rag_add_documents(
         raise HTTPException(status_code=500, detail=f"添加文档失败: {e}")
 
 
-@router.post("/add-chunks", summary="批量添加已切分的 chunks（不再二次切分）", response_model=BaseResponse)
+@router.post("/add-chunks", summary="批量添加已切分的 chunks（P0 已默认关闭）", response_model=BaseResponse)
 async def rag_add_chunks(
     request: RAGAddChunksRequest,
     current_user: UserInfo = Depends(get_current_user),
 ):
-    """将已切分好的文本片段直接转为向量并批量写入向量库，不做额外切分。"""
+    """将已切分好的文本片段直接转为向量并批量写入向量库，不做额外切分。
+
+    P0 阶段该接口无法满足父子/版本契约（Spec V2 11），默认关闭（HTTP 410）；
+    feature_flags.enable_add_chunks=true 时走旧直写逻辑（仅内部/回滚用）。
+    """
+    if not _feature_flag("enable_add_chunks"):
+        raise HTTPException(
+            status_code=410,
+            detail="该接口已在 P0 版本关闭（无法满足父子/版本契约），"
+                   "请使用 /rag/add-documents",
+        )
     try:
         from langchain_core.documents import Document
 

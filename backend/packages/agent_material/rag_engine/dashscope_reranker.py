@@ -102,6 +102,10 @@ class DashScopeReranker(BaseDocumentCompressor):
         scored = list(zip(documents, scores))
         scored.sort(key=lambda x: x[1], reverse=True)
 
+        # 回写 relevance_score，供 sources/上下文构造使用（修复 score 恒 0）
+        for doc, score in scored:
+            doc.metadata["rerank_score"] = score
+
         result = [doc for doc, score in scored[: self.top_n]]
         logger.info(
             f"[DashScopeReranker] {len(documents)} docs → top {len(result)} | "

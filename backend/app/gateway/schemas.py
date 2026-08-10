@@ -15,6 +15,9 @@ class BaseResponse(BaseModel):
     message: str = Field(default="success", description="状态信息")
     data: Any = Field(default=None, description="响应数据")
     total: int | None = Field(default=None, description="结果总数（列表类响应可选）")
+    degradation_events: list[dict] | None = Field(
+        default=None, description="请求级降级事件（存在时返回）"
+    )
 
 
 class HealthResponse(BaseResponse):
@@ -65,6 +68,18 @@ class DocumentSource(BaseModel):
     source: str = Field(..., description="来源文件名")
     score: float = Field(default=0.0, description="相似度分数")
     snippet: str = Field(..., description="内容片段")
+    # ── 溯源扩展字段（全部 Optional，向后兼容）──
+    source_filename: str | None = Field(default=None, description="来源文件 base 名")
+    page_start: int | None = Field(default=None, description="起始页码")
+    page_end: int | None = Field(default=None, description="结束页码")
+    page_unknown: bool | None = Field(default=None, description="页码是否未知")
+    heading_path: str | list | None = Field(default=None, description="标题路径")
+    parent_id: str | None = Field(default=None, description="父块 ID")
+    chunk_id: str | None = Field(default=None, description="子块 ID")
+    document_id: str | None = Field(default=None, description="文档 ID")
+    version_id: str | None = Field(default=None, description="文档版本 ID")
+    rank: int | None = Field(default=None, description="检索排名")
+    rerank_score: float | None = Field(default=None, description="Rerank 相关性分数")
 
 
 class RAGRetrieveResponse(BaseResponse):
