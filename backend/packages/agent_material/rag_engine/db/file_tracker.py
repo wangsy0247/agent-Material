@@ -27,6 +27,32 @@ def _compute_md5(file_path: str) -> str | None:
         return None
 
 
+def scan_directory_files(directory: str, allow_types: list[str]) -> dict[str, dict]:
+    """纯函数：遍历目录并 stat，返回 {abs_path: {"mtime": ..., "size": ...}}。
+
+    不读写任何状态，供 PG 控制面扫描器复用（Spec V2 6.1）。
+    """
+    from agent_material.utils.path_tools import get_abs_path
+
+    abs_dir = get_abs_path(directory)
+    on_disk: dict[str, dict] = {}
+    if os.path.isdir(abs_dir):
+        for root, _, files in os.walk(abs_dir):
+            for f in files:
+                if not any(f.lower().endswith(ext) for ext in allow_types):
+                    continue
+                abs_path = os.path.join(root, f)
+                try:
+                    stat = os.stat(abs_path)
+                    on_disk[abs_path] = {
+                        "mtime": stat.st_mtime,
+                        "size": stat.st_size,
+                    }
+                except OSError as e:
+                    logger.warning(f"无法访问文件 {abs_path}: {e}")
+    return on_disk
+
+
 class FileTracker:
     """SQLite 文件状态追踪器 — 线程安全。"""
 
@@ -104,10 +130,43 @@ class FileTracker:
             )
             self._conn.commit()
 
-    def record_indexed(self, file_path: str, parent_ids: list[str] | None = None):
-        """标记文件已成功索引。"""
+    def record_indexed(
+        self,
+        file_path: str,
+        parent_ids: list[str] | None = None,
+        md5_hash: str | None = None,
+        file_mtime: float | None = None,
+        file_size: int | None = None,
+    ):
+        """标记文件已成功索引（激活成功后调用，OFF-002）。
+
+        md5_hash/file_mtime/file_size 提供时一并 upsert 文件状态
+        （配合 scan_directory(defer_state_update=True) 的延迟落库）。
+        """
         with self._lock:
-            if parent_ids is not None:
+            if md5_hash is not None and file_mtime is not None and file_size is not None:
+                self._conn.execute(
+                    """INSERT INTO file_states (file_path, md5_hash, file_mtime, file_size,
+                                                last_indexed_at, parent_ids)
+                       VALUES (?, ?, ?, ?, datetime('now'), ?)
+                       ON CONFLICT(file_path) DO UPDATE SET
+                           md5_hash=excluded.md5_hash,
+                           file_mtime=excluded.file_mtime,
+                           file_size=excluded.file_size,
+                           status='active',
+                           last_indexed_at=excluded.last_indexed_at,
+                           parent_ids=COALESCE(excluded.parent_ids, file_states.parent_ids)""",
+                    (
+                        file_path,
+                        md5_hash,
+                        file_mtime,
+                        file_size,
+                        json.dumps(parent_ids, ensure_ascii=False)
+                        if parent_ids is not None
+                        else None,
+                    ),
+                )
+            elif parent_ids is not None:
                 self._conn.execute(
                     "UPDATE file_states SET last_indexed_at=datetime('now'), parent_ids=? WHERE file_path=?",
                     (json.dumps(parent_ids, ensure_ascii=False), file_path),
@@ -139,6 +198,7 @@ class FileTracker:
         directory: str,
         allow_types: list[str],
         rapid: bool = True,
+        defer_state_update: bool = False,
     ) -> dict[str, list[str]]:
         """扫描目录，返回变更分类。
 
@@ -146,9 +206,13 @@ class FileTracker:
             directory: 扫描目录路径
             allow_types: 允许的文件扩展名列表
             rapid: 启用快速路径（mtime+size 不变则跳过 MD5）
+            defer_state_update: 为 true 时 new/modified 文件只计算 MD5 用于比对，
+                不 upsert file_states（OFF-002：激活成功后才能更新 FileTracker，
+                由 Worker 在入库成功后通过 record_indexed 落库）；deleted 标记不变。
 
         Returns:
-            {"new": [...], "modified": [...], "unchanged": [...], "deleted": [...]}
+            {"new": [...], "modified": [...], "unchanged": [...], "deleted": [...],
+             "file_info": {path: {"md5_hash": ..., "file_mtime": ..., "file_size": ...}}}
         """
         from agent_material.utils.path_tools import get_abs_path
 
@@ -178,13 +242,20 @@ class FileTracker:
         new: list[str] = []
         modified: list[str] = []
         unchanged: list[str] = []
+        file_info: dict[str, dict] = {}
 
         for path, info in on_disk.items():
             if path not in tracked:
                 # 不在追踪表中 → 新文件
                 md5 = _compute_md5(path)
                 if md5:
-                    self.upsert(path, md5, info["mtime"], info["size"])
+                    if not defer_state_update:
+                        self.upsert(path, md5, info["mtime"], info["size"])
+                    file_info[path] = {
+                        "md5_hash": md5,
+                        "file_mtime": info["mtime"],
+                        "file_size": info["size"],
+                    }
                     new.append(path)
                 continue
 
@@ -202,10 +273,17 @@ class FileTracker:
 
             if md5 == t["md5_hash"]:
                 # 文件未变，更新 mtime（避免下次重复计算）
-                self.upsert(path, md5, info["mtime"], info["size"])
+                if not defer_state_update:
+                    self.upsert(path, md5, info["mtime"], info["size"])
                 unchanged.append(path)
             else:
-                self.upsert(path, md5, info["mtime"], info["size"])
+                if not defer_state_update:
+                    self.upsert(path, md5, info["mtime"], info["size"])
+                file_info[path] = {
+                    "md5_hash": md5,
+                    "file_mtime": info["mtime"],
+                    "file_size": info["size"],
+                }
                 modified.append(path)
 
         # 检测删除：在追踪表中但磁盘上不存在
@@ -223,6 +301,7 @@ class FileTracker:
             "modified": modified,
             "unchanged": unchanged,
             "deleted": deleted,
+            "file_info": file_info,
         }
 
     # ── 迁移 ──────────────────────────────────────────────

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 from langchain_core.documents import Document
@@ -89,6 +90,8 @@ class MultiGranularityRetriever(BaseRetriever):
         self._compression_retriever = None
         self._bm25_retriever = None
         self._vector_retriever = None  # HyDE 模式需要访问内部的向量检索器
+        self._compressor = None  # BM25 原子刷新时复用
+        self._lock = threading.Lock()  # 原子替换检索器链
 
     def _get_relevant_documents(
         self,
@@ -120,8 +123,34 @@ class MultiGranularityRetriever(BaseRetriever):
             logger.info("[MultiRetriever] 无 parent_id，返回子chunk")
             return child_docs[: vector_store_config.get("top_n", 5)]
 
-        # 阶段 3：从大 collection 获取父chunk
-        parent_docs = self._fetch_parents(parent_ids)
+        # 阶段 3：从大 collection 获取父chunk（有序 + missing 回退，ONL-009）
+        parent_docs, missing_ids = self._fetch_parents(parent_ids)
+
+        if missing_ids:
+            logger.warning(
+                f"[MultiRetriever] {len(missing_ids)} 个父块未命中，降级返回对应子块"
+            )
+            parent_by_id = {
+                d.metadata.get("parent_id", ""): d for d in parent_docs
+            }
+            child_by_pid: dict[str, Document] = {}
+            for doc in child_docs:
+                child_by_pid.setdefault(doc.metadata.get("parent_id", ""), doc)
+
+            final_docs: list[Document] = []
+            for pid in parent_ids:
+                if pid in parent_by_id:
+                    final_docs.append(parent_by_id[pid])
+                else:
+                    child = child_by_pid.get(pid)
+                    if child is not None:
+                        final_docs.append(
+                            Document(
+                                page_content=child.page_content,
+                                metadata={**child.metadata, "parent_fallback": True},
+                            )
+                        )
+            parent_docs = final_docs
 
         elapsed = time.time() - start
         logger.info(
@@ -191,6 +220,7 @@ class MultiGranularityRetriever(BaseRetriever):
                         model=reranker_cfg.get("model", "qwen3-rerank"),
                         top_n=reranker_cfg.get("top_n", vector_store_config.get("top_n", 5)),
                     )
+                    self._compressor = compressor
                     self._compression_retriever = ContextualCompressionRetriever(
                         base_compressor=compressor,
                         base_retriever=truncated,
@@ -242,10 +272,131 @@ class MultiGranularityRetriever(BaseRetriever):
             top_n=vector_store_config.get("top_n", 5),
         )
         logger.info("[MultiRetriever] 本地 CrossEncoder 重排序器初始化成功")
+        self._compressor = compressor
         return ContextualCompressionRetriever(
             base_compressor=compressor,
             base_retriever=truncated,
         )
+
+    def refresh_documents(self, docs: list[Document]) -> bool:
+        """BM25 原子刷新（OFF-007）：先在锁外构建整条新链，成功后锁内一次性替换。
+
+        任一步构建失败记 error 并保留旧实例；BM25 不可用或文档为空时
+        退化为 vector-only（hybrid=vector），同样原子替换。
+
+        Returns:
+            True=已替换/暂存新语料；False=构建失败保留旧实例
+            （调用方不推进 bm25_revision，配合 RRF 前 active 二次校验兜底，
+            旧语料中的退役内容不会进入最终上下文，Spec 9.3）。
+        """
+        if not self._retrievers_initialized:
+            with self._lock:
+                self.all_documents = docs
+            return True
+        try:
+            k = vector_store_config.get("k", 10)
+            # 锁外构建新实例
+            if BM25_AVAILABLE and docs:
+                new_bm25 = BM25Retriever.from_documents(docs, k=k)
+            else:
+                new_bm25 = None
+
+            if new_bm25 and EnsembleRetriever:
+                new_hybrid = EnsembleRetriever(
+                    retrievers=[self._vector_retriever, new_bm25],
+                    weights=[
+                        vector_store_config.get("vector_weight", 0.5),
+                        vector_store_config.get("bm25_weight", 0.5),
+                    ],
+                )
+            else:
+                # 降级：BM25 不可用/文档为空 → vector-only
+                new_hybrid = self._vector_retriever
+
+            max_rerank = vector_store_config.get("max_rerank_docs", 10)
+            from agent_material.rag_engine.vector_store import TopKRetriever
+
+            truncated = TopKRetriever(base_retriever=new_hybrid, max_docs=max_rerank)
+
+            new_compression = None
+            if self._compressor is not None:
+                new_compression = ContextualCompressionRetriever(
+                    base_compressor=self._compressor,
+                    base_retriever=truncated,
+                )
+        except Exception as e:
+            logger.error(f"[MultiRetriever] BM25 刷新构建失败，保留旧实例: {e}")
+            return False
+
+        # 全部构建成功 → 锁内一次性替换
+        with self._lock:
+            self.all_documents = docs
+            self._bm25_retriever = new_bm25
+            self._hybrid_retriever = new_hybrid
+            self._compression_retriever = new_compression
+        logger.info(
+            f"[MultiRetriever] BM25 原子刷新完成 | 文档数={len(docs)} | "
+            f"{'BM25+向量混合' if new_bm25 else 'vector-only 降级'}"
+        )
+        return True
+
+    def filter_active_bm25(self, docs: list[Document]) -> list[Document]:
+        """RRF 前 active 二次校验（Spec V2 9.3 / 10.2）。
+
+        单条 SQL 批量查询 small collection 中这些 chunk_id 且
+        is_active='true' 的集合，剔除不在集合中的候选（旧 BM25 语料
+        可能含已退役/已删除内容）。无 chunk_id 的候选保留（无法校验，
+        兼容非版本化旧数据）。
+
+        SQL 异常向上抛出，由调用方把当前请求 BM25 路整体降级为 vector-only。
+        """
+        chunk_ids = [
+            d.metadata["chunk_id"] for d in docs if d.metadata.get("chunk_id")
+        ]
+        if not chunk_ids:
+            return docs
+
+        import psycopg
+
+        conn_str = vector_store_config.get("connection_string", "")
+        psycopg_conn_str = conn_str.replace(
+            "postgresql+psycopg://", "postgresql://"
+        )
+        mg_config = vector_store_config.get("multi_granularity", {})
+        base_name = vector_store_config.get("character_name", "agent")
+        small_name = base_name + mg_config.get("small_collection_suffix", "_small")
+
+        conn = psycopg.connect(psycopg_conn_str)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT e.cmetadata->>'chunk_id'
+                FROM langchain_pg_embedding e
+                JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                WHERE c.name = %s
+                  AND e.cmetadata->>'chunk_id' = ANY(%s)
+                  AND e.cmetadata->>'is_active' = 'true'
+                """,
+                (small_name, chunk_ids),
+            )
+            active_ids = {row[0] for row in cur.fetchall()}
+            cur.close()
+        finally:
+            conn.close()
+
+        kept = [
+            d
+            for d in docs
+            if not d.metadata.get("chunk_id")
+            or d.metadata["chunk_id"] in active_ids
+        ]
+        dropped = len(docs) - len(kept)
+        if dropped:
+            logger.warning(
+                f"[MultiRetriever] BM25 active 二次校验剔除 {dropped} 条非 active 候选"
+            )
+        return kept
 
     def _hybrid_search(self, query: str) -> list[Document]:
         """在小 collection 上执行混合检索。"""
@@ -256,6 +407,60 @@ class MultiGranularityRetriever(BaseRetriever):
         if retriever is None:
             return []
         return retriever.invoke(query)
+
+    def search_children(
+        self,
+        query: str,
+        k: int | None = None,
+        hyde_embedding: list[float] | None = None,
+    ) -> tuple[list[Document], list[Document]]:
+        """请求级子chunk召回（ONL-005/ONL-008）：返回 (向量路结果, BM25 路结果)。
+
+        不做 rerank、不做父块回溯，供 RetrievalPipeline 逐分支调用。
+        HyDE embedding 仅作为参数传入向量路，不写共享属性；
+        BM25 路始终使用原始 query 文本，查询失败时降级为空列表。
+
+        Args:
+            query: 查询文本（BM25 路与无 HyDE 时的向量路使用）
+            k: 各路召回数量上限，None 时用实例默认
+            hyde_embedding: 请求级 HyDE 假设文档 embedding（仅向量路使用）
+        """
+        if not self._retrievers_initialized:
+            self._init_retrievers()
+
+        k = k or self._k
+
+        # ── 向量路 ──
+        if hyde_embedding is not None:
+            # HyDE：直接用预计算 embedding 检索（active 过滤与阈值逻辑
+            # 与 VectorSimilarityThresholdRetriever 保持一致）
+            search_filter = None
+            if vector_store_config.get("feature_flags", {}).get(
+                "active_version_filter", True
+            ):
+                search_filter = {"is_active": True}
+            docs_with_scores = self._small_store.similarity_search_with_score_by_vector(
+                hyde_embedding, k=k, filter=search_filter
+            )
+            vector_docs: list[Document] = []
+            for doc, distance in docs_with_scores:
+                similarity = 1.0 - distance / 2.0  # cosine distance → similarity
+                if similarity >= self._score_threshold:
+                    vector_docs.append(doc)
+            if not vector_docs and docs_with_scores:
+                vector_docs.append(docs_with_scores[0][0])  # Top-1 兜底
+        else:
+            vector_docs = self._vector_retriever.search(query)
+
+        # ── BM25 路（失败降级为空列表，由调用方记 degradation）──
+        bm25_docs: list[Document] = []
+        if self._bm25_retriever is not None:
+            try:
+                bm25_docs = self._bm25_retriever.invoke(query)
+            except Exception as e:
+                logger.error(f"[MultiRetriever] BM25 检索失败（降级 vector-only）: {e}")
+
+        return vector_docs, bm25_docs
 
     def set_hyde_embedding(self, embedding: list[float] | None) -> None:
         """设置/清除 HyDE embedding 覆盖到内部的向量检索器。
@@ -274,8 +479,17 @@ class MultiGranularityRetriever(BaseRetriever):
 
     # ── 父chunk 获取 ──────────────────────────────────────
 
-    def _fetch_parents(self, parent_ids: list[str]) -> list[Document]:
-        """从大 collection 批量获取父chunk。"""
+    def _fetch_parents(
+        self, parent_ids: list[str]
+    ) -> tuple[list[Document], list[str]]:
+        """从大 collection 批量获取父chunk（ONL-009：有序回溯 + active 过滤）。
+
+        Returns:
+            (ordered_docs, missing_ids)：
+            - ordered_docs 按传入 parent_ids 的顺序重排（同一 parent 只返回一次）
+            - missing_ids 为未命中的 parent_id（调用方回退子块）
+            SQL 异常时返回 ([], parent_ids)，由调用方整体回退子块。
+        """
         import psycopg
         from langchain_core.documents import Document
 
@@ -290,16 +504,28 @@ class MultiGranularityRetriever(BaseRetriever):
         base_name = vector_store_config.get("character_name", "agent")
         large_name = base_name + mg_config.get("large_collection_suffix", "_large")
 
+        active_filter = vector_store_config.get("feature_flags", {}).get(
+            "active_version_filter", True
+        )
+        # is_active 缺失视为 active（兼容存量数据）
+        active_clause = (
+            " AND (e.cmetadata->>'is_active' = 'true'"
+            " OR e.cmetadata->>'is_active' IS NULL)"
+            if active_filter
+            else ""
+        )
+
         try:
             conn = psycopg.connect(psycopg_conn_str)
             cur = conn.cursor()
             # 用 ANY 批量查询
             cur.execute(
-                """
+                f"""
                 SELECT e.document, e.cmetadata
                 FROM langchain_pg_embedding e
                 JOIN langchain_pg_collection c ON e.collection_id = c.uuid
                 WHERE c.name = %s AND e.cmetadata->>'parent_id' = ANY(%s)
+                {active_clause}
                 """,
                 (large_name, parent_ids),
             )
@@ -307,20 +533,32 @@ class MultiGranularityRetriever(BaseRetriever):
             cur.close()
             conn.close()
 
-            docs = [
-                Document(page_content=row[0], metadata=row[1] or {})
-                for row in rows
-            ]
+            # 按 parent_id 索引（同 id 取首条），再按输入顺序重排
+            by_id: dict[str, Document] = {}
+            for content, meta in rows:
+                meta = meta or {}
+                pid = meta.get("parent_id", "")
+                if pid and pid not in by_id:
+                    by_id[pid] = Document(page_content=content, metadata=meta)
+
+            ordered_docs: list[Document] = []
+            missing_ids: list[str] = []
+            for pid in parent_ids:
+                if pid in by_id:
+                    ordered_docs.append(by_id[pid])
+                else:
+                    missing_ids.append(pid)
 
             elapsed = time.time() - t0
             retrieval_duration.labels(stage="parent_fetch").observe(elapsed)
-            retrieval_docs.labels(stage="parent_fetch").observe(len(docs))
+            retrieval_docs.labels(stage="parent_fetch").observe(len(ordered_docs))
             postgres_query_duration.labels(operation="parent_fetch").observe(elapsed)
             logger.info(
                 f"[MultiRetriever] 获取父chunk: {len(parent_ids)} ids → "
-                f"{len(docs)} docs | {elapsed:.3f}s"
+                f"{len(ordered_docs)} docs | missing={len(missing_ids)} | {elapsed:.3f}s"
             )
-            return docs
+            return ordered_docs, missing_ids
         except Exception as e:
-            logger.error(f"[MultiRetriever] 获取父chunk失败: {e}")
-            return []
+            # 不再静默返回 []——由调用方回退返回子块（6.3 降级表）
+            logger.error(f"[MultiRetriever] 获取父chunk失败（回退子块）: {e}")
+            return [], list(parent_ids)

@@ -5,3 +5,4 @@ queue:
   max_retries: 3                    # 每任务最大重试次数
   retry_delay_base: 2.0             # 指数退避基数（秒）
   cleanup_days: 7                   # 自动清理旧任务记录（天）
+  lease_seconds: 300                # PG 控制面任务租约（秒），心跳间隔为租约的 1/3

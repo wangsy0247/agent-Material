@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 # 兼容 LangChain 0.3.x 和 1.x
@@ -68,15 +69,34 @@ class VectorSimilarityThresholdRetriever(BaseRetriever):
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun | None = None
     ) -> list[Document]:
+        # 委托给 search()；embedding_override 仅为旧路径回滚兼容保留
+        return self.search(query, embedding=self.embedding_override)
+
+    def search(
+        self, query: str, embedding: list[float] | None = None
+    ) -> list[Document]:
+        """请求级向量检索（ONL-008）：embedding 作为参数传入，不写共享属性。
+
+        Args:
+            query: 查询文本（embedding 为 None 时用于内部 embed）
+            embedding: 预计算 embedding（如 HyDE 假设文档向量），None 时按 query 检索
+        """
         t0 = time.time()
 
+        # active 版本过滤：staging/failed/retired 版本不参与在线检索
+        search_filter = None
+        if vector_store_config.get("feature_flags", {}).get("active_version_filter", True):
+            search_filter = {"is_active": True}
+
         # HyDE 模式：使用预计算 embedding 做向量检索
-        if self.embedding_override is not None:
+        if embedding is not None:
             docs_with_scores = self.vector_store.similarity_search_with_score_by_vector(
-                self.embedding_override, k=self.k
+                embedding, k=self.k, filter=search_filter
             )
         else:
-            docs_with_scores = self.vector_store.similarity_search_with_score(query, k=self.k)
+            docs_with_scores = self.vector_store.similarity_search_with_score(
+                query, k=self.k, filter=search_filter
+            )
 
         results: list[Document] = []
         for doc, distance in docs_with_scores:
@@ -178,6 +198,7 @@ class VectorStore:
         self._hybrid_retriever = None
         self._compression_retriever = None
         self._retrievers_initialized = False
+        self._bm25_lock = threading.Lock()  # BM25 原子刷新替换锁
 
         # ── 多粒度索引 ──
         mg_config = vector_store_config.get("multi_granularity", {})
@@ -189,6 +210,39 @@ class VectorStore:
         self._file_tracker = None
         self._task_queue = None
         self._worker = None
+        # ── PG 控制面仓储（懒加载，pg_control_plane 开启时使用）──
+        self._pg_repos = None
+        # ── BM25 revision 生命周期（Spec V2 9）──
+        self._local_bm25_revision = 0  # 本地 BM25 已构建到的 active_revision
+        self._last_bm25_revision_check = 0.0  # 上次 revision 检查的 time.monotonic()
+
+    @staticmethod
+    def _pg_control_plane_enabled() -> bool:
+        """pg_control_plane 开关：true=PG 控制面，false=回滚 SQLite 控制面。"""
+        return bool(
+            vector_store_config.get("feature_flags", {}).get("pg_control_plane", False)
+        )
+
+    def _get_pg_repos(self) -> dict:
+        """PG 控制面仓储集合（conn_str 来自 vector_store_config，表结构幂等确保）。"""
+        if self._pg_repos is None:
+            from agent_material.rag_engine.db.pg import (
+                FileStateRepository,
+                KbStateRepository,
+                TaskRepository,
+                VersionRepository,
+                ensure_schema,
+            )
+
+            conn_str = vector_store_config.get("connection_string")
+            ensure_schema(conn_str)
+            self._pg_repos = {
+                "tasks": TaskRepository(conn_str),
+                "file_states": FileStateRepository(conn_str),
+                "versions": VersionRepository(conn_str),
+                "kb": KbStateRepository(conn_str),
+            }
+        return self._pg_repos
 
     @property
     def vector_store(self) -> PGVector:
@@ -386,7 +440,10 @@ class VectorStore:
         """返回检索器（首次调用时初始化，避免模块导入时触发 segfault）。
 
         当多粒度索引启用时，返回 MultiGranularityRetriever。
+        每次调用先做节流版 BM25 revision 检测（Spec 9.2，pg 模式多进程兜底）。
         """
+        self.maybe_refresh_bm25()
+
         if self._multi_gran_enabled:
             if self._multi_retriever is None:
                 self._init_multi_retriever()
@@ -422,15 +479,20 @@ class VectorStore:
             logger.warning("[VectorStore] 未找到向量检索器，无法设置 HyDE embedding")
 
     def _init_multi_retriever(self):
-        """初始化多粒度检索器。"""
+        """初始化多粒度检索器。
+
+        冷启动（Spec V2 9.1）：无条件只加载 active 子块构建 BM25
+        （存量数据已 backfill is_active；staging 数据本就不该进 BM25），
+        并记录当前 active_revision 为本地 bm25_revision。
+        """
         from agent_material.rag_engine.indexing.multi_gran_retriever import MultiGranularityRetriever
 
         mi = self._get_multi_index()
         mi.small_store  # 触发 PGVector 初始化
         mi.large_store  # 触发 PGVector 初始化
 
-        # 加载小chunk文档用于 BM25
-        small_docs = self._load_documents_from_collection(mi.small_name)
+        # 加载小chunk文档用于 BM25（仅 active，与 active_version_filter 开关无关）
+        small_docs = self._load_documents_from_collection(mi.small_name, active_only=True)
 
         self._multi_retriever = MultiGranularityRetriever(
             small_store=mi.small_store,
@@ -438,6 +500,7 @@ class VectorStore:
             all_documents=small_docs,
         )
         self.all_documents = small_docs  # 保持兼容
+        self._init_bm25_revision()  # 冷启动记录本地 bm25_revision
         logger.info("[VectorStore] 多粒度检索器初始化完成")
 
     def _get_multi_index(self):
@@ -446,8 +509,14 @@ class VectorStore:
             self._multi_index = MultiGranularityIndex(enabled=self._multi_gran_enabled)
         return self._multi_index
 
-    def _load_documents_from_collection(self, collection_name: str) -> list[Document]:
-        """从指定 PGVector collection 加载所有文档到内存。"""
+    def _load_documents_from_collection(
+        self, collection_name: str, active_only: bool = False
+    ) -> list[Document]:
+        """从指定 PGVector collection 加载所有文档到内存。
+
+        active_only=True 时只加载 active 版本（is_active 缺失视为 active，
+        兼容存量数据）。
+        """
         import psycopg
         conn_str = vector_store_config.get("connection_string")
         if not conn_str:
@@ -457,13 +526,16 @@ class VectorStore:
         try:
             conn = psycopg.connect(psycopg_conn_str)
             cur = conn.cursor()
-            cur.execute(
-                """SELECT e.document, e.cmetadata
-                   FROM langchain_pg_embedding e
-                   JOIN langchain_pg_collection c ON e.collection_id = c.uuid
-                   WHERE c.name = %s""",
-                (collection_name,),
-            )
+            sql = """SELECT e.document, e.cmetadata
+                     FROM langchain_pg_embedding e
+                     JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                     WHERE c.name = %s"""
+            if active_only:
+                sql += (
+                    " AND (e.cmetadata->>'is_active' = 'true'"
+                    " OR e.cmetadata->>'is_active' IS NULL)"
+                )
+            cur.execute(sql, (collection_name,))
             for content, meta in cur.fetchall():
                 docs.append(Document(page_content=content, metadata=meta or {}))
             cur.close()
@@ -472,6 +544,183 @@ class VectorStore:
         except Exception as e:
             logger.warning(f"加载 {collection_name} 文档失败: {e}")
         return docs
+
+    # ------------------------------------------------------------------ #
+    #  BM25 revision 生命周期（Spec V2 9）
+    # ------------------------------------------------------------------ #
+    def _kb_id(self) -> str:
+        """知识库 ID（与 worker/扫描入队侧一致：character_name）。"""
+        return vector_store_config.get("character_name", "agent")
+
+    def _init_bm25_revision(self) -> None:
+        """冷启动（Spec 9.1-3）：把当前 active_revision 记为本地 bm25_revision。"""
+        if not self._pg_control_plane_enabled():
+            return
+        try:
+            kb_repo = self._get_pg_repos()["kb"]
+            kb_id = self._kb_id()
+            state = kb_repo.get(kb_id)
+            self._local_bm25_revision = state["active_revision"]
+            kb_repo.update_bm25_revision(kb_id, self._local_bm25_revision)
+            logger.info(
+                f"[VectorStore] 冷启动 BM25 revision 记录 | kb={kb_id} | "
+                f"revision={self._local_bm25_revision}"
+            )
+        except Exception as e:
+            logger.warning(f"[VectorStore] 冷启动记录 bm25_revision 失败（后续检测兜底）: {e}")
+
+    def maybe_refresh_bm25(self) -> None:
+        """BM25 revision 检测刷新（Spec 9.2）：多进程兜底的热刷新路径。
+
+        每次检索请求路径调用（get_retriever 顶部），节流
+        `bm25_revision_check_interval` 秒（默认 2s）查一次 PG；
+        active_revision 领先本地 bm25_revision 时重建 BM25。
+        进程内 on_activated 回调仍是快路径，本机制覆盖多查询进程场景。
+        所有异常只记日志，绝不影响检索链路。
+        """
+        if not self._pg_control_plane_enabled():
+            return
+        interval = float(
+            vector_store_config.get("bm25_revision_check_interval", 2.0)
+        )
+        now = time.monotonic()
+        if now - self._last_bm25_revision_check < interval:
+            return
+        self._last_bm25_revision_check = now
+        try:
+            kb_repo = self._get_pg_repos()["kb"]
+            kb_id = self._kb_id()
+            # 单次 get 同时完成 needs_bm25_refresh 判断与目标 revision 读取
+            state = kb_repo.get(kb_id)
+            if state["active_revision"] <= self._local_bm25_revision:
+                return
+            logger.info(
+                f"[VectorStore] 检测到 active_revision 领先 "
+                f"(remote={state['active_revision']} > local={self._local_bm25_revision})，"
+                f"重建 BM25"
+            )
+            if not self.refresh_bm25():
+                # 刷新失败：不推进本地 revision，下个节流窗口自动重试（Spec 9.3）
+                logger.warning(
+                    "[VectorStore] BM25 revision 刷新失败（degradation: 保留旧实例，"
+                    "旧语料由 RRF 前 active 二次校验兜底）"
+                )
+        except Exception as e:
+            logger.warning(f"[VectorStore] BM25 revision 检查失败（下次检索重试）: {e}")
+
+    def _capture_active_revision(self):
+        """刷新前读取 (kb_repo, kb_id, target_revision)；pg 关闭或失败返回 None。"""
+        if not self._pg_control_plane_enabled():
+            return None
+        try:
+            kb_repo = self._get_pg_repos()["kb"]
+            kb_id = self._kb_id()
+            target = kb_repo.get(kb_id)["active_revision"]
+            return kb_repo, kb_id, target
+        except Exception as e:
+            logger.warning(f"[VectorStore] 读取 active_revision 失败: {e}")
+            return None
+
+    def _commit_bm25_revision(self, captured) -> None:
+        """BM25 替换成功后推进本地/远端 bm25_revision 到刷新前捕获的值。
+
+        用刷新前的 revision（而非刷新后重读）避免把构建窗口内的新激活
+        误标为已构建——新激活会被下次检测再次捕获。
+        """
+        if captured is None:
+            return
+        kb_repo, kb_id, target = captured
+        self._local_bm25_revision = target
+        try:
+            kb_repo.update_bm25_revision(kb_id, target)
+        except Exception as e:
+            logger.warning(f"[VectorStore] 回写 bm25_revision 失败: {e}")
+
+    def refresh_bm25(self) -> bool:
+        """BM25 原子刷新（OFF-007）：重载 active 文档，先构建新实例再一次性替换。
+
+        - 多粒度模式：重载 small collection（始终只加载 active 子块，Spec 9.1），
+          检索器已初始化则调 refresh_documents 原子替换，否则只更新 all_documents。
+        - 非多粒度模式：重载基础 collection，锁内替换 BM25+Ensemble+压缩链。
+        - 构建失败保留旧实例，不影响向量检索（6.3 降级表）。
+
+        Returns:
+            True=语料/检索器已更新到最新（可推进 bm25_revision）；
+            False=构建失败保留旧实例（revision 不推进，等待重试）。
+        """
+        # 多粒度模式始终只加载 active（Spec 9.1：staging/retired 不进 BM25）；
+        # 非多粒度旧链路保持 active_version_filter 开关语义（回滚兼容）。
+        flags = vector_store_config.get("feature_flags", {})
+        active_only = True if self._multi_gran_enabled else flags.get(
+            "active_version_filter", True
+        )
+        # 刷新前捕获目标 revision（pg 模式），成功替换后推进
+        captured = self._capture_active_revision()
+
+        if self._multi_gran_enabled:
+            mi = self._get_multi_index()
+            docs = self._load_documents_from_collection(
+                mi.small_name, active_only=active_only
+            )
+            if self._multi_retriever is not None:
+                ok = self._multi_retriever.refresh_documents(docs)
+            else:
+                self.all_documents = docs  # 待首次检索时初始化
+                ok = True
+            if ok:
+                self._commit_bm25_revision(captured)
+            return ok
+
+        docs = self._load_documents_from_collection(
+            vector_store_config.get("character_name", "agent"), active_only=active_only
+        )
+        if not self._retrievers_initialized:
+            self.all_documents = docs  # 待首次检索时初始化
+            self._commit_bm25_revision(captured)
+            return True
+        try:
+            k = vector_store_config.get("k", 10)
+            new_bm25 = (
+                BM25Retriever.from_documents(docs, k=k)
+                if BM25_AVAILABLE and docs
+                else None
+            )
+            vector_retriever = VectorSimilarityThresholdRetriever(
+                vector_store=self.vector_store,
+                k=k,
+                score_threshold=vector_store_config.get("score_threshold", 0.3),
+            )
+            if new_bm25:
+                new_hybrid = EnsembleRetriever(
+                    retrievers=[vector_retriever, new_bm25],
+                    weights=[
+                        vector_store_config.get("vector_weight", 0.7),
+                        vector_store_config.get("bm25_weight", 0.3),
+                    ],
+                )
+            else:
+                new_hybrid = vector_retriever
+            truncated = TopKRetriever(
+                base_retriever=new_hybrid,
+                max_docs=vector_store_config.get("max_rerank_docs", 8),
+            )
+            new_compression = None
+            if self._compression_retriever is not None:
+                new_compression = ContextualCompressionRetriever(
+                    base_compressor=self._compression_retriever.base_compressor,
+                    base_retriever=truncated,
+                )
+        except Exception as e:
+            logger.error(f"[VectorStore] BM25 刷新构建失败，保留旧实例: {e}")
+            return False
+        with self._bm25_lock:
+            self.all_documents = docs
+            self._bm25_retriever = new_bm25
+            self._hybrid_retriever = new_hybrid
+            self._compression_retriever = new_compression
+        self._commit_bm25_revision(captured)
+        logger.info(f"[VectorStore] BM25 原子刷新完成 | 文档数={len(docs)}")
+        return True
 
     def _process_single_file(self, file_path: str) -> list[Document]:
         """处理单个文件：两阶段管道（Loader → Dispatcher → Splitter）。
@@ -485,39 +734,63 @@ class VectorStore:
 
         return self._pipeline.process(file_path)
 
-    def load_document(self):
+    def load_document(self) -> list[int]:
         """扫描目录并增量加载文档（扫描 → 入队 → Worker 异步处理）。
 
-        流程：
-        1. FileTracker 扫描目录，识别新增/修改/删除文件
-        2. 新增/修改文件入队 ingest_file
-        3. 已删除文件入队 delete_file
-        4. BackgroundWorker 异步消费任务，处理 Pipeline → 写入向量库
-        5. 非阻塞返回（任务在后台执行）
+        pg_control_plane 开启（Spec V2 6.1）：PG 控制面扫描，只创建任务，
+        不提前更新 content_hash / 标记 deleted / 改 active_version_id；
+        关闭：旧 SQLite 控制面（回滚路径，行为不变）。
+
+        Returns:
+            成功入队的 task_id 列表（PG 模式 dedup 命中返回 None 不计入）
         """
+        if self._pg_control_plane_enabled():
+            repos = self._get_pg_repos()
+            from agent_material.rag_engine.db.worker import pg_scan_and_enqueue
+
+            task_ids = pg_scan_and_enqueue(
+                directory=vector_store_config["document_directory"],
+                allow_types=vector_store_config["allow_type"],
+                task_repo=repos["tasks"],
+                file_state_repo=repos["file_states"],
+                kb_id=vector_store_config.get("character_name", "agent"),
+            )
+            self._ensure_worker_started()
+            logger.info(f"[VectorStore] PG 扫描入队完成 | 共入队 {len(task_ids)}")
+            return task_ids
+
         from agent_material.rag_engine.db.task_queue import TaskType
 
         tracker = self._get_file_tracker()
         queue = self._get_task_queue()
 
+        versioned = vector_store_config.get("feature_flags", {}).get(
+            "versioned_ingest", True
+        )
         result = tracker.scan_directory(
             directory=vector_store_config["document_directory"],
             allow_types=vector_store_config["allow_type"],
             rapid=True,
+            defer_state_update=versioned,
         )
+        file_info = result.get("file_info", {})
 
         # 入队处理任务
-        enqueued = 0
+        task_ids: list[int] = []
         for file_path in result["new"] + result["modified"]:
-            queue.enqueue(TaskType.INGEST_FILE, {"file_path": file_path})
-            enqueued += 1
+            payload = {"file_path": file_path}
+            if versioned:
+                # md5/mtime/size 随任务传递，激活成功后才落库（OFF-002）
+                payload.update(file_info.get(file_path, {}))
+            task_ids.append(queue.enqueue(TaskType.INGEST_FILE, payload))
 
         for file_path in result["deleted"]:
-            queue.enqueue(
-                TaskType.DELETE_FILE,
-                {"source": file_path, "file_path": file_path},
+            task_ids.append(
+                queue.enqueue(
+                    TaskType.DELETE_FILE,
+                    {"source": file_path, "file_path": file_path},
+                )
             )
-            enqueued += 1
 
         # 启动 Worker（首次调用时）
         self._ensure_worker_started()
@@ -525,9 +798,9 @@ class VectorStore:
         logger.info(
             f"[VectorStore] 扫描入队完成 | 新增 {len(result['new'])} | "
             f"修改 {len(result['modified'])} | 未变 {len(result['unchanged'])} | "
-            f"已删 {len(result['deleted'])} | 共入队 {enqueued}"
+            f"已删 {len(result['deleted'])} | 共入队 {len(task_ids)}"
         )
-        return
+        return task_ids
 
     def _get_file_tracker(self):
         if self._file_tracker is None:
@@ -551,12 +824,169 @@ class VectorStore:
         if self._worker is not None and self._worker.is_running():
             return
         from agent_material.rag_engine.db.worker import BackgroundWorker
+        from agent_material.utils.config_handler import queue_config
 
-        self._worker = BackgroundWorker(
-            task_queue=self._get_task_queue(),
-            file_tracker=self._get_file_tracker(),
-        )
+        queue_cfg = queue_config.get("queue", {})
+        if self._pg_control_plane_enabled():
+            # PG 控制面（Spec V2）：Worker 使用 PG 仓储，不再读写 SQLite
+            repos = self._get_pg_repos()
+            self._worker = BackgroundWorker(
+                task_repo=repos["tasks"],
+                version_repo=repos["versions"],
+                file_state_repo=repos["file_states"],
+                kb_repo=repos["kb"],
+                poll_interval=queue_cfg.get("poll_interval", 2.0),
+                max_retries=queue_cfg.get("max_retries", 3),
+                lease_seconds=queue_cfg.get("lease_seconds", 300),
+                on_activated=self.refresh_bm25,
+            )
+        else:
+            from agent_material.rag_engine.db.version_registry import DocumentVersionRegistry
+
+            db_path = queue_cfg.get("db_path", "rag_queue.db")
+            self._worker = BackgroundWorker(
+                task_queue=self._get_task_queue(),
+                file_tracker=self._get_file_tracker(),
+                poll_interval=queue_cfg.get("poll_interval", 2.0),
+                max_retries=queue_cfg.get("max_retries", 3),
+                on_activated=self.refresh_bm25,
+                version_registry=DocumentVersionRegistry(db_path=db_path),
+            )
         self._worker.start()
+
+    def enqueue_ingest_text(self, text: str, source: str) -> int | None:
+        """PG 模式：文本封装 ingest_text 任务入队（Spec 11 统一写入入口）。
+
+        dedup_key 由内容 hash + 规范化 source 派生，同内容同来源不重复入队。
+        Returns:
+            task_id；已有相同 pending/processing 任务时返回 None。
+        """
+        from agent_material.rag_engine import versioning
+
+        repos = self._get_pg_repos()
+        content_hash = versioning.compute_content_hash(text.encode("utf-8"))
+        kb_id = vector_store_config.get("character_name", "agent")
+        document_id = versioning.compute_document_id(source, kb_id=kb_id)
+        task_id = repos["tasks"].enqueue(
+            "ingest_text",
+            {"text": text, "source": source},
+            dedup_key=f"ingest_text:{document_id}:{content_hash}",
+        )
+        self._ensure_worker_started()
+        return task_id
+
+    def get_task_status(self, task_id: int) -> dict | None:
+        """查询任务状态：pg 模式查 TaskRepository，sqlite 模式查 TaskQueue。"""
+        if self._pg_control_plane_enabled():
+            row = self._get_pg_repos()["tasks"].get(int(task_id))
+            if row is None:
+                return None
+            return {
+                k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                for k, v in row.items()
+            }
+        return self._get_task_queue().get_status(int(task_id))
+
+    def get_kb_state(self) -> dict | None:
+        """知识库 revision 状态（Spec 15 可运维性：active_revision/bm25_revision 可观测）。
+
+        pg_control_plane 关闭（SQLite 回滚路径）时返回 None。
+        """
+        if not self._pg_control_plane_enabled():
+            return None
+        kb_id = self._kb_id()
+        row = self._get_pg_repos()["kb"].get(kb_id)
+        return {
+            "kb_id": kb_id,
+            "active_revision": row["active_revision"],
+            "bm25_revision": row["bm25_revision"],
+            "local_bm25_revision": self._local_bm25_revision,
+            "bm25_lagging": row["active_revision"] > self._local_bm25_revision,
+            "updated_at": row["updated_at"].isoformat()
+            if hasattr(row.get("updated_at"), "isoformat")
+            else row.get("updated_at"),
+        }
+
+    def run_consistency_check(self) -> dict:
+        """在线数据一致性检测（Spec 15 可运维性），基于 langchain_pg_embedding.cmetadata。
+
+        检测项（均应为 0）：
+        ① 同一 document_id 存在多个 active version 的文档数；
+        ② active child 找不到 active parent 的子块数（仅多粒度模式）。
+        """
+        import psycopg
+
+        conn_str = vector_store_config.get("connection_string", "")
+        if not conn_str:
+            raise RuntimeError("未配置 connection_string，无法执行一致性检测")
+        psycopg_conn_str = conn_str.replace("postgresql+psycopg://", "postgresql://")
+
+        base = vector_store_config.get("character_name", "agent")
+        mg = vector_store_config.get("multi_granularity", {})
+        if self._multi_gran_enabled:
+            small = base + mg.get("small_collection_suffix", "_small")
+            large = base + mg.get("large_collection_suffix", "_large")
+            names = [small, large]
+        else:
+            small = large = base
+            names = [base]
+
+        conn = psycopg.connect(psycopg_conn_str)
+        try:
+            cur = conn.cursor()
+            # ① 同一 document_id 多个 active version
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT e.cmetadata->>'document_id' AS document_id
+                    FROM langchain_pg_embedding e
+                    JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                    WHERE c.name = ANY(%s)
+                      AND e.cmetadata->>'is_active' = 'true'
+                      AND e.cmetadata->>'document_id' IS NOT NULL
+                    GROUP BY e.cmetadata->>'document_id'
+                    HAVING COUNT(DISTINCT e.cmetadata->>'version_id') > 1
+                ) s
+                """,
+                (names,),
+            )
+            multi_active = cur.fetchone()[0]
+
+            # ② active child 找不到 active parent（仅多粒度有父子分层）
+            orphan = 0
+            if self._multi_gran_enabled:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM langchain_pg_embedding e
+                    JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                    WHERE c.name = %s
+                      AND e.cmetadata->>'is_active' = 'true'
+                      AND e.cmetadata->>'parent_id' IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM langchain_pg_embedding p
+                          JOIN langchain_pg_collection pc
+                            ON p.collection_id = pc.uuid
+                          WHERE pc.name = %s
+                            AND p.cmetadata->>'parent_id'
+                                = e.cmetadata->>'parent_id'
+                            AND p.cmetadata->>'is_active' = 'true'
+                      )
+                    """,
+                    (small, large),
+                )
+                orphan = cur.fetchone()[0]
+            cur.close()
+        finally:
+            conn.close()
+
+        return {
+            "collections": names,
+            "multiple_active_version_documents": multi_active,
+            "orphan_active_children": orphan,
+            "ok": multi_active == 0 and orphan == 0,
+        }
 
     def add_documents(self, documents: list[Document]):
         """手动添加文档（供外部调用），添加后自动重建检索器。
@@ -650,6 +1080,11 @@ class VectorStore:
         ]
         self._retrievers_initialized = False
         self._remove_md5_hex_for_source(source)
+        # 删除后同步刷新 BM25（OFF-007）
+        try:
+            self.refresh_bm25()
+        except Exception as e:
+            logger.error(f"[VectorStore] 删除后 BM25 刷新失败（保留旧实例）: {e}")
 
     # ------------------------------------------------------------------ #
     #  MD5 辅助（已委托给 FileTracker）

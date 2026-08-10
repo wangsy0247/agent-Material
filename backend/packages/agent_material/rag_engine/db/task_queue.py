@@ -2,7 +2,7 @@
 
 线程安全（threading.Lock + WAL 模式），支持：
 - 入队 / 出队 / 完成 / 失败
-- 失败重试（指数退避）
+- 失败重试（重置为 pending）
 - 按优先级和创建时间排序
 """
 
@@ -149,6 +149,23 @@ class TaskQueue:
                 """UPDATE tasks SET status='pending', error_msg=NULL, updated_at=datetime('now')
                    WHERE status='failed' AND retries < ?""",
                 (max_retries,),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def recover_stale_processing(self, timeout_seconds: int = 600) -> int:
+        """恢复超时的 processing 任务为 pending（OFF-004）。
+
+        Worker 崩溃或进程退出会遗留 processing 任务，启动时调用本方法
+        将 updated_at 早于 timeout 的任务重置为 pending 重新消费；
+        retries 不增加、不丢失。返回恢复数量。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                """UPDATE tasks SET status='pending', updated_at=datetime('now')
+                   WHERE status='processing'
+                   AND updated_at < datetime('now', ?)""",
+                (f"-{timeout_seconds} seconds",),
             )
             self._conn.commit()
             return cur.rowcount

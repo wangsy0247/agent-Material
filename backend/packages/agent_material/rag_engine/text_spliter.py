@@ -556,6 +556,272 @@ class ParentDocumentSplitter(BaseSplitter):
         return result
 
 
+class ParentFirstSplitter(BaseSplitter):
+    """父块优先切分器 — 按标题结构先构造父块，再在父块内部切子块（OFF-005）。
+
+    切分流程：
+    1. 按 Markdown 标题（# ~ ####）把文档切成"章节"，维护每段的标题路径
+    2. 章节文本 ≤ 父块尺寸 → 直接成为一个父块；
+       超长章节在章节内部递归切成 ~parent_chunk_size 字符父块
+       （复用 RecursiveSplitter 的占位符保护，公式/代码块不被截断）
+    3. 每个父块内部切 ~child_chunk_size 字符子块（overlap 默认 70，可配置）
+    4. 孤立标题与相邻内容合并，不单独成为无正文父块
+
+    配置键（config/vector_store_config.yaml → splitters.parent）：
+        parent_chunk_size: 父块尺寸（默认 2000）
+        child_chunk_size: 子块尺寸（默认 500）
+        child_chunk_overlap: 子块重叠（默认 70）
+        parent_chunk_overlap: 超长章节内部递归切分的重叠（默认 200）
+        semantic_merge_within_parent: 预留项 — 同一父块内的语义合并开关。
+            语义合并且仅当此配置开启时在同一父块内做（不得跨父块），
+            当前版本暂未实现，保留配置位以便后续启用。
+
+    每个子块 metadata 写入：
+        parent_id: 父块内容 MD5 前 16 位（占位，管道接入 version_context 后
+                   会被 compute_parent_id 重算为确定性 ID）
+        parent_doc: 父块全文（保持与 MultiGranularityIndex.insert 的契约）
+        parent_metadata: {heading_path, char_start, char_end, page_*}
+        heading_path: 继承父块的标题路径（list[str]）
+        char_start / char_end: 相对整个输入文档拼接文本的字符偏移
+        page_start / page_end: 输入 doc metadata 含 page 信息时填写；
+            否则 page_unknown=True，绝不伪造页码
+    """
+
+    # Markdown 标题行（# ~ ####），MULTILINE 支持剥离多行文本中的标题行
+    _RE_MD_HEADING = re.compile(r"^(#{1,4})\s+(.+?)\s*$", re.MULTILINE)
+
+    def __init__(self):
+        import hashlib
+        self._hashlib = hashlib
+        cfg = _splitter_cfg("parent")
+        self._parent_chunk_size = cfg.get("parent_chunk_size", 2000)
+        self._child_chunk_size = cfg.get("child_chunk_size", 500)
+        self._child_chunk_overlap = cfg.get("child_chunk_overlap", 70)
+        self._parent_chunk_overlap = cfg.get("parent_chunk_overlap", 200)
+        # 预留：同一父块内的语义合并开关（暂未实现，见类 docstring）
+        self._semantic_merge_within_parent = cfg.get("semantic_merge_within_parent", False)
+        separators = vector_store_config.get(
+            "separator", ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
+        )
+        self._parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self._parent_chunk_size,
+            chunk_overlap=self._parent_chunk_overlap,
+            separators=separators,
+            length_function=len,
+        )
+        self._child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self._child_chunk_size,
+            chunk_overlap=self._child_chunk_overlap,
+            separators=separators,
+            length_function=len,
+        )
+        # 复用 RecursiveSplitter 的孤立标题合并逻辑
+        self._heading_merger = RecursiveSplitter()
+
+    # ── 公共接口 ──
+
+    def split_documents(self, documents: list[Document]) -> list[Document]:
+        if not documents:
+            return []
+
+        # 拼接整个输入文档文本，记录各 doc 的偏移区间与页码
+        full_text, segments = self._concat_documents(documents)
+        base_meta = dict(documents[0].metadata)
+        has_page = all(isinstance(seg[2], int) for seg in segments)
+
+        result: list[Document] = []
+        for heading_path, sec_start, sec_end in self._split_sections(full_text):
+            section_text = full_text[sec_start:sec_end]
+            # 章节 → 一个或多个父块
+            for p_text, p_start, p_end in self._split_parents(
+                section_text, sec_start
+            ):
+                parent_id = self._hashlib.md5(
+                    p_text.encode("utf-8")
+                ).hexdigest()[:16]
+                parent_meta = {
+                    "heading_path": list(heading_path),
+                    "char_start": p_start,
+                    "char_end": p_end,
+                    **self._page_info(p_start, p_end, segments, has_page),
+                }
+                # 父块内部切子块
+                for c_text, c_start, c_end in self._split_children(p_text, p_start):
+                    meta = {
+                        **base_meta,
+                        "parent_id": parent_id,
+                        "parent_doc": p_text,
+                        "parent_metadata": parent_meta,
+                        "heading_path": list(heading_path),
+                        "char_start": c_start,
+                        "char_end": c_end,
+                        **self._page_info(c_start, c_end, segments, has_page),
+                    }
+                    result.append(Document(page_content=c_text, metadata=meta))
+        logger.info(
+            f"[Splitter] ParentFirstSplitter 切分完成 | {len(result)} chunks, "
+            f"{len({d.metadata['parent_id'] for d in result})} parents"
+        )
+        return result
+
+    # ── 文档拼接与页码 ──
+
+    @staticmethod
+    def _concat_documents(
+        documents: list[Document],
+    ) -> tuple[str, list[tuple[int, int, object]]]:
+        """将多个输入 doc 用空行拼接为单一文本。
+
+        Returns:
+            (拼接文本, [(start, end, page), ...])，page 为 doc.metadata["page"]（可缺）
+        """
+        parts: list[str] = []
+        segments: list[tuple[int, int, object]] = []
+        pos = 0
+        for doc in documents:
+            if parts:
+                parts.append("\n\n")
+                pos += 2
+            parts.append(doc.page_content)
+            segments.append((pos, pos + len(doc.page_content), doc.metadata.get("page")))
+            pos += len(doc.page_content)
+        return "".join(parts), segments
+
+    @staticmethod
+    def _page_info(
+        start: int, end: int, segments: list[tuple[int, int, object]], has_page: bool
+    ) -> dict:
+        """根据字符区间计算页码范围；无 page 信息时显式标记 page_unknown。"""
+        if not has_page:
+            return {"page_unknown": True}
+        pages = [
+            seg[2] for seg in segments if seg[0] < end and start < seg[1]
+        ]
+        if not pages:
+            return {"page_unknown": True}
+        return {"page_start": min(pages), "page_end": max(pages)}
+
+    # ── 章节切分（标题结构） ──
+
+    def _split_sections(self, text: str) -> list[tuple[list[str], int, int]]:
+        """按 Markdown 标题把文本切成章节。
+
+        Returns:
+            [(heading_path, char_start, char_end), ...]，区间相对整个输入文本，
+            章节文本包含其起始标题行；首个标题之前的内容 heading_path 为空列表。
+        """
+        sections: list[tuple[list[str], int, int]] = []
+        heading_stack: list[tuple[int, str]] = []  # (级别, 标题)
+        current_path: list[str] = []
+        current_start = 0
+        pos = 0
+        for line in text.splitlines(keepends=True):
+            m = self._RE_MD_HEADING.match(line.rstrip("\n"))
+            if m:
+                if pos > current_start:
+                    sections.append((current_path, current_start, pos))
+                level = len(m.group(1))
+                # 弹出同级及更深标题，压入新标题
+                heading_stack = [(lv, t) for lv, t in heading_stack if lv < level]
+                heading_stack.append((level, m.group(2).strip()))
+                current_path = [t for _, t in heading_stack]
+                current_start = pos
+            pos += len(line)
+        if pos > current_start:
+            sections.append((current_path, current_start, pos))
+
+        return self._merge_standalone_sections(sections, text)
+
+    def _merge_standalone_sections(
+        self, sections: list[tuple[list[str], int, int]], text: str
+    ) -> list[tuple[list[str], int, int]]:
+        """将"只有标题没有正文"的章节向后（优先）或向前合并。"""
+        if len(sections) <= 1:
+            return sections
+
+        merged: list[tuple[list[str], int, int]] = []
+        i = 0
+        while i < len(sections):
+            path, start, end = sections[i]
+            sec_text = text[start:end].strip()
+            # 去掉标题行后无正文，或整段是孤立标题 → 需要合并
+            body = self._RE_MD_HEADING.sub("", sec_text).strip()
+            if (not body or RecursiveSplitter._is_standalone_heading(sec_text)) and (
+                i + 1 < len(sections) or merged
+            ):
+                if i + 1 < len(sections):
+                    # 向后合并：章节区间连续，直接扩展当前章节到下一章节起点
+                    n_path, _n_start, n_end = sections[i + 1]
+                    sections[i + 1] = (n_path or path, start, n_end)
+                else:
+                    # 最后一个章节是孤立标题 → 向前合并
+                    p_path, p_start, _p_end = merged[-1]
+                    merged[-1] = (p_path, p_start, end)
+                i += 1
+            else:
+                merged.append((path, start, end))
+                i += 1
+        return merged
+
+    # ── 父块 / 子块切分（占位符保护 + 偏移定位） ──
+
+    def _split_parents(
+        self, section_text: str, base_offset: int
+    ) -> list[tuple[str, int, int]]:
+        """章节 → 父块列表。短章节整体成块，超长章节保护后递归切分。"""
+        if len(section_text) <= self._parent_chunk_size:
+            stripped = section_text.strip()
+            if not stripped:
+                return []
+            start = section_text.find(stripped)
+            return [(stripped, base_offset + start, base_offset + start + len(stripped))]
+
+        protected_text, protected = RecursiveSplitter._protect_regions(section_text)
+        raw_chunks = self._parent_splitter.split_text(protected_text)
+        restored = [RecursiveSplitter._restore_regions(c, protected) for c in raw_chunks]
+        docs = [
+            Document(page_content=c, metadata={}) for c in restored if c.strip()
+        ]
+        # 父块内同样不允许孤立标题单独成块
+        docs = self._heading_merger._merge_standalone_headings(docs)
+        return self._locate_chunks(docs, section_text, base_offset)
+
+    def _split_children(
+        self, parent_text: str, base_offset: int
+    ) -> list[tuple[str, int, int]]:
+        """父块 → 子块列表（占位符保护，overlap 可配置）。"""
+        protected_text, protected = RecursiveSplitter._protect_regions(parent_text)
+        raw_chunks = self._child_splitter.split_text(protected_text)
+        restored = [RecursiveSplitter._restore_regions(c, protected) for c in raw_chunks]
+        docs = [
+            Document(page_content=c, metadata={}) for c in restored if c.strip()
+        ]
+        docs = self._heading_merger._merge_standalone_headings(docs)
+        return self._locate_chunks(docs, parent_text, base_offset)
+
+    @staticmethod
+    def _locate_chunks(
+        docs: list[Document], source_text: str, base_offset: int
+    ) -> list[tuple[str, int, int]]:
+        """在原文中定位每个 chunk 的字符偏移。
+
+        游标单调前进（允许 overlap）；孤立标题合并等导致文本不是原文精确
+        子串时沿用游标兜底。偏移始终钳制在源文本范围内，不越界。
+        """
+        located: list[tuple[str, int, int]] = []
+        cursor = 0
+        for doc in docs:
+            text = doc.page_content
+            idx = source_text.find(text, cursor)
+            if idx < 0:
+                idx = cursor  # 兜底：不伪造精确位置，沿用游标
+            start = base_offset + idx
+            end = min(start + len(text), base_offset + len(source_text))
+            located.append((text, start, end))
+            cursor = max(cursor, idx + 1)
+        return located
+
+
 class MarkdownHeaderSplitter(BaseSplitter):
     """Markdown 标题切分器 — 按 #/##/###/#### 切分，大 chunk 二次细切分。"""
 

@@ -8,7 +8,7 @@ PDF 处理流程（MinerU）：
   → MarkdownHeader + Recursive + SemanticMerge（标题切分 + 递归字符 + 语义合并）
 
 支持的扩展名：.txt, .md, .pdf, .html, .docx, .pptx
-支持的切分器：recursive, semantic, parent, markdown_header, html_header, sentence_boundary
+支持的切分器：recursive, semantic, parent, parent_first, markdown_header, html_header, sentence_boundary
 """
 
 from __future__ import annotations
@@ -85,6 +85,7 @@ from agent_material.rag_engine.text_spliter import (
     RecursiveSplitter,
     SemanticSplitter,
     ParentDocumentSplitter,
+    ParentFirstSplitter,
     MarkdownHeaderSplitter,
     HTMLHeaderSplitter,
     SemanticMergeOnly,
@@ -99,6 +100,7 @@ SPLITTER_FACTORY: dict[str, Callable[[], BaseSplitter]] = {
     "semantic": SemanticSplitter,
     "semantic_merge": SemanticMergeOnly,
     "parent": ParentDocumentSplitter,
+    "parent_first": ParentFirstSplitter,
     "markdown_header": MarkdownHeaderSplitter,
     "html_header": HTMLHeaderSplitter,
 }
@@ -138,15 +140,27 @@ class ProcessingPipeline:
             self._md_cleaner = MarkdownCleaner()
         return self._md_cleaner
 
+    # 父块优先切分适用的扩展名（富文本，含标题结构）
+    _PARENT_FIRST_EXTS: set[str] = {".pdf", ".md", ".html"}
+
     def _get_splitter(self, file_path: str) -> BaseSplitter:
-        """根据扩展名获取切分器实例（单步或多步混合）。"""
+        """根据扩展名获取切分器实例（单步或多步混合）。
+
+        feature_flags.parent_first_split 开启且为富文本格式时，
+        直接使用 ParentFirstSplitter（OFF-005）；否则走 extension_pipeline
+        配置的旧步骤链（回滚路径）。
+        """
         ext = os.path.splitext(file_path)[1].lower()
+        flags = vector_store_config.get("feature_flags", {})
+        if flags.get("parent_first_split") and ext in self._PARENT_FIRST_EXTS:
+            return ParentFirstSplitter()
         steps = self._ext_pipeline.get(ext, ["recursive"])
         return HybridSplitter(steps)
 
     def  process(
         self, file_path: str, enhance_metadata: bool = True,
         save_pre_split_dir: str = "",
+        version_context: dict | None = None,
     ) -> list[Document]:
         """处理单个文件。
 
@@ -160,6 +174,9 @@ class ProcessingPipeline:
             file_path: 文件路径
             enhance_metadata: 是否增强元数据
             save_pre_split_dir: 非空时，将切分前的 Document 保存到此目录（JSONL 格式）
+            version_context: 版本上下文（含 document_id / version_id 两个键）。
+                非空时在切分后写入确定性 parent_id / chunk_id 及版本溯源
+                元数据（OFF-001/OFF-006）；为空时保持旧行为不变
 
         Returns:
             切分后的 Document 列表
@@ -185,8 +202,92 @@ class ProcessingPipeline:
         if enhance_metadata:
             chunks = self._enhance_metadata(chunks)
 
+        # 阶段 5：版本上下文 → 确定性 ID 与溯源元数据（放在增强之后，避免被覆盖）
+        if version_context:
+            chunks = self._apply_version_context(chunks, version_context)
+
         logger.info(
             f"[Pipeline] {file_path} → {splitter.__class__.__name__} | 产出 {len(chunks)} chunks"
+        )
+        return chunks
+
+    @staticmethod
+    def _apply_version_context(
+        chunks: list[Document], version_context: dict
+    ) -> list[Document]:
+        """写入确定性 parent_id / chunk_id 与版本溯源元数据（OFF-001/OFF-006）。
+
+        - 父块按在文档中的出现顺序编号 position，用 compute_parent_id 重算
+          parent_id 并同步更新其所有子块；
+        - 子块按父块内顺序编号，用 compute_chunk_id 写 chunk_id；
+        - 每个子块写 document_id / version_id / is_active=False / indexed_at；
+        - parent_metadata 里同步写 parent_id / document_id / version_id。
+
+        相同 (document_id, version_id, 内容) 重复处理生成完全相同的 ID（幂等）。
+        """
+        import hashlib
+        from datetime import datetime, timezone
+
+        from agent_material.rag_engine.versioning import (
+            compute_chunk_id,
+            compute_parent_id,
+        )
+
+        document_id = version_context["document_id"]
+        version_id = version_context["version_id"]
+        indexed_at = datetime.now(timezone.utc).isoformat()
+
+        def _old_parent_key(chunk: Document) -> str:
+            """切分器写入的占位 parent_id；缺失时按父块内容 hash 兜底分组。"""
+            pid = chunk.metadata.get("parent_id")
+            if pid:
+                return pid
+            content = chunk.metadata.get("parent_doc", chunk.page_content)
+            return hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
+
+        # 第一遍：按出现顺序收集父块（旧 parent_id → 位置 / 内容）
+        parents: dict[str, dict] = {}
+        for chunk in chunks:
+            key = _old_parent_key(chunk)
+            if key not in parents:
+                parents[key] = {
+                    "position": len(parents),
+                    "content": chunk.metadata.get("parent_doc", chunk.page_content),
+                }
+
+        # 重算确定性 parent_id
+        new_parent_id = {
+            key: compute_parent_id(document_id, version_id, info["position"], info["content"])
+            for key, info in parents.items()
+        }
+
+        # 第二遍：写子块元数据（子块按父块内顺序编号）
+        child_counters: dict[str, int] = {}
+        for chunk in chunks:
+            key = _old_parent_key(chunk)
+            parent_id = new_parent_id[key]
+            position = child_counters.get(key, 0)
+            child_counters[key] = position + 1
+
+            meta = chunk.metadata
+            meta["parent_id"] = parent_id
+            meta["chunk_id"] = compute_chunk_id(
+                document_id, version_id, parent_id, position, chunk.page_content
+            )
+            meta["document_id"] = document_id
+            meta["version_id"] = version_id
+            meta["is_active"] = False  # staging 状态，激活前不参与在线检索
+            meta["indexed_at"] = indexed_at
+
+            parent_meta = meta.get("parent_metadata")
+            if isinstance(parent_meta, dict):
+                parent_meta["parent_id"] = parent_id
+                parent_meta["document_id"] = document_id
+                parent_meta["version_id"] = version_id
+
+        logger.info(
+            f"[Pipeline] 版本元数据写入完成 | document_id={document_id[:8]}... "
+            f"version_id={version_id[:8]}... parents={len(parents)} chunks={len(chunks)}"
         )
         return chunks
 

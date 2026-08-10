@@ -32,6 +32,27 @@ CREATE TABLE IF NOT EXISTS file_states (
 CREATE INDEX IF NOT EXISTS idx_tasks_status  ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
 CREATE INDEX IF NOT EXISTS idx_file_path      ON file_states(file_path);
+
+-- 文档版本注册表（OFF-002）
+CREATE TABLE IF NOT EXISTS document_versions (
+    document_id   TEXT    NOT NULL,
+    version_id    TEXT    NOT NULL,
+    source        TEXT    NOT NULL,
+    content_hash  TEXT,
+    status        TEXT    NOT NULL DEFAULT 'staging',  -- staging | validated | active | retired | failed
+    parent_count  INTEGER DEFAULT 0,
+    child_count   INTEGER DEFAULT 0,
+    failure_stage TEXT,
+    failure_reason TEXT,
+    created_at    TEXT    DEFAULT (datetime('now')),
+    activated_at  TEXT,
+    retired_at    TEXT,
+    PRIMARY KEY (document_id, version_id)
+);
+
+-- 部分唯一索引：同一 document_id 最多一个 active 版本
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_active
+    ON document_versions(document_id) WHERE status='active';
 """
 
 

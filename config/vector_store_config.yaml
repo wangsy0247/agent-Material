@@ -50,6 +50,8 @@ max_rerank_docs: 10       # 进入重排序器的最大文档数
 
 # 重排序开关（使用 DashScope API 重排序，无需本地 GPU）
 enable_reranker: true
+# 最终上下文字符预算（ONL-011）：超出时按父块相关性顺序丢弃尾部块
+context_budget_chars: 8000
 # ── 重排序配置 ──────────────────────────────────────────────────
 reranker:
   provider: "dashscope"          # dashscope=阿里云API重排序, local=本地HuggingFace模型
@@ -79,6 +81,15 @@ query_rewriting:
   # HyDE 开关：启用后自动在策略前追加 hyde+（如 hyde+step_back+expand）
   # 使用假设文档 embedding 增强向量检索，但增加约 2s 延迟
   enable_hyde: false
+  # 每请求最大唯一查询数（含原始 query，原始 query 必须始终在列）
+  max_queries: 3
+  # 跨查询 RRF 融合后保留的候选数（进入全局 Rerank 的输入规模）
+  fusion_top_n: 20
+  # 各查询类型在跨查询 weighted RRF 中的权重（ONL-004）
+  weights:
+    original: 1.0        # 原始 query
+    step_back: 0.8       # 退一步抽象查询
+    expand: 0.7          # 同义扩展查询
   expansion:
     num_queries: 3                 # 生成的查询变体数量（含原始查询）
     merge_top_k: 10                # 每个变体的最大召回数
@@ -110,3 +121,21 @@ vector_index:
     ef_construction: 64    # 构建时的搜索深度（越大图质量越高）
   query:
     ef_search: 40          # 查询时的搜索深度（越大召回越高，查询越慢）
+
+# ── 功能开关：false 时回滚到旧稳定路径 ─────────────────────────
+# 关闭对应开关即回退到改造前的行为，不要求删除新数据
+feature_flags:
+  versioned_ingest: true       # 版本化索引（staging→active）
+  parent_first_split: true     # 父块优先切分
+  active_version_filter: true  # 在线只检索 active 版本
+  atomic_bm25_refresh: true    # BM25 原子刷新
+  cross_query_rrf: true        # 跨查询 weighted RRF
+  global_rerank: true          # 原始 query 全局 Rerank（每请求一次）
+  request_scoped_hyde: true    # 请求级 HyDE（不共享状态）
+  single_retrieval_sse: true   # SSE 单次检索 + 上下文冻结
+  pg_control_plane: true       # PG 控制面（任务队列/文件状态/版本状态）；false 回滚 SQLite 控制面
+  enable_add_chunks: false     # /rag/add-chunks 旧直写接口（P0 已关闭，仅内部/回滚用）
+
+# BM25 revision 检测节流间隔（秒，Spec V2 9.2）：检索路径上距上次检查超过
+# 该间隔才查一次 PG active_revision，落后则重建 BM25（多查询进程兜底）
+bm25_revision_check_interval: 2.0

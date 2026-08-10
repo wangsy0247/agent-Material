@@ -6,6 +6,8 @@
 检索流程：在小collection中匹配 → 通过 parent_id 映射到父chunk → 返回父chunk
 """
 
+import uuid
+
 from langchain_core.documents import Document
 
 from agent_material.utils.config_handler import vector_store_config
@@ -121,6 +123,7 @@ class MultiGranularityIndex:
         self,
         child_chunks: list[Document],
         source: str = "",
+        versioned: bool = False,
     ) -> list[str]:
         """写入子chunk + 父chunk 到两个 collection。
 
@@ -129,6 +132,10 @@ class MultiGranularityIndex:
         Args:
             child_chunks: 带有 parent_id/parent_doc 元数据的子chunk
             source: 来源文件路径
+            versioned: 版本化写入（OFF-003）：
+                - 行 uuid 由 parent_id/chunk_id 确定性生成（uuid5），重复写入幂等
+                - 父chunk metadata 使用子块携带的 parent_metadata
+                - 缺少 chunk_id/parent_id 的子块跳过并记 warning
 
         Returns:
             写入的父chunk parent_id 列表
@@ -143,6 +150,21 @@ class MultiGranularityIndex:
                 f"[MultiIndex] 单粒度模式: 写入 {len(child_chunks)} chunks → {self._base_name}"
             )
             return []
+
+        if versioned:
+            # 剥离缺少确定性 ID 的子块（OFF-003 要求确定性写入）
+            valid_chunks: list[Document] = []
+            for doc in child_chunks:
+                if doc.metadata.get("chunk_id") and doc.metadata.get("parent_id"):
+                    valid_chunks.append(doc)
+                else:
+                    logger.warning(
+                        f"[MultiIndex] 跳过缺少 chunk_id/parent_id 的子块 | "
+                        f"source={doc.metadata.get('source', source)}"
+                    )
+            if not valid_chunks:
+                return []
+            return self._insert_versioned(valid_chunks, source)
 
         # 提取父chunk（去重）
         parent_map: dict[str, str] = {}
@@ -211,6 +233,95 @@ class MultiGranularityIndex:
         )
         return list(parent_map.keys())
 
+    def _insert_versioned(
+        self,
+        child_chunks: list[Document],
+        source: str = "",
+    ) -> list[str]:
+        """版本化写入（OFF-003）：确定性行 uuid + 父子 metadata 契约。
+
+        - 父chunk 行 uuid = uuid5(NAMESPACE_URL, "agent-material:parent:{parent_id}")
+        - 子chunk 行 uuid = uuid5(NAMESPACE_URL, "agent-material:chunk:{chunk_id}")
+        - 父chunk metadata 取自子块的 parent_metadata，补 chunk_type/source/parent_id
+        - 子chunk 剥离 parent_doc/parent_metadata，补 chunk_type/source
+        """
+        # 提取父chunk（去重），metadata 取首个子块携带的 parent_metadata
+        parent_map: dict[str, tuple[str, dict]] = {}
+        for doc in child_chunks:
+            pid = doc.metadata["parent_id"]
+            ptext = doc.metadata.get("parent_doc", "")
+            if pid not in parent_map:
+                parent_map[pid] = (
+                    ptext,
+                    dict(doc.metadata.get("parent_metadata") or {}),
+                )
+
+        parent_docs: list[Document] = []
+        for pid, (ptext, pmeta) in parent_map.items():
+            meta = pmeta
+            meta["chunk_type"] = "parent"
+            meta["source"] = source or meta.get("source", "unknown")
+            meta["parent_id"] = pid
+            parent_docs.append(Document(page_content=ptext, metadata=meta))
+
+        slim_children: list[Document] = []
+        for doc in child_chunks:
+            meta = doc.metadata.copy()
+            meta.pop("parent_doc", None)
+            meta.pop("parent_metadata", None)
+            meta["chunk_type"] = "child"
+            meta["source"] = source or meta.get("source", "unknown")
+            slim_children.append(Document(page_content=doc.page_content, metadata=meta))
+
+        # ── 批量 embedding：父chunk + 子chunk 合并为一次 API 调用 ──
+        all_docs = parent_docs + slim_children
+        all_texts = [d.page_content for d in all_docs]
+        n_parents = len(parent_docs)
+
+        embeddings = embedding_model.embed_documents(all_texts)
+
+        parent_embeddings = embeddings[:n_parents]
+        child_embeddings = embeddings[n_parents:]
+
+        if parent_docs:
+            self.large_store.add_embeddings(
+                texts=[d.page_content for d in parent_docs],
+                embeddings=parent_embeddings,
+                metadatas=[d.metadata for d in parent_docs],
+                ids=[
+                    str(uuid.uuid5(uuid.NAMESPACE_URL, f"agent-material:parent:{pid}"))
+                    for pid in parent_map
+                ],
+            )
+            logger.info(
+                f"[MultiIndex] 版本化写入 {len(parent_docs)} 父chunks → {self._large_name}"
+            )
+
+        if slim_children:
+            self.small_store.add_embeddings(
+                texts=[d.page_content for d in slim_children],
+                embeddings=child_embeddings,
+                metadatas=[d.metadata for d in slim_children],
+                ids=[
+                    str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"agent-material:chunk:{d.metadata['chunk_id']}",
+                        )
+                    )
+                    for d in slim_children
+                ],
+            )
+            logger.info(
+                f"[MultiIndex] 版本化写入 {len(slim_children)} 子chunks → {self._small_name}"
+            )
+
+        logger.info(
+            f"[MultiIndex] 版本化入库完成 | 父={len(parent_docs)} 子={len(slim_children)} | "
+            f"共 {len(all_texts)} 条文本 1 次 embedding 调用"
+        )
+        return list(parent_map.keys())
+
     def _get_base_store(self) -> PGVector:
         """获取基础 collection（未启用多粒度时使用）。"""
         return PGVector(
@@ -265,6 +376,247 @@ class MultiGranularityIndex:
             )
         except Exception as e:
             logger.error(f"[MultiIndex] 删除失败: {e}")
+
+    # ── 版本化操作（OFF-002 / OFF-003）────────────────────
+
+    def _psycopg_conn_str(self) -> str:
+        return self._conn_str.replace("postgresql+psycopg://", "postgresql://")
+
+    def delete_by_version(self, document_id: str, version_id: str):
+        """按 document_id + version_id 从两个 collection 删除（staging 清理/重试幂等）。"""
+        import psycopg
+
+        collections = (
+            [self._small_name, self._large_name]
+            if self._enabled
+            else [self._base_name]
+        )
+
+        try:
+            conn = psycopg.connect(self._psycopg_conn_str())
+            cur = conn.cursor()
+            total_deleted = 0
+
+            for col_name in collections:
+                cur.execute(
+                    """
+                    DELETE FROM langchain_pg_embedding
+                    WHERE uuid IN (
+                        SELECT e.uuid
+                        FROM langchain_pg_embedding e
+                        JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                        WHERE c.name = %s
+                          AND e.cmetadata->>'document_id' = %s
+                          AND e.cmetadata->>'version_id' = %s
+                    )
+                    """,
+                    (col_name, document_id, version_id),
+                )
+                total_deleted += cur.rowcount
+
+            conn.commit()
+            cur.close()
+            conn.close()
+
+            logger.info(
+                f"[MultiIndex] 已删除 document_id={document_id} version_id={version_id} "
+                f"的 {total_deleted} 条记录"
+            )
+        except Exception as e:
+            # Spec V2 6.5：staging 清理失败必须终止任务 —— 记录后抛给调用方
+            logger.error(f"[MultiIndex] 按版本删除失败: {e}")
+            raise
+
+    def validate_version(self, document_id: str, version_id: str) -> tuple[bool, dict]:
+        """SQL 校验指定版本的写入完整性（OFF-003 最低校验条件）。
+
+        校验项：父块数>0、子块数>0、子块 parent_id 无缺失、每个 parent_id
+        在 large collection 存在且唯一、空文本 chunk 数为 0、chunk_id 无重复。
+
+        Returns:
+            (是否通过, 统计 dict)
+        """
+        import psycopg
+
+        stats: dict = {
+            "parent_count": 0,
+            "child_count": 0,
+            "missing_parent_id": 0,
+            "missing_parent": 0,
+            "duplicate_parent": 0,
+            "empty_text": 0,
+            "duplicate_chunk_id": 0,
+        }
+
+        conn = psycopg.connect(self._psycopg_conn_str())
+        cur = conn.cursor()
+        try:
+            # 父块数 / 空文本父块
+            cur.execute(
+                """
+                SELECT COUNT(*),
+                       COUNT(*) FILTER (WHERE e.document IS NULL OR btrim(e.document) = '')
+                FROM langchain_pg_embedding e
+                JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                WHERE c.name = %s
+                  AND e.cmetadata->>'document_id' = %s
+                  AND e.cmetadata->>'version_id' = %s
+                """,
+                (self._large_name, document_id, version_id),
+            )
+            row = cur.fetchone()
+            stats["parent_count"] = row[0]
+            stats["empty_text"] += row[1]
+
+            # 子块数 / parent_id 缺失 / 空文本子块 / chunk_id 重复
+            cur.execute(
+                """
+                SELECT COUNT(*),
+                       COUNT(*) FILTER (WHERE e.cmetadata->>'parent_id' IS NULL),
+                       COUNT(*) FILTER (WHERE e.document IS NULL OR btrim(e.document) = '')
+                FROM langchain_pg_embedding e
+                JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                WHERE c.name = %s
+                  AND e.cmetadata->>'document_id' = %s
+                  AND e.cmetadata->>'version_id' = %s
+                """,
+                (self._small_name, document_id, version_id),
+            )
+            row = cur.fetchone()
+            stats["child_count"] = row[0]
+            stats["missing_parent_id"] = row[1]
+            stats["empty_text"] += row[2]
+
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT e.cmetadata->>'chunk_id' AS chunk_id
+                    FROM langchain_pg_embedding e
+                    JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                    WHERE c.name = %s
+                      AND e.cmetadata->>'document_id' = %s
+                      AND e.cmetadata->>'version_id' = %s
+                    GROUP BY e.cmetadata->>'chunk_id'
+                    HAVING COUNT(*) > 1
+                ) dup
+                """,
+                (self._small_name, document_id, version_id),
+            )
+            stats["duplicate_chunk_id"] = cur.fetchone()[0]
+
+            # parent_id 在 large collection 的存在性与唯一性
+            cur.execute(
+                """
+                SELECT COUNT(*),
+                       COUNT(*) FILTER (WHERE cnt = 0),
+                       COUNT(*) FILTER (WHERE cnt > 1)
+                FROM (
+                    SELECT DISTINCT e.cmetadata->>'parent_id' AS pid
+                    FROM langchain_pg_embedding e
+                    JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                    WHERE c.name = %s
+                      AND e.cmetadata->>'document_id' = %s
+                      AND e.cmetadata->>'version_id' = %s
+                      AND e.cmetadata->>'parent_id' IS NOT NULL
+                ) p
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS cnt
+                    FROM langchain_pg_embedding pe
+                    JOIN langchain_pg_collection pc ON pe.collection_id = pc.uuid
+                    WHERE pc.name = %s
+                      AND pe.cmetadata->>'parent_id' = p.pid
+                      AND pe.cmetadata->>'document_id' = %s
+                      AND pe.cmetadata->>'version_id' = %s
+                ) pcnt ON TRUE
+                """,
+                (
+                    self._small_name,
+                    document_id,
+                    version_id,
+                    self._large_name,
+                    document_id,
+                    version_id,
+                ),
+            )
+            row = cur.fetchone()
+            stats["missing_parent"] = row[1]
+            stats["duplicate_parent"] = row[2]
+        finally:
+            cur.close()
+            conn.close()
+
+        ok = (
+            stats["parent_count"] > 0
+            and stats["child_count"] > 0
+            and stats["missing_parent_id"] == 0
+            and stats["missing_parent"] == 0
+            and stats["duplicate_parent"] == 0
+            and stats["empty_text"] == 0
+            and stats["duplicate_chunk_id"] == 0
+        )
+        return ok, stats
+
+    def set_active_version(
+        self,
+        document_id: str,
+        new_version_id: str,
+        old_version_id: str | None,
+    ):
+        """单个 psycopg 事务内完成 PG 侧激活翻牌（OFF-002）。
+
+        对 small + large 两个 collection：
+        - old_version_id 非空 → 旧版本 is_active=false
+        - 新版本 is_active=true
+        任一失败整体回滚并抛出（旧版本继续在线服务）。
+        """
+        import psycopg
+
+        collections = (
+            [self._small_name, self._large_name]
+            if self._enabled
+            else [self._base_name]
+        )
+
+        conn = psycopg.connect(self._psycopg_conn_str())
+        cur = conn.cursor()
+        try:
+            for col_name in collections:
+                if old_version_id:
+                    cur.execute(
+                        """
+                        UPDATE langchain_pg_embedding e
+                        SET cmetadata = e.cmetadata || '{"is_active": false}'::jsonb
+                        FROM langchain_pg_collection c
+                        WHERE e.collection_id = c.uuid
+                          AND c.name = %s
+                          AND e.cmetadata->>'document_id' = %s
+                          AND e.cmetadata->>'version_id' = %s
+                        """,
+                        (col_name, document_id, old_version_id),
+                    )
+                cur.execute(
+                    """
+                    UPDATE langchain_pg_embedding e
+                    SET cmetadata = e.cmetadata || '{"is_active": true}'::jsonb
+                    FROM langchain_pg_collection c
+                    WHERE e.collection_id = c.uuid
+                      AND c.name = %s
+                      AND e.cmetadata->>'document_id' = %s
+                      AND e.cmetadata->>'version_id' = %s
+                    """,
+                    (col_name, document_id, new_version_id),
+                )
+            conn.commit()
+            logger.info(
+                f"[MultiIndex] PG 激活翻牌完成 | document_id={document_id} "
+                f"new={new_version_id} old={old_version_id}"
+            )
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+            conn.close()
 
     # ── 查询统计 ──────────────────────────────────────────
 
