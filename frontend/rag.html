@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 知识库 - 材料科学 LLM Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20260813b">
+    <!-- Markdown 渲染（本地，无需翻墙） -->
+    <script src="/static/vendor/marked/marked.min.js"></script>
+    <!-- HTML 消毒（本地，防 XSS） -->
+    <script src="/static/vendor/dompurify/purify.min.js"></script>
+    <!-- 代码高亮样式（JS 按需动态加载，见 rag.js ensureHljs） -->
+    <link rel="stylesheet" href="/static/vendor/highlight.js/styles/github-dark.min.css">
+</head>
+<body>
+    <div class="rag-app">
+        <!-- 顶部导航 -->
+        <header class="rag-header">
+            <div class="rag-header-left">
+                <a href="/" class="logo" style="text-decoration:none;color:inherit;margin-bottom:0;">
+                    <span class="logo-icon">🔬</span>
+                    <span class="logo-text">材料科学 Agent</span>
+                </a>
+                <span class="rag-header-title">📚 RAG 知识库</span>
+                <span class="rag-header-subtitle">混合检索（向量 + BM25 + CrossEncoder）管理</span>
+            </div>
+            <nav class="rag-nav">
+                <button class="rag-nav-btn active" data-tab="overview">概览</button>
+                <button class="rag-nav-btn" data-tab="search">检索</button>
+                <button class="rag-nav-btn" data-tab="query">问答</button>
+                <button class="rag-nav-btn" data-tab="docs">文档管理</button>
+            </nav>
+        </header>
+
+        <!-- 主体内容 -->
+        <main class="rag-main">
+            <!-- 概览 -->
+            <section class="rag-section active" id="tab-overview">
+                <div class="rag-card">
+                    <div class="rag-card-title">📊 统计信息</div>
+                    <div class="rag-stats-grid" id="statsGrid">
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">向量库文档数</div>
+                            <div class="rag-stat-value" id="statDocCount">-</div>
+                        </div>
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">Collection</div>
+                            <div class="rag-stat-value" style="font-size:14px;" id="statCollection">-</div>
+                        </div>
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">Chunk Size</div>
+                            <div class="rag-stat-value" id="statChunkSize">-</div>
+                        </div>
+                        <div class="rag-stat-item">
+                            <div class="rag-stat-label">重排序</div>
+                            <div class="rag-stat-value" id="statReranker">-</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="rag-card">
+                    <div class="rag-card-title">⚙️ 配置参数</div>
+                    <table class="rag-config-table" id="configTable">
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- 检索 -->
+            <section class="rag-section" id="tab-search">
+                <div class="rag-card">
+                    <div class="rag-card-title">🔍 检索测试</div>
+                    <div class="rag-input-group">
+                        <input type="text" class="rag-input" id="searchInput" placeholder="输入查询语句，如：锂离子电池正极材料...">
+                        <button class="rag-btn" id="btnSearch">检索</button>
+                    </div>
+                    <div id="searchStatus"></div>
+                    <div class="rag-result-list" id="searchResults"></div>
+                </div>
+            </section>
+
+            <!-- 问答 -->
+            <section class="rag-section" id="tab-query">
+                <div class="rag-card">
+                    <div class="rag-card-title">💬 RAG 问答</div>
+                    <div class="rag-input-group">
+                        <input type="text" class="rag-input" id="queryInput" placeholder="输入问题，如：固态电解质的优缺点？">
+                        <button class="rag-btn" id="btnQuery">提问</button>
+                    </div>
+                    <div id="queryStatus"></div>
+                    <div class="rag-chat-history" id="queryResult">
+                        <div class="rag-chat-placeholder">输入问题后，将基于向量检索结果生成回答</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 文档管理 -->
+            <section class="rag-section" id="tab-docs">
+                <div class="rag-card">
+                    <div class="rag-card-title">📁 扫描加载文档</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        扫描 <code>data/</code> 目录，自动识别新增或修改的文档（PDF/TXT/MD/DOCX/PPTX），写入 PGVector 向量库。已加载过的文件自动跳过。
+                    </p>
+                    <button class="rag-btn" id="btnLoadDocs">开始扫描加载</button>
+                    <div id="loadDocsResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
+                    <div class="rag-card-title">➕ 手动添加文档</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        上传文件（PDF）加入知识库，文件保存到 <code>data/</code> 目录后异步解析入库；同名同内容自动跳过，同名新内容自动替换旧版本。
+                    </p>
+                    <div class="rag-upload-dropzone" id="uploadDropzone" role="button" tabindex="0" aria-label="选择或拖拽文件上传">
+                        <div class="rag-upload-icon">📄</div>
+                        <div class="rag-upload-text">点击选择，或拖拽 PDF 文件到此处</div>
+                        <div class="rag-upload-hint">支持多选 · 单个文件不超过 50MB</div>
+                        <input type="file" id="uploadFiles" accept=".pdf" multiple hidden>
+                    </div>
+                    <div class="rag-upload-filelist" id="uploadFileList"></div>
+                    <div style="margin-top:12px;text-align:right;">
+                        <button class="rag-btn" id="btnUpload" disabled>⬆️ 上传入库</button>
+                    </div>
+                    <div id="uploadResult" style="margin-top:12px;"></div>
+                    <hr style="border:none;border-top:1px solid var(--border-color);margin:16px 0;">
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        或直接粘贴文本内容，适合注入少量知识片段。
+                    </p>
+                    <textarea class="rag-textarea" id="addDocsText" placeholder="输入要添加的文本内容..."></textarea>
+                    <div class="rag-input-group" style="margin-top:12px;">
+                        <input type="text" class="rag-input" id="addDocsSource" placeholder="来源标识（可选，如 manual_note_1）">
+                        <button class="rag-btn" id="btnAddDocs">添加</button>
+                    </div>
+                    <div id="addDocsResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
+                    <div class="rag-card-title">🗑️ 按来源删除文档</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        根据来源路径删除向量库中的文档片段。来源格式如：<code>data/某论文.pdf</code> 或 <code>manual_note_1</code>
+                    </p>
+                    <div class="rag-input-group">
+                        <input type="text" class="rag-input" id="deleteSource" placeholder="输入来源路径或标识">
+                        <button class="rag-btn rag-btn-danger" id="btnDeleteSource">删除</button>
+                    </div>
+                    <div id="deleteResult" style="margin-top:12px;"></div>
+                </div>
+
+                <div class="rag-card">
+                    <div class="rag-card-title">📚 文献列表</div>
+                    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                        展示向量库中已加载的所有文献，支持单篇删除和批量删除。
+                    </p>
+                    <div class="rag-doc-toolbar">
+                        <button class="rag-btn rag-btn-secondary" id="btnRefreshDocs" title="刷新列表">🔄 刷新</button>
+                        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer;">
+                            <input type="checkbox" class="rag-doc-checkbox" id="checkAllDocs">
+                            <span>全选</span>
+                        </label>
+                        <button class="rag-btn rag-btn-danger" id="btnBatchDeleteDocs" disabled>🗑️ 批量删除 (<span id="batchDeleteCount">0</span>)</button>
+                    </div>
+                    <div id="docsListStatus"></div>
+                    <div class="rag-doc-table-wrap">
+                        <table class="rag-doc-table" id="docsTable">
+                            <thead>
+                                <tr>
+                                    <th class="col-check"><input type="checkbox" class="rag-doc-checkbox" id="checkAllDocsHeader"></th>
+                                    <th class="col-num">#</th>
+                                    <th>文献来源</th>
+                                    <th class="col-count">片段数</th>
+                                    <th class="col-action">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="docsTableBody">
+                                <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px;">点击刷新加载文献列表</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/js/stream_client.js?v=20260813b"></script>
+    <script src="/static/js/toast.js?v=20260813b"></script>
+    <script src="/static/js/common.js?v=20260813b"></script>
+    <script src="/static/js/rag.js?v=20260813b"></script>
+</body>
+</html>

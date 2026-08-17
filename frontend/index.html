@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>材料科学 LLM Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Markdown 渲染（本地，无需翻墙） -->
+    <script src="/static/vendor/marked/marked.min.js"></script>
+    <!-- HTML 消毒（本地，防 XSS） -->
+    <script src="/static/vendor/dompurify/purify.min.js"></script>
+    <!-- 代码高亮样式（JS 按需动态加载，见 app.js ensureHljs） -->
+    <link rel="stylesheet" href="/static/vendor/highlight.js/styles/github-dark.min.css">
+</head>
+<body>
+    <div class="app">
+        <!-- 遮罩层（移动端） -->
+        <div class="overlay" id="overlay"></div>
+
+        <!-- 左栏：会话管理 -->
+        <aside class="sidebar-left" id="sidebarLeft">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">🔬</span>
+                    <span class="logo-text">材料科学 Agent</span>
+                </div>
+                <button class="btn-new" id="btnNewSession" title="新建会话">
+                    <span>+</span> 新会话
+                </button>
+                <a href="/rag" class="btn-new btn-rag-link" title="RAG 知识库管理" style="margin-top:8px;background:var(--bg-tertiary);color:var(--text-secondary);font-size:12px;">
+                    <span>📚</span> RAG 知识库
+                </a>
+            </div>
+            <div class="session-list" id="sessionList">
+                <div class="empty-state">暂无会话</div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="memory-status" id="memoryStatus">
+                    <span class="dot"></span>
+                    <span>记忆系统就绪</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 中栏：聊天区 -->
+        <main class="chat-main">
+            <div class="chat-header">
+                <button class="btn-toggle" id="btnToggleLeft" title="切换会话列表">☰</button>
+                <div class="chat-title-wrap">
+                    <span class="chat-title" id="chatTitle">材料科学 Agent</span>
+                    <span class="chat-subtitle" id="chatSubtitle">开始一个新对话</span>
+                </div>
+                <button class="btn-toggle" id="btnToggleRight" title="切换参考资料">📚</button>
+            </div>
+
+            <!-- 连接异常横幅（onStale 触发显示，续流恢复后隐藏） -->
+            <div class="stale-banner" id="staleBanner" style="display: none;">⚠️ 连接异常，正在重连…</div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="welcome-screen" id="welcomeScreen">
+                    <div class="welcome-icon">🔬</div>
+                    <h1>材料科学 LLM Agent</h1>
+                    <p>基于大语言模型的材料科学智能助手</p>
+                    <div class="welcome-examples">
+                        <div class="example-card" data-text="帮我找关于石墨烯的文献">
+                            <div class="example-icon">📄</div>
+                            <div>文献检索</div>
+                            <small>帮我找关于石墨烯的文献</small>
+                        </div>
+                        <div class="example-card" data-text="MOF 材料的比表面积一般是多少？">
+                            <div class="example-icon">🔍</div>
+                            <div>知识问答</div>
+                            <small>MOF 材料的比表面积一般是多少？</small>
+                        </div>
+                        <div class="example-card" data-text="下载一种稳定的钙钛矿结构">
+                            <div class="example-icon">⬇️</div>
+                            <div>材料下载</div>
+                            <small>下载一种稳定的钙钛矿结构</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 回到底部按钮（用户上翻时出现） -->
+            <button class="back-to-bottom" id="backToBottom" style="display: none;">↓ 回到底部</button>
+
+            <div class="chat-input-area">
+                <div class="input-wrap">
+                    <textarea
+                        class="chat-input"
+                        id="chatInput"
+                        placeholder="输入问题，按 Enter 发送，Shift+Enter 换行..."
+                        rows="1"
+                    ></textarea>
+                    <button class="btn-send" id="btnSend" title="发送">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
+            </div>
+        </main>
+
+        <!-- 右栏：参考资料 -->
+        <aside class="sidebar-right" id="sidebarRight">
+            <div class="sidebar-header">
+                <h2>📚 参考资料</h2>
+                <span class="source-count" id="sourceCount"></span>
+            </div>
+            <div class="sources-list" id="sourcesList">
+                <div class="empty-state">
+                    <div class="empty-icon">📖</div>
+                    <div>发送问题后将显示相关文献</div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- 认证模态框 -->
+    <div class="auth-overlay" id="authOverlay" style="display: none;">
+        <div class="auth-modal">
+            <h2>🔬 材料科学 Agent</h2>
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="tabLogin" data-tab="login">登录</button>
+                <button class="auth-tab" id="tabRegister" data-tab="register">注册</button>
+            </div>
+
+            <!-- 登录表单 -->
+            <form class="auth-form" id="loginForm">
+                <div class="auth-input-group">
+                    <label>用户名</label>
+                    <input type="text" class="auth-input" id="loginUsername" placeholder="请输入用户名" required>
+                </div>
+                <div class="auth-input-group">
+                    <label>密码</label>
+                    <input type="password" class="auth-input" id="loginPassword" placeholder="请输入密码" required>
+                </div>
+                <div class="auth-error" id="loginError"></div>
+                <button type="submit" class="auth-btn" id="loginBtn">登录</button>
+            </form>
+
+            <!-- 注册表单 -->
+            <form class="auth-form hidden" id="registerForm">
+                <div class="auth-input-group">
+                    <label>用户名</label>
+                    <input type="text" class="auth-input" id="registerUsername" placeholder="3-50 位字符" required minlength="3" maxlength="50">
+                </div>
+                <div class="auth-input-group">
+                    <label>邮箱（可选）</label>
+                    <input type="email" class="auth-input" id="registerEmail" placeholder="example@mail.com">
+                </div>
+                <div class="auth-input-group">
+                    <label>密码</label>
+                    <input type="password" class="auth-input" id="registerPassword" placeholder="至少 6 位" required minlength="6">
+                </div>
+                <div class="auth-error" id="registerError"></div>
+                <button type="submit" class="auth-btn" id="registerBtn">注册</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/stream_client.js"></script>
+    <script src="/static/js/toast.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

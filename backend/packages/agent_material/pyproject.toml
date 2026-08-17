@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-material"
+version = "0.1.0"
+description = "Agent Material 核心框架包"
+license = {text = "Apache-2.0"}
+authors = [{name = "Agent Material contributors"}]
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-community>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "dashscope>=1.20.0",
+    "langchain-text-splitters>=0.3.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "rank-bm25>=0.2.2",
+    "markdown>=3.5",
+    "mcp",
+    "langchain-mcp-adapters>=0.2.0",
+    "python-dotenv",
+    "prometheus-client>=0.20.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    # RAG PostgreSQL 控制面与 PGVector（代码直接 import，必须显式声明）
+    "psycopg[binary,pool]>=3.1",
+    "langchain-postgres>=0.0.17",
+]
+
+[project.optional-dependencies]
+pdf = [
+    "pypdf>=5.0.0",
+    "mineru-open-sdk>=0.2.5,<0.3",
+]
+local-reranker = ["sentence-transformers>=3.0.0"]
+
+[project.urls]
+Repository = "https://github.com/wangsy0247/agent-Material"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_material*"]

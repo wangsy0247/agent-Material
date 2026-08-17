@@ -1,0 +1,5 @@
+# ── 任务队列配置 ──────────────────────────────────────────
+queue:
+  poll_interval: 2.0                # Worker 轮询间隔（秒）
+  max_retries: 3                    # 每任务最大重试次数
+  lease_seconds: 300                # PostgreSQL 任务租约（秒），心跳间隔为租约的 1/3

@@ -1,0 +1,37 @@
+chat_model_name: "qwen3.6-plus"
+max_tokens: 8192
+
+# ---- Checkpointer 配置（LangGraph 状态持久化） ----
+checkpointer:
+  type: "postgres"  # 可选: postgres | sqlite | memory
+  # sqlite 配置（当 type=sqlite 时生效，无需额外服务，推荐单机部署）
+  sqlite:
+    db_path: "logs/langgraph_checkpoints.db"
+  # postgres 配置（当 type=postgres 时生效，需 PostgreSQL 服务 + langgraph-checkpoint-postgres）
+  postgres:
+    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://agent_material:agent_material_dev@localhost:5433/langgraph}"
+
+# ---- Summarization 配置（长对话压缩） ----
+summarization:
+  enabled: true
+  message_threshold: 20      # 消息数超过此阈值触发 summarization
+  max_tokens: 4000           # 摘要生成最大 token 数
+  preserve_last_n: 6         # 压缩时保留最近 N 条消息
+
+# MP 工具运行模式: "local"(进程内直连) ｜ "mcp"(远程 MCP Server)
+mp_tool_mode: "local"
+
+# 敏感操作关键词列表（用于 HITL 人工审批匹配）
+# 同时支持精确匹配和前缀化工具的后缀匹配
+sensitive_keywords:
+  - "mp_download"
+
+# MCP 配置已迁移至 extensions_config.json（项目根目录）
+# 详见 docs/mcp-setup.md 或 extensions_config.json.example
+#
+# 环境变量可覆盖全局默认值：
+#   MCP_MAX_RECONNECT=5
+#   MCP_INITIAL_BACKOFF_MS=1000
+#   MCP_MAX_BACKOFF_MS=30000
+#   MCP_HEALTH_INTERVAL=30
+#   MCP_TOOL_TIMEOUT=60

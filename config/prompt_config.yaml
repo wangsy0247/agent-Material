@@ -1,0 +1,8 @@
+rag_prompt_path: "backend/packages/agent_material/prompts/rag/rag_prompt.txt"
+chat_prompt_path: "backend/packages/agent_material/prompts/rag/chat_prompt.txt"
+query_classification_prompt_path: "backend/packages/agent_material/prompts/rag/query_classification.txt"
+query_expansion_prompt_path: "backend/packages/agent_material/prompts/rag/query_expansion.txt"
+hyde_generation_prompt_path: "backend/packages/agent_material/prompts/rag/hyde_generation.txt"
+stepback_generation_prompt_path: "backend/packages/agent_material/prompts/rag/stepback_generation.txt"
+query_decomposition_prompt_path: "backend/packages/agent_material/prompts/rag/query_decomposition.txt"
+sys_prompt_path: "backend/packages/agent_material/prompts/system_prompt.txt"

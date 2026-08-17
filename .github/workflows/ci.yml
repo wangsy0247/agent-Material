@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agent_material
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: langgraph
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_material -d langgraph"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      AUTH_SECRET_KEY: ci-only-auth-secret-with-at-least-thirty-two-characters
+      POSTGRES_CHECKPOINTER_URL: postgresql://agent_material:ci-only-password@127.0.0.1:5433/langgraph
+      PGVECTOR_URL: postgresql+psycopg://agent_material:ci-only-password@127.0.0.1:5433/langgraph
+      LANGCHAIN_TRACING_V2: "false"
+      OTEL_SDK_DISABLED: "true"
+      AGENT_ALLOW_RUNTIME_MCP_CONFIG: "false"
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            backend/packages/agent_material/pyproject.toml
+            mp_material_server/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv sync --locked --all-packages --extra pdf --extra materials-project --python '${{ matrix.python-version }}'
+
+      - name: Static checks
+        run: uv run ruff check backend mp_material_server scripts
+
+      - name: Test
+        run: uv run pytest backend/tests
