@@ -1,0 +1,3012 @@
+[
+  {
+    "question": "ABACUS 计算电子能带结构时，KPT 文件需要采用什么模式，symmetry 参数应如何设置？",
+    "ground_truth": "KPT 需要选择 Line 模式；symmetry 需要设置为 0，INPUT 文件未显式设置该参数时默认值也为 0。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "404b6cf92f2ef5ed7b76c501b577922a",
+        "parent_id": "b1098e9611c661bab82908fd26d0b996",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "KPT需要选择Line 模式（Line 模式的介绍可以参考这个链接)，并且需要设置 symmetry为0（INPUT文件里若没有设置 symmetry，则会默认设置为0)  \n这里可以使用Atomkit软件自动生成KPT，执行如下命令  \n1 echo -e \"3",
+        "lexical_score": 0.416901
+      },
+      {
+        "chunk_id": "8bb4107bebf7247030d39ee18cde9c50",
+        "parent_id": "2156a442b2c4facfabdcc288b07bef6e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## KPT文件  \n在开展计算时,ABACUS 会根据 INPUT文件中的 kspacing 参数自动生成 KPT文件。对于本次测试的Cu(111)表面吸附CO 结构，当真空层在Z轴方向时，生成的 KPT文件内容如下：  \n1 K_POINTS\n3 gamma\n4331000  \n需要注意的是，真空层方向的K点数目一般需要显式设置为1，以防止计算中混入不应存在的层间周期性。此处由kspacing参数自动生成的KPT文件是满足要求的。",
+        "lexical_score": 0.307396
+      },
+      {
+        "chunk_id": "8a9258d467af0ec4043b0a8010aa7b0b",
+        "parent_id": "460feb0d7796c5153fb25952b1366a22",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ". 1 1 \\ \\mathrm{ ( b o h r ^ { - 1 } ) }$ ，此时为HSE06泛函[2]。  \n· $\\mathtt{ e x x \\_ l a m b d a } \\mathrm{ : }$ 在 $\\mathtt{ b a s i s \\_ t y p e }$ 设置为 $\\mathtt{ l c a o \\_ i n \\_ p w }$ 的情况下，用于补偿使用 $\\mathtt{ l c a o \\_ i n \\_ p w }$ 方法评估精确交换能时G=0处的发散点。默认值为0.3。  \n·exx_real_number:该参数设定为 True时，强制LibRI使用double数据类型，当设定为False时，强制LibRI使用complex 数据类型。当gamma_only=1时，默认为 True，gamma_only=O 时默认为False。",
+        "lexical_score": 0.280872
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.85344,
+      "anchor_score": 177.349644,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "使用 Atomkit 生成 ABACUS 体相结构的 K 路径时，依次输入的 5 个参数分别代表什么含义？",
+    "ground_truth": "3 代表执行 Generate K-Mesh & K-Path 功能；301 代表输出 ABACUS 格式的 K 点；3 代表生成体相结构的 K 路径；101 PRIMCELL.STRU 代表读取 ABACUS 格式的 PRIMCELL.STRU 结构文件；0.06 为 kspacing 的取值。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "e7db0f69fb0e6236e411f6bd0c64cc9d",
+        "parent_id": "7b35377cc14a48c0169bcd0b1b77cc04",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "\\n 0.06\" | atomkit\n2 # 这里为了方便演示，使用了命令行，表示将'3'、'301'、'3'、'101 PRIMCELL.STRU'和'0.06’依次传入\n3 atomkit，实际可以按照 atomkit 的提示依次输入\n4 # 3 代表进行 Generate K-Mesh & K-Path\n5 # 301 代表输出 K 点的格式为 ABACUS\n6 # 3 代表 Kpath for Bulk Structure\n7 # 101 PRIMCELL.STRU 代表读取 ABACUS 的 PRIMCELL.STRU 文件\n8 # 0.06 为 kspacing 的取值  \n生成的KLINES即是计算所需的KPT文件，前三个数是高对称点的分数坐标，第四个数是两个高对称K点间采点数，#号后面是该高对称点的名称  \n1 K_POINTS\n2 8\n3 Line\n4 0",
+        "lexical_score": 0.569918
+      },
+      {
+        "chunk_id": "8541838bcf20b0f582f01b52d1be7f25",
+        "parent_id": "b6f605d0e0f64953fca236d387b4b9c7",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "\\n 202\\n 101 STRU\\n 101\" | atomkit\n2 # 这里为了方便演示，使用了命令行，表示将'2'、'202'、'101 STRU'和'101'依次传入 atomkit，\n3 实际可以按照 atomkit 的提示依次输入\n4 # 2 代表进行 Symmetry Analysis\n5 # 202 代表进行 Find Primitive Cell\n⑥# 101 STRU 代表读取 ABACUS 的 STRU 文件\n7 # 101 代表输出格式为 ABACUS\n```  \n接着执行如下命令进行自洽计算，要注意这里calculation 为 scf，且需要设置out_chg为1以输出电荷密度文件（SPIN1_CHG.cube）。此外，ABACUS 默认读取 STRU 文件，这里我们设置 stru_file为PRIMCELL.",
+        "lexical_score": 0.352169
+      },
+      {
+        "chunk_id": "007d0fe26f6a6ce6443e764283091738",
+        "parent_id": "1eed8ae11758a4fd21eed1bc57c3c771",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "0\n10 （） Dooo.com)\n8 - Contributors: Zhao-Ke WANG， Gang TANG， Ya-Chao LIU\n9 011111.00001!! 0\n10 （） Dooo. ATOMKIT Made Simple\n11 \\（ （）\n12 二 ）/\n13 (_\n14 == Structural Utilities ==:\n15 1) Export Structures 2) Symmetry Analysis\n16 3) Generate K-Mesh & K-Path 4) Edit Structure\n17 5) Advanced Structure Models 6） 2D-Material Kit\n18 8) Visualize Structure 0）Quit\n19 1>>  \n输入1，即可基于已有结构输出各种格式的结构：  \n1 1\n2 +!",
+        "lexical_score": 0.208658
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.720866,
+      "anchor_score": 239.005195,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 非自洽计算能带时，INPUT 文件中 calculation、init_chg、out_band 三个参数分别需要如何配置？",
+    "ground_truth": "calculation 设置为 nscf；init_chg 设置为 file 以读取自洽得到的电荷密度文件；out_band 设置为 1 以输出电子能带数据。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "968331fdee64705c61eb87a26ad087aa",
+        "parent_id": "7b35377cc14a48c0169bcd0b1b77cc04",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".50000000 0.25000000 0.75000000 12 #W\n11 0.500000000.000000000.50000000 1 #X  \n接着执行如下命令进行非自洽计算，要注意这里calculation为nscf，同样需要设置init_chg为file以读取电荷密度文件（SPIN1_CHG.cube），out_band 也需要设置为1以输出电子能带  \n1 cp INPUT-band INPUT\n2 cp KLINES KPT\n3 mpirun -n 8 abacus  \n计算结束之后在OUT.\\*目录下面会有BANDS_1.",
+        "lexical_score": 0.700778
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.778907,
+      "anchor_score": 158.728638,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 能带计算输出的 BANDS_1.dat 文件中，各列数据分别代表什么？",
+    "ground_truth": "第一列为 K 点序号，第二列为 K 点在布里渊区的间隔（笛卡尔坐标计算），第三列及之后为每条能带对应的电子能量，单位为 eV。",
+    "question_type": "formula_table",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "edffb3c74797cc6410cb065fe120a48c",
+        "parent_id": "63bb9791446deb994297fc4613631217",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "dat文件，其中第一列为K点序号，第二列是K点在布里渊区里的间隔（以笛卡尔坐标计算)，从第三列往后是每条能带的电子能量，单位为eV  \n1 10.\\*目录下面会有BANDS_1.dat文件，其中第一列为K点序号，第二列是K点在布里渊区里的间隔（以笛卡尔坐标计算)，从第三列往后是每条能带的电子能量，单位为eV  \n1 10.00000000 -92.49968796 -54.00929724..\n2 2 0.00988862 -92.49960078 -54.00938081\n3 30.01977723 -92.50345008 -54.00963444...\n4  \n这里，可以使用目录下的 gene_band_dat.py 生成绘图所需的能带文件  \n1 # 假设当前目录存在 KPT 文件存储能带信息，OUT.\\* 目录下有 BANDS_\\*",
+        "lexical_score": 0.613891
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.751138,
+      "anchor_score": 311.801437,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "计算铁的能带与态密度时，针对其磁性需要做哪两项关键的输入设置？",
+    "ground_truth": "在 INPUT 中设置 nspin=2 开启自旋极化；同时将铁原子的初始磁矩设置为非 0 值，否则无法得到铁磁基态。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "4a732bc2e79286af75de186d7a1cf17c",
+        "parent_id": "72ded4a00099cd26a6536bc4a4833f60",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "-- image -->## 6.1.4铁的态密度以及电子能带结构计算  \n进入Fe文件夹，由于铁具有磁性，因此需要在INPUT中打开自旋极化选项，即增加参数nspin并设置为2(默认值为1)，并且将铁的初始磁矩设置为非0(直接设成0得不到铁磁基态)。注意此时再对铁做自洽迭代（相比于nspin设置为1的计算)，程序对自旋向上和向下的电子在每一个布里渊区K点上都分别进行了Kohn-Sham方程的求解，因此计算时间将会几乎翻倍。  \n计算铁的态密度和电子能带结构的过程与铝几乎相同，但是要注意计算得到的态密度和电子能带结构文件均有两个（分别对应自旋向上和向下)，分别为DOS1和DOS2、BANDS_1.dat 和 BANDS_2.dat  \n绘图仍推荐使用DOS1_smearing.dat和DOS2_smearing.dat，以及 gene_band_dat.py生成的 plot_BANDS_1",
+        "lexical_score": 0.595446
+      },
+      {
+        "chunk_id": "d46b1495c6c38547e72ea181917f10a5",
+        "parent_id": "b3a4338f33904dcd7327836677e068c3",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".0”指定每个原子的初始磁矩，若设置此参数，则第18行的值将被覆盖。  \n关于赝势，还值得多提一些。平面波基组计算涉及采用描述电子和离子吸引作用的赝势，例如模守恒赝势或者超软赝势。需要注意的是，如果赝势换了，则相应的ecut能量截断值也需要重新测试收敛性。而基于局域原子轨道(Linear Combination of Atomic Orbitals，简称 LCAO)基组的计算则涉及赝势和数值原子轨道（NumericalAtomic Orbitals，简称 NAO)，需要使用者准备好相应文件。这里提到的赝势是一种描述核外电子和离子之间相互作用的近似方法，数值原子轨道是通过数值方法构建的描述电子波函数和电子密度等性质的基函数。需要注意的是，LCAO计算所采用的数值原子轨道要和对应的赝势匹配，即数值原子轨道是从给定赝势生成出来的，赝势如果改变了，相应的数值原子轨道也要重新生成，才能保证较好的精度",
+        "lexical_score": 0.224706
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.734897,
+      "anchor_score": 251.209703,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 中想要同时输出 DOS 和 PDOS，需要将 out_dos 参数设置为多少？",
+    "ground_truth": "设置 out_dos 为 2，即可在输出 DOS 的同时输出 PDOS 数据。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "f082a39dff544818f2c19e8358b37944",
+        "parent_id": "561c8c65989e0ee45b0d35952b01f7fe",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "2 ABACUS 计算 PDOS## 6.2.1 PDOS 文件分析  \nABACUS 使用LCAO 基组进行自洽迭代场计算（Self-Consistent Field，SCF）或 NSCF（Non-Self-ConsistentField,NSCF）计算时，可以在INPUT文件里设置 out_dos 为2在输出 DOS（Density Of States）的同时输出 PDOS(Partial DOS),PDOS 的文件格式是 xml,其文件内容在英文文档里有介绍:Calculating DOS and PDOS—ABACUSdocumentation  \n下面简单介绍一下PDOS文件:",
+        "lexical_score": 0.711033
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.79208,
+      "anchor_score": 76.229648,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 输出的 PDOS 文件是什么格式？文件中<orbital>标签内的 l、m、z 三个属性分别代表什么？",
+    "ground_truth": "PDOS 文件为 xml 格式；l 代表角量子数，m 代表磁量子数，z 代表对应角量子数的径向轨道序号。",
+    "question_type": "terminology",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "009e791cee871b3a78857865e213c435",
+        "parent_id": "761ebe6ee458920943c5ee9860ea1cbe",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "00000\n17 </energy_values>\n18 ·····\n19 </pdos>\n```## 不同轨道的DOS  \n<orbital>中index=\"1”表示第\"1”条轨道，atom_index=\"1”表示第\"1”个原子，species=\"Li”表示元素为\"Li”1=\"0”，m=\"0”，z=\"1”分别代表角量子数为\"0”，磁量子数为\"0”，每个角量子数上对应的径向轨道为\"1”例如Li在标准原子轨道库里是DZP，具体轨道为4slp，如下表所示共7个：4个s轨道（分别对应z取1到4；1取0；m取0到21，即0)，3个p轨道（对应z取1；1取1；m取0到21，即0，1，2)，更具体的介绍可以参考数值原子轨道基组的个数  \n<data> 到</data>中的内容代表该轨道的dos，两列分别对应 spin 为上和下的dos  \n<table><tr><td rowspan=1",
+        "lexical_score": 0.604499
+      },
+      {
+        "chunk_id": "00beb23b97c65fe37e407fb0d9c1b1b7",
+        "parent_id": "ec96e01009754f3359505e0e941e29ee",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".orb轨道文件为例，首先文件名包含的信息有：氧元素(o),GGA泛函（gga)，数值原子轨道截断半径（7au，即7Bohr)，推荐能量截断值（100Ry)，数值原子轨道个数（2s2pld，2个s的径向轨道，2个p的径向轨道，1个d的径向轨道)。值得注意的三个点是：  \nABACUS 里用到的模守恒赝势和轨道是需要匹配的。因为不同的赝势可能有不同的价电子，而数值原子轨道是用来描述这些价电子的，如果赝势的价电子多，则相应的默认数值原子轨道基组数量也会增多。  \n推荐用户直接使用轨道文件包含的能量截断值做计算。ABACUS 里的数值原子轨道在生成时,是尽量的去匹配平面波输出的波函数，从而优化得到的。而平面波计算是有一个能量截断值的，因此为了尽可能的保证LCAO的精度，我们建议直接使用推荐的能量截断值，而不需要真正做计算的时候做体系能量随着能量截断值变化的收敛性测试",
+        "lexical_score": 0.304756
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.764498,
+      "anchor_score": 170.694296,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "使用 abacus-plot 绘制 PDOS 时，配置文件中的 efermi 参数可以从哪里获取？",
+    "ground_truth": "费米能数值可以从自洽计算的输出文件 running_scf.log 中，通过关键字 \"EFERMI\" 检索得到。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "65d0589402a723a2f611dbdc76f1a4a6",
+        "parent_id": "94e6cce9042d8b4f69c70786d1190d41",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。DOS 和能带结构紧密相关，通过对能带结构在能量上的积分得到。DOS 的峰值通常对应于能带结构中的范霍夫奇点，这些点是电子浓度变化剧烈的地方，且在费米能级（通常把这个能量设为0点，负数代表费米面以下，正数代表费米面以上）附近的行为对材料的电学性质有显著影响。例如，金属的高DOS导致高电导率，而半导体和绝缘体在费米能级附近的低DOS 则导致低电导率。  \n使用密度泛函理论软件来计算电子态密度和能带一般包括以下两个步骤：第一步，对结构弛豫后的稳定晶体结构（一般来讲是这样操作）做 self-consistent field（简称 scf）自洽计算输出收敛的体系基态电子密度文件；第二步，读人上一步的电子密度，选取想要计算的能级和K点，固定电子密度，做一次非自洽（non-self-consistentfield，简称nscf）计算得到态密度以及能带结构。\n## 6",
+        "lexical_score": 0.319731
+      },
+      {
+        "chunk_id": "b46694214869fb4dd369ebd22cb69a15",
+        "parent_id": "6b639804ef964f62e308337b5fc9771c",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "py install\n```## 准备输人文件config.json  \n1{\n2 \"pdosfile\": \"PDOS\",\n3 \"efermi\": 6.585653952007503,\n4 \"species\" : [\"Li\",\"Co\",\"0\"]\n5}  \npdosfile：实际PDOS文件的路径（相对路径和绝对路径均可)\nefermi：费米能，单位是eV，可以在输出文件running_scf.",
+        "lexical_score": 0.275559
+      },
+      {
+        "chunk_id": "4ab70069dc9dc647cdf63c834fafad39",
+        "parent_id": "63bb9791446deb994297fc4613631217",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".py 生成绘图所需的能带文件  \n1 # 假设当前目录存在 KPT 文件存储能带信息，OUT.\\* 目录下有 BANDS_\\*.dat 文件\n2 python gene_band_dat.py 10.963171515\n3 # 10.963171515 即为费米能数值，也可空缺，则不将能量减去费米能  \n运行完之后会在当前目录生成plot_BANDS_1.dat文件，即为绘图所需的能带文件，第一行为高对称K点的坐标，从第二行开始，第一列为K点在布里渊区里的间隔，第二列为每条能带的电子能量，单位为eV。  \n```csv\n1 # 0.0 0.24721543 0.32490774 0.47629565 0.73850721 0.95260205 1.12740976 1.25101747\n2 0.000000 -103.462859\n3 0.009889 -103",
+        "lexical_score": 0.24685
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.642265,
+      "anchor_score": 134.882329,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 输出的实空间电荷密度、波函数数据采用什么文件格式？通常用什么软件可视化？",
+    "ground_truth": "采用 cube 格式（Gaussian CUBE file）；通常使用 VESTA 软件进行可视化。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "e8f96935d26ceac8131f812df4e20a52",
+        "parent_id": "62f2ece46269653f2eeff2f7d8377260",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 输出文件类型：cube 文件  \n最终的输出文件类型为.cube，这是一种用于存储三维网格数据的文件格式，主要用于描述电荷密度、波函数等在实空间中的信息。由于该文件格式最初是为Gaussian软件包设计的，因此通常也被称为Gaussian CUBEfile，但被其他第一性原理计算软件所广泛使用。cube 文件可以在免费软件 VESTA（Visualization for Electronicand STructural Analysis）中方便地进行可视化，因此后面的可视化步骤也均由VESTA进行。",
+        "lexical_score": 0.678988
+      },
+      {
+        "chunk_id": "6d0740876390efc5ac9a455e01fa10e9",
+        "parent_id": "6222da9083535c19fc9f9a638856fc55",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 3.1.6将 STRU文件转化为其他格式  \n很多时候我们也需要把 STRU文件转化为其他结构格式（如CIF)，以便于在通用的结构可视化软件中导入。使用ASE-ABACUS 进行转化的Python代码如下：  \n```python\n1 from ase.io import read, write\n2 # read existing STRU file\n3 structure = read(\"STRU\"， format=\"abacus\")\n4 # write this structure to CIF\n5 write(\"my_stru",
+        "lexical_score": 0.322736
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.754429,
+      "anchor_score": 91.088383,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "平面波基组下，指定计算特定能带的分解电荷密度，需要设置哪个核心参数？",
+    "ground_truth": "需要设置 bands_to_print 参数，通过指定规则选择需要计算的能带。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "07221db3266ac742df984f910af95555",
+        "parent_id": "755ae15121f009c8c138331d731cb9a7",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \n其他参数和平面波时基本一致，仍然可以使用bands_to_print 指定需要计算的能带（见平面波计算部分）。不过在LCAO情况下，你也可以选择使用参数nbands_istate，它会选择计算Fermi面上下nbands_istate 条能带的分解电荷密度。当已经设置了bands_to_print 的情况下，nbands_istate 的效果将会被覆盖。  \n这里选择将if_separate_k设置为 true，表明将不同k点的贡献分开输出。",
+        "lexical_score": 0.633847
+      },
+      {
+        "chunk_id": "fff9eb677ae1f97e6d66e04b6d94b337",
+        "parent_id": "60e8aa613af55936e335315534a55c47",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \n·nbands：能带数，由于ocp_set 需要手动设置每一条能带的占据数到最高带，建议手动设置nbands，防止二者不对应。  \n·calculation：必须为md，同时一般MD(Molecular Dynamics)计算所需的参数都需要设置，这部分参数会对应rt-TDDFT的离子实运动的计算。  \n。 esolver_type：tddft，表示采用rt-TDDFT求解器。  \n。 ocp：改变占据数功能的开关，为1的时候开启。  \n·ocp_set：占据数的设置，1·1·0·0表示这个算例所计算的五条能带，各自占据的电子数，其总和为2，代表Hz的两个价电子，可以简化为2\\*1·3\\*0。另外，对于有多个k点的体系，ABACUS 支持对各个k点单独设置占据数",
+        "lexical_score": 0.349969
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.802573,
+      "anchor_score": 94.376253,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "LCAO 基组下计算能带分解电荷密度需要分两步执行，分别是什么？",
+    "ground_truth": "第一步执行 SCF 计算，设置 out_wfc_lcao=1 输出波函数系数文件；第二步将 calculation 设为 get_pchg，读入上一步的系数文件，计算并输出能带分解电荷密度。",
+    "question_type": "multi_hop",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "b38742606b4dbd3a2b7a9852d3b993d6",
+        "parent_id": "8159aae731e42f9c860fb36a65bf8d83",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "5 在数值原子轨道基组下进行计算## 电荷密度  \n在数值原子轨道基组下，能带分解电荷密度的计算比平面波稍微复杂一些，我们需要两次计算：一次计算先得到LCAO的轨道叠加系数文件，一次计算再根据这些系数文件计算得到分解电荷密度。  \n在 SCF时计算并输出波函数系数文件  \n一个可能的 INPUT文件如下:  \nINPUT_PARAMETERS\n2 nbands 20\n3 stru_file STrU\n4 kpoint_file Kpt\n5 pseudo_dir path/to/your/pseudo_potential/folder\n6 orbital_dir path/to/your/orbital/folder\n7\n8 ecutwfc 100",
+        "lexical_score": 0.552095
+      },
+      {
+        "chunk_id": "0610e798dd7e8560cdad2101f8d4509e",
+        "parent_id": "755ae15121f009c8c138331d731cb9a7",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 计算并输出能带分解电荷密度  \n此时，我们最好再单独开一个文件夹，用来计算能带分解电荷密度。KPT和 STRU 和第1步保持一致，但是INPUT文件需要将计算类型calculation 从scf 更改为get_pchg。一个可能的 INPUT文件如下：  \n```shell\nINPUT_PARAMETERS\n2 nbands 20\n3 stru_file STRU\n4 kpoint_file KPT\n5 pseudo_dir path/to/your/pseudo_potential/folder\n6 orbital_dir path/to/your/orbital/folder\n7\n8 ecutwfc 100",
+        "lexical_score": 0.459005
+      },
+      {
+        "chunk_id": "e8e93ffd459cbd1cb3af139fdbb7aa41",
+        "parent_id": "7b946cfed536de3fdc30c48cfd807ef5",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \n电荷密度既可以输出总的，也可以按照不同能带、不同k点、不同自旋分开输出（能带分解电荷密度)。但是它们的操作逻辑可能会略有不同，例如在LCAO下，能带分解电荷密度的输出需要在 SCF 结束后单独再开一次计算，读入上一步 SCF的结果才可以进行后处理；但是输出总的电荷密度则可以直接在 SCF时附带目标参数out_chg=1 即可。  \n波函数作为复数，既可以输出其模（envelope function），也可以选择实部和虚部分开输出。在ABACUS 里需要特定的参数组合进行控制，包括if_separate_k、bands_to_print、out_wfc_norm 等参数。  \n这篇文档归类汇总了这类相关信息。",
+        "lexical_score": 0.413916
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.76684,
+      "anchor_score": 439.986428,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "参数 if_separate_k 分别设为 true 和 false 时，电荷密度的输出有什么区别？",
+    "ground_truth": "设为 false 时，所有 k 点的贡献会被累加，输出文件名为 BAND_SPIN_CHG.cube；设为 true 时，会分别输出每个 k 点的贡献，文件名为 BAND_K_SPIN*_CHG.cube。",
+    "question_type": "comparison",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "08f1d222dab8f1154b972fa8a157ba59",
+        "parent_id": "e01a2a0614db490cbad7b159c9cc0f1b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".cube。当if_separate_k设置为true时，程序会分别计算不同k点的贡献并输出，输出文件名形如  \n$$\n\\mathrm{ B A N D * \\_ K * \\_ S P I N * \\_ C H G } \\cdot \\mathrm{ c u b e } \\ 。\n$$  \n有时候对称性分析会约化一些k点，并且相应地，k点权重会发生改变",
+        "lexical_score": 0.459107
+      },
+      {
+        "chunk_id": "6ef863b489e9caed914823529d00f812",
+        "parent_id": "2fc85d1b592095c798af75ee6b214561",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".cube\n3 BAND1_K2_SPIN1_CHG.cube\n4 BAND1_K2_SPIN2_CHG.cube\n5  \n若选择if_separate_k=false，则输出文件名中不会带有k点信息。这些cube 格式文件可以直接在VESTA软件中打开并可视化。  \n例如，第一条能带「点自旋向上的贡献存储在BAND1_K1_SPIN1_CHG.cube文件里，可视化效果为：  \n<!-- image -->  \n第二条能带三个不同 M 点的贡献为 BAND2_K2_SPIN\\*_CHG.cube、BAND2_K3_SPIN\\*_CHG.cube、BAND2_K4_SPIN\\*_CHG.cube :  \n<!-- image -->  \n<!-- image -->  \n<!-- image -->  \n可以发现，它们确实形状一致，但是在实空间被旋转了不同的角度，符合预期。",
+        "lexical_score": 0.404626
+      },
+      {
+        "chunk_id": "2a40812b28512a85f049d6f3fb19138b",
+        "parent_id": "f7e8ba5cd0fabddd3d57779744108155",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".deepmodeling.com/en/latest/advanced/input_files/input-main.html#bands-to-print 中进行查看。简单来说，上面bands_to_print被指定为2\\*12\\*01，2\\*1意味着前2个（第1个、第2个）能带会被计算，2\\*0意味着紧接着的2个（第3个、第4个）能带会被跳过，最后一个1意味着紧接着的1个（第5个）能带会被计算；因此，最终会在OUT.ABACUS 文件夹下得到第1、2、5个能带的分解电荷密度。  \n参数if_separate_k 则控制是否将每个k点对电荷密度的贡献分开输出，false表示不分开，因此在多k点的情形下，输出文件的电荷密度是各个k点贡献之和。",
+        "lexical_score": 0.396519
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.662518,
+      "anchor_score": 206.832418,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "进行能带分解电荷密度计算时，为什么建议关闭晶格对称性？",
+    "ground_truth": "开启对称性会约化 k 点并改变 k 点权重，且电荷密度未经过对称性操作还原到实空间，可能导致计算结果错误；关闭对称性可保证结果的可控性与正确性。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "649875016dbc27f4da426b40cc5b0397",
+        "parent_id": "17b7bd8d4135d89113a2ba86b51dc52c",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".50000000</td><td>0.50000000</td></tr></table>  \n可以看到一些k点在计算中被约化，从而拥有了更高的WEIGHT。  \n虽然我们已经做了很多代码分析、测试与benchmark，以保证结果的正确性，但是在打开对称性时仍不排除可能会因为k点约化与权重改变而产生不可预料的后果（例如电荷密度要根据对称性进行对称化；未来可能还要加入参数来控制纳入哪些用户选择的k点的贡献，此时打开对称性后用户操作得到的结果的正确性是不可控的：例如上述情况中纳入编号为1和2的k点，实际上是有4个k点的贡献，并且电荷密度没有经过对称性操作在实空间还原，因此会得到错误的结果)。因此，如果可能的话，我们强烈建议在完全关闭对称性(symmetry=-1)或者只启用时间反演对称性（symmetry=0）的情况下进行多k点 SCF 和能带分解电荷密度的计算。\n## 6.3.",
+        "lexical_score": 0.56537
+      },
+      {
+        "chunk_id": "b86e71a8c44b410b4589fb530fb98dde",
+        "parent_id": "121eb6aad363a3cbd3784fc19eab7627",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".materialscloud.org/work/tools/seekpath 访问。  \n不难发现，实际上2×2x1的Brillouin区采样只能采到Γ点和M点（编号2、3、4的k点都等价为M点，在symmetry=1时会显式约化)。可以预想到，K2、K3、K4在实空间中的分布形状应该是一致的，它们只相差相应的晶格对称性操作。  \n以LCAO 为例,开启共线磁矩nspin=2(仅作为演示,没有磁性的石墨烯自旋上下结果应该完全一致),在第一步 SCF后可以在OUT.ABACUS 文件夹下得到如下波函数系数文件:WFC_NAO_K1.",
+        "lexical_score": 0.215269
+      },
+      {
+        "chunk_id": "8a4fa901b50086556bb9bc6ba1462b04",
+        "parent_id": "e01a2a0614db490cbad7b159c9cc0f1b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。\n$$  \n有时候对称性分析会约化一些k点，并且相应地，k点权重会发生改变。例如当symmetry=1（开启晶格对称性分析）时，对于一个 $2 \\times 2 \\times 2$ 的k点采样，下面是一个可能的kpoints文件：  \n<table><tr><td>1</td><td colspan=\"5\">nkstot now = 4</td></tr><tr><td>2</td><td colspan=\"5\">K-POINTS DIRECT COORDINATES</td></tr><tr><td>3</td><td>KPOINTS</td><td>DIRECT_X</td><td>DIRECT_Y</td><td>DIRECT_Z</td><td>WEIGHT</td></tr><tr><td>4</td><td>1</td><td>0",
+        "lexical_score": 0.214798
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.649949,
+      "anchor_score": 417.710709,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "电子局域函数 ELF 的取值范围是什么？不同取值分别代表什么物理意义？",
+    "ground_truth": "取值范围为 0 到 1；越接近 1 表示电子局域性越强；等于 1/2 时对应均匀电子气状态；越接近 0 表示电子离域性越强。",
+    "question_type": "terminology",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "d04287e95935c558d02d22b1bc187de9",
+        "parent_id": "05844a200f60b0254fbaefb63001e3d6",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "4ABACUS计算电子局域函数ELF使用教程## 6.4.1背景  \n电子局域函数（Electron localization function，ELF）最早在1990 年由 Becke 和Edgecombe 提出[1]，它描述电子的局域化程度。根据定义，ELF是一个0到1之间的数，越接近1，表示电子越局域，ELF=1/2时，对应均匀电子气，越接近0，表示电子越离域。  \n目前，ABACUS 支持使用平面波基组、原子轨道基组下的 Kohn-Sham DFT（KSDFT）和无轨道密度泛函理论计算并输出ELF。\n## 6.4.",
+        "lexical_score": 0.546099
+      },
+      {
+        "chunk_id": "32c8c3e01bbb644b6f21391540345bff",
+        "parent_id": "730f47d0e169736709f1f3f2eeba8ab7",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## Ecut收敛 (只对平面波有效)  \n平面波（pw）作为一种可以用于描述周期性边界条件下的电子波函数和电荷密度基矢量，它们都是正交的,且可以通过一个ecutwfc 参数来控制基矢量的个数，ecut其代表了每一个平面波所对应的动能，如果ecut取得越大，则基矢量可以描述震荡得越剧烈的物理量（例如氧原子的2p轨道)，那么计算结果就会越精确，但同时所带来的机时成本消耗也越大。因此我们采用pW 基组做真正计算前，需要对ecut进行测试来获得一个足够准确且效率也高的取值。  \n保持前文用于计算的基组为“pw”，进行ecut的收敛性测试，ecut取值范围为：20\\~100 Ry。这个例子在4进程下启动 MPI进行并行计算，一般推荐总核数(=线程数×进程数)取2的n次方或者n倍",
+        "lexical_score": 0.26889
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.777734,
+      "anchor_score": 209.667616,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "自旋极化计算体系中，ABACUS 会输出哪几个 ELF 相关的 cube 文件？",
+    "ground_truth": "输出三个文件：ELF.cube 存储总 ELF，ELF_SPIN1.cube 存储自旋向上电子的 ELF，ELF_SPIN2.cube 存储自旋向下电子的 ELF。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "c4e79fb2dc4e3ab11f14306b8775a58a",
+        "parent_id": "4a0bdc6ec9845f58e86bbbfc24f79b1b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 6.4.4计算实例：自旋极化的体心立方铁  \n算例地址:https:/github.com/MCresearch/abacus-user-guide/tree/master/examples/elf/bcc-Fe-pw  \n此算例使用PW基组下的KSDFT。运行此算例后，可以得到ELF.cube，ELF_SPIN1.cube与ELF_SPIN2.cube三个文件，分别存储总ELF，自旋为上电子的ELF以及自旋为下电子的ELF，下面为三种不同的ELF在(100)晶面上的分布图。  \n<!-- image -->  \n<!-- image -->  \n<!-- image -->  \n<!-- image -->  \n<!-- image -->  \n<!",
+        "lexical_score": 0.550449
+      },
+      {
+        "chunk_id": "31ea8a838804f5fd43bda1008a294c14",
+        "parent_id": "72ded4a00099cd26a6536bc4a4833f60",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".dat和DOS2_smearing.dat，以及 gene_band_dat.py生成的 plot_BANDS_1.dat和 plot_BANDS_2.dat，使用绘图软件可得如下DOS 以及能带图  \n<!-- image -->\n图1.铁的态密度(DOS)，红线表示自旋向下电子的能带图，黑线表示自旋向上电子的能带图。费米面设为0点，即蓝色虚线所在能量位置。可以看出铁的两个自旋方向态密度并不相等，因此铁具有磁性。  \n<!-- image -->\n图2.铁的能带图，红线表示自旋向下电子的能带图，黑线表示自旋向上电子的能带图。费米面设为0点。",
+        "lexical_score": 0.430343
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.883149,
+      "anchor_score": 216.838973,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "LCAO 基组下计算 ELF 时，为什么要在 χ 的分子上添加微小修正值？",
+    "ground_truth": "LCAO 基组存在不完备性，远离原子核的区域 χ 的分子可能比分母更快趋于 0，导致出现非物理的电子局域化结果；添加修正值可保证远核区域 χ 正确趋于 0，提升计算稳定性。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "19cc28342d16ca4ae13dc98c3b7b5896",
+        "parent_id": "fe1b4b54ea3e7596851b82469d70a888",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "} \\end{array}$## 稳定性修正  \n在远离原子核的区域，×的分子和分母均趋于零，但分母更快地趋于零，因此×趋于无穷，最终ELF趋于零。  \n但在LCAO基组下，由于基组的不完备性，在远离原子核的某些区域，×的分子可能更快地趋于零，导致X趋于零或得到一个有限的值，最终得到非零的ELF，即电子出现不物理的”局域化”。在PW基组下，则没有上述问题。  \n为了修正基组带来的不稳定性，我们采用了文献[2]中的建议，在x的分子上增加一个很小的修正值，以保证×在远离原子核的区域正确地趋于零。经测试后，ABACUS取此修正值为10-5，即可以提升稳定性，又不会影响近核区域的结果。",
+        "lexical_score": 0.646478
+      },
+      {
+        "chunk_id": "fe4d65166eabef62c220d937f8e46b8b",
+        "parent_id": "0c62217beb379d69a94824c6022b08dc",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1介绍  \n现实中的化学反应多数时候发生在恒定电势条件下，而传统的DFT计算软件则是基于恒定电荷的条件。若要在计算模拟中保持恒定电势，在电化学表面反应建模时就需要调整晶胞中的电子数。在开源密度泛函理论软件 ABACUS 里，模拟体系时使用的是周期性边界条件，因此需要添加额外的算法保持模拟过程中同时保证超胞的电中性。其中的一种方案就是当从系统中添加/提取额外的电子时，需要在表面模型的真空区域中实现补偿电荷的分布。  \n目前 ABACUS 软件中实现了补偿电荷功能[1]，与增减电子数相对应的补偿电荷会以带电平板的形式（不考虑平板厚度）予以补偿进而保持电中性，并且存在相应的原子受力的修正，可以用于平面波（Plane-Wave）基组和数值原子轨道（Numerical Atomic Orbitals）基组计算，但注意目前该功能只能用于带真空层的表面体系。我们以下的例子以一个水分子为例，如图1所示",
+        "lexical_score": 0.177782
+      },
+      {
+        "chunk_id": "d04287e95935c558d02d22b1bc187de9",
+        "parent_id": "05844a200f60b0254fbaefb63001e3d6",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "4ABACUS计算电子局域函数ELF使用教程## 6.4.1背景  \n电子局域函数（Electron localization function，ELF）最早在1990 年由 Becke 和Edgecombe 提出[1]，它描述电子的局域化程度。根据定义，ELF是一个0到1之间的数，越接近1，表示电子越局域，ELF=1/2时，对应均匀电子气，越接近0，表示电子越离域。  \n目前，ABACUS 支持使用平面波基组、原子轨道基组下的 Kohn-Sham DFT（KSDFT）和无轨道密度泛函理论计算并输出ELF。\n## 6.4.",
+        "lexical_score": 0.157499
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.755044,
+      "anchor_score": 436.106618,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "执行 Bader 电荷分析前，需要在 ABACUS 的 INPUT 中设置什么参数输出电荷密度？",
+    "ground_truth": "设置 out_chg=1，输出电荷密度 cube 文件。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "907ee75ef7cd7abaa807c989677abc46",
+        "parent_id": "55fe94330a852fa8a4c30d39eadc6cbf",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## nspin 1 case  \n生成所需cube 文件  \nbader程序需要读取以cube方式，或者CHGCAR 格式存储的实空间电荷密度，因此运行 ABACUS 时，只需要添加  \n1 out_chg 1  \n即可输出电荷密度。  \n只需要以  \n```batch\n1 /path/to/bader Si2-ELECTRON_DENSITY.cube\n```  \n即可，屏幕会有如下输出：  \n1 GRID BASED BADER ANALYSIS (VerSiOn 1.05 08/19/23)\n2\n3 OPEN ... Si2-ELECTRO\nGAUSSIAN-STYLE INPUT FILE\nDENSITY-GRID: 60 x 60 x 60\n6 CLOSE ... Si2-Si2.cube-ELECTRO\nRUN TIME: 0",
+        "lexical_score": 0.806878
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.944553,
+      "anchor_score": 48.415021,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "自旋极化体系为什么不能直接对两个自旋通道的电荷密度分别做 Bader 分析？",
+    "ground_truth": "两个自旋通道中，原子间的零梯度面位置不一定完全重合，同一原子在两个自旋通道的 Bader 体积可能不同，直接相加会得到错误结果。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "56f27bf58b444391abefcf3efb7b1848",
+        "parent_id": "4455df59a069a2d5279404aeecf241f8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## nspin 2 case  \nABACUS 目前分 spin channel 进行电荷密度的输出，若 nspin 2，则会在目录下输出 SPIN1_CHG.cube 和SPIN2_CHG.cube。然而，直接对每一个 spin channel进行体积剖分，然后按照原子序号相加的结果可能是错误的，因为两个 spinchannel中不一定每个原子均具有位置相同的“0梯度面”。因此对同一原子，可能在两个 spinchannel中具有不同大小的cell。为了避免这种情况，可以首先将两cube 文件进行加和，之后再调用 bader.X。",
+        "lexical_score": 0.361784
+      },
+      {
+        "chunk_id": "b2422969963d78624503d6fe8f1e7b55",
+        "parent_id": "cc028a44bfcd628d0fc7785e520304ba",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".u.，需要换算。  \n<!-- image -->\n图3.采用PBE 交换关联泛函和非自旋极化得到的二维 nanoribbon 的能带图，可以看出费米面附近CBM（Con-duction Band Minimum）和VBM（Valence Band Maximum）重合，无带隙。  \n<!-- image -->\n图4.采用PBE交换关联泛函和自旋极化得到的二维nanoribbon的能带图。蓝色和红色代表自旋极化方向不同时对应的两副能带图像，可以看出不加电场时，两个自旋方向的能带图几乎一样，都有带隙。  \n<!-- image -->\n图5.采用PBE 交换关联泛函和自旋极化，再给体系加上0",
+        "lexical_score": 0.202727
+      },
+      {
+        "chunk_id": "649875016dbc27f4da426b40cc5b0397",
+        "parent_id": "17b7bd8d4135d89113a2ba86b51dc52c",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".50000000</td><td>0.50000000</td></tr></table>  \n可以看到一些k点在计算中被约化，从而拥有了更高的WEIGHT。  \n虽然我们已经做了很多代码分析、测试与benchmark，以保证结果的正确性，但是在打开对称性时仍不排除可能会因为k点约化与权重改变而产生不可预料的后果（例如电荷密度要根据对称性进行对称化；未来可能还要加入参数来控制纳入哪些用户选择的k点的贡献，此时打开对称性后用户操作得到的结果的正确性是不可控的：例如上述情况中纳入编号为1和2的k点，实际上是有4个k点的贡献，并且电荷密度没有经过对称性操作在实空间还原，因此会得到错误的结果)。因此，如果可能的话，我们强烈建议在完全关闭对称性(symmetry=-1)或者只启用时间反演对称性（symmetry=0）的情况下进行多k点 SCF 和能带分解电荷密度的计算。\n## 6.3.",
+        "lexical_score": 0.199583
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.590295,
+      "anchor_score": 223.574593,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "自旋极化体系执行 Bader 电荷分析的正确操作流程是什么？",
+    "ground_truth": "使用 cube_manipulator.py 工具将 SPIN1_CHG.cube 与 SPIN2_CHG.cube 相加，得到总电子密度文件，再对总密度文件执行 Bader 分析。",
+    "question_type": "multi_hop",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "65d0589402a723a2f611dbdc76f1a4a6",
+        "parent_id": "94e6cce9042d8b4f69c70786d1190d41",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。DOS 和能带结构紧密相关，通过对能带结构在能量上的积分得到。DOS 的峰值通常对应于能带结构中的范霍夫奇点，这些点是电子浓度变化剧烈的地方，且在费米能级（通常把这个能量设为0点，负数代表费米面以下，正数代表费米面以上）附近的行为对材料的电学性质有显著影响。例如，金属的高DOS导致高电导率，而半导体和绝缘体在费米能级附近的低DOS 则导致低电导率。  \n使用密度泛函理论软件来计算电子态密度和能带一般包括以下两个步骤：第一步，对结构弛豫后的稳定晶体结构（一般来讲是这样操作）做 self-consistent field（简称 scf）自洽计算输出收敛的体系基态电子密度文件；第二步，读人上一步的电子密度，选取想要计算的能级和K点，固定电子密度，做一次非自洽（non-self-consistentfield，简称nscf）计算得到态密度以及能带结构。\n## 6",
+        "lexical_score": 0.327855
+      },
+      {
+        "chunk_id": "a74bb59f545e00d40c55ddfc710f0589",
+        "parent_id": "42dc0c51146aeedbb51992a18e25a7ff",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "com/deepmodeling/\n22 abacus-develop/issues## 生成所需cube 文件  \n我们选择abacus-develop/examples/spin_polarized/AFM算例，将 INPUT文件中out_chg flag 修改为1，得到两个cube 文件分别对应于两个 spin channel。此时我们只需要将两个 SPIN\\*_CHG.cube 相加即可：  \n```batch\n1 python3 cube_manipulator.py -i SPIN1_CHG.cube -p SPIN2_CHG.cube -o ELECTRONIC_DENSITY.cube\n```  \n运行bader电荷分析\n对文件 ELECTRONIC_DENSITY.cube 使用 bader",
+        "lexical_score": 0.326013
+      },
+      {
+        "chunk_id": "c43f683bef900565257bf3992a24530f",
+        "parent_id": "af2804e842add8474d78f04dc16d2934",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "STRU,读取得到的原胞  \n1 cp INPUT-scf INPUT\n2 cp KPT-scf KPT\n3 mpirun -n 8 abacus## 2.非自洽计算得到态密度  \n做态密度计算中的非自洽计算通常情况下需设置更加密的K点网格。执行如下命令进行非自洽计算，要注意这里calculation为nscf，且需要设置init_chg为file以读取电荷密度文件（SPIN1_CHG.cube），out_dos 也需要设置为1以输出态密度  \n电荷密度文件（SPIN1_CHG.cube）默认是放在OUT.suffx目录下面，非自洽计算会自动去OUT.suffix目录下面找这个文件，如果找不到就会报错。熟悉VASP的用户可能习惯将这个文件移到另一个目录，这样也可以，但是需要在INPUT里设置read_file_dir为SPIN1_CHG",
+        "lexical_score": 0.261193
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.660706,
+      "anchor_score": 108.816607,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Bader 分析输出的 ACF.dat 文件中，如何计算得到原子携带的净电荷量？",
+    "ground_truth": "用对应原子赝势中的价电子数 z_valence，减去 ACF.dat 中 CHARGE 列的数值，即可得到原子携带的净电荷量。",
+    "question_type": "formula_table",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "b6061fa4d027c7f960f331849472a2fd",
+        "parent_id": "9d0d1b2d7b5e002ff96e22b94cffabd3",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "0000</td><td></td><td></td><td></td><td></td></tr><tr><td>8</td><td>NUMBER</td><td>OF</td><td>ELECTRONS:</td><td>8.0000</td><td></td><td></td><td></td><td></td></tr></table>  \n我们将“CHARGE”列数据和赝势中PP_HEADER 部分的 z_Valence 值相减，即可得到该原子所携带电荷量。",
+        "lexical_score": 0.358525
+      },
+      {
+        "chunk_id": "e4d78420c222e25c853f1e35a74f7a8a",
+        "parent_id": "d726f47f648d6a18c0e0dceadfdc3c4f",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".\n2 1 (nspin)  \n35（总原子数）0.00.00.0（原点坐标）\n4 27（沿 x 轴格点数 nx）0.200383 0.00000 0.00000 （晶格矢量 a1 的 1/nx，in Bohr。即晶格常数 a\\*a1/nx)\n5 27（沿 y 轴格点数 ny）0.000000 0.200383 0.000000（晶格矢量 a2 的 1/ny，in Bohr)\n6192（沿 z 轴格点数 nz） 0.000000 0.000000 0.199254（晶格矢量 a3 的 1/nz，in Bohr)\n13（第一个原子的原子序数）11（赝势中的价电子数）0.0000000.00000.000000（该原子位置的笛卡尔坐标，in Bohr）\n13 11 2.705164 2.705164 3.825680\n9 13 11 0.000000 0.000000 7",
+        "lexical_score": 0.286394
+      },
+      {
+        "chunk_id": "00beb23b97c65fe37e407fb0d9c1b1b7",
+        "parent_id": "ec96e01009754f3359505e0e941e29ee",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".orb轨道文件为例，首先文件名包含的信息有：氧元素(o),GGA泛函（gga)，数值原子轨道截断半径（7au，即7Bohr)，推荐能量截断值（100Ry)，数值原子轨道个数（2s2pld，2个s的径向轨道，2个p的径向轨道，1个d的径向轨道)。值得注意的三个点是：  \nABACUS 里用到的模守恒赝势和轨道是需要匹配的。因为不同的赝势可能有不同的价电子，而数值原子轨道是用来描述这些价电子的，如果赝势的价电子多，则相应的默认数值原子轨道基组数量也会增多。  \n推荐用户直接使用轨道文件包含的能量截断值做计算。ABACUS 里的数值原子轨道在生成时,是尽量的去匹配平面波输出的波函数，从而优化得到的。而平面波计算是有一个能量截断值的，因此为了尽可能的保证LCAO的精度，我们建议直接使用推荐的能量截断值，而不需要真正做计算的时候做体系能量随着能量截断值变化的收敛性测试",
+        "lexical_score": 0.243817
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.641907,
+      "anchor_score": 192.786091,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 结合 pymatgen 计算弹性常数时，默认会生成多少种应变构型？是如何得到的？",
+    "ground_truth": "共生成 24 种构型；包含 6 种独立应变状态，每种应变状态默认设置 4 个应变大小（-0.01、-0.005、0.005、0.01）。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "747814fb0147e39202bb88eb880c09e7",
+        "parent_id": "9fda13ac8045e1c8b3ce32baf0e7d830",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "对于6种应变状态中的每一种，应用4种不同的默认应变大小：  \n$$\n\\varepsilon _ { i } \\in \\{ - 0. 0 1 , - 0 . 0 0 5 , 0 . 0 0 5 , 0 . 0 1 \\} ,\n$$  \n将产生24种构型。接着对这24种构型分别使用DFT计算（固定晶格矢量，但允许原子驰豫，即relax），对所获得的每种应变状态的4个应力和应变的集合使用线性拟合来计算相应的弹性常数。",
+        "lexical_score": 0.567443
+      },
+      {
+        "chunk_id": "bb5a2a62f308f3af5de1b12905ae1ac2",
+        "parent_id": "cf41f8c9fff3a2b28c2ede8a7f032a53",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \n在实际计算中，6种应变状态将逐一应用于初始驰豫（relaxation）后的结构，因此每次只考虑一种独立变形。",
+        "lexical_score": 0.332267
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.738376,
+      "anchor_score": 201.495019,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "弹性常数计算中，对应变后的结构执行 ABACUS 计算时，calculation 应设置为什么类型？",
+    "ground_truth": "设置为 relax，固定晶格矢量，允许原子位置弛豫，从而计算对应应变下的应力。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "557530f67639ca97763c9be13c594474",
+        "parent_id": "232ce77cde8fd01bda4897b1cb0e91e8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "./。此外需要进行固定晶格矢量，但允许原子弛豫来计算应力，因此calculation 设置为 relax。STRU 和 strain.json 分别是生成的构型文件和相应的应变大小。",
+        "lexical_score": 0.505883
+      },
+      {
+        "chunk_id": "bca61e2693d9724efa858d72378b5362",
+        "parent_id": "b3a4338f33904dcd7327836677e068c3",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".8开头的小数意味着接下来的 LATTICE_VECTORS 部分可以写以 Angstrom 为单位的晶格。  \n·第1113行表示𝑥,y,z方向分别对应的三条晶格矢量。  \n·第16行“Direct”表示给出原子位置的方法是分数坐标（或者称为晶格坐标)，常用的还有 Cartesian(笛卡尔坐标方法)，就是直角坐标系下的坐标。  \n·第17行是元素种类的名称。  \n·第18行设置原子初始磁矩，如果INPUT 里的nspin 参数设为1，则不考虑磁性，这个参数不起作用。  \n·第19行表示体系的硅原子个数。  \n·第 20 27行给出所有8个硅原子的坐标；前三个数是坐标，之后的(111)三个数代表允许该原子在对应的x,y,z对应方向上移动，相反，(000)表示不允许在对应的方向上移动；同样，当考虑磁性计算的时候，“mag0",
+        "lexical_score": 0.302557
+      },
+      {
+        "chunk_id": "85c0309f557a492b263720b0e8b5106f",
+        "parent_id": "07bf4b23c423fe12ee6bf599d1df89a2",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "3 金刚石的弹性常数计算## 结构弛豫  \n进入relax文件夹，运行ABACUS 进行结构弛豫，完成后在OUT.C8文件夹下出现 STRU_ION_D文件。之后的应变都将在这个构型文件基础上产生。此外，计算弹性常数所用的应力也会减去这个构型的应力，因此也需要running_relax.",
+        "lexical_score": 0.269102
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.746842,
+      "anchor_score": 220.131547,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Phonopy 有限位移法中，命令 phonopy -d --dim=\"2 2 2\" --abacus 的作用是什么？",
+    "ground_truth": "将原胞按 2×2×2 扩胞，并根据晶格对称性自动生成对应数量的微扰原子结构文件（STRU-001 等）。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "76e1e0d2e4d5bd8004c50ca69c73c734",
+        "parent_id": "509c8129b53b28510907998753149be9",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "5 m 0 0 0## 用Phonopy产生需要计算的超胞及相应微扰构型  \n这里我们使用有限位移方法计算声子谱，因此需要对晶格进行扩胞并对原子位置进行微扰。执行如下命令即可生成222的扩胞并产生微扰结构：  \n```batch\n1 phonopy -d --dim=\"2 2 2\" --abacus\n```  \n这一步 phonopy 会根据晶格对称性自动产生相应个数的微扰结构。由于FCC的晶格对称性较强，因此这个例子只产生一个微扰结构：STRU-001。这里类似K 点的对称性分析，晶体结构对称性越强，所需的微扰结构就越少，对称性稍差的体系一般会产生多个微扰结构",
+        "lexical_score": 0.56364
+      },
+      {
+        "chunk_id": "5bab7562581bfcf4125e1c1ed0cc38c1",
+        "parent_id": "9f87a97d725cc85191a898286aaae63a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".2用 Phonopy产生需要计算的超胞及相应微扰构型中的\"dim”一致。  \n·MESH:q点的采样网格。'888‘意味着采用8x8x8的q点网格，默认以（0，0，0）为中心。  \n·PRIMITIVE_AXES：输入晶胞到目标原胞的转换矩阵，并将根据原胞基矢量作为声子计算的坐标系。这里是FCC 的原胞转换矩阵。  \n·BAND：采样能带的q点路径。不同晶格的高对称点不同，具体可以使用 Seek-path，自动生成q点路径。  \n。 BAND_POINTS：给出了包括能带路径末端的采样点的数量。  \nBAND_CONNECTION：在能带交叉处辅助连接能带。",
+        "lexical_score": 0.241188
+      },
+      {
+        "chunk_id": "e1bdc9cd288087629a4d7be41ec2f3bd",
+        "parent_id": "f6fcc1a0bb2041eb1f526ddbf499ddcb",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## INPUT文件  \n可以注意到，在本次计算中，我们使用了kspacing 这个参数（Full List of INPUTKeywords—ABACUS doc-umentation），可以根据晶胞大小自动生成 KPT文件。因此不再需要我们手动调换K点的顺序。  \n1 INPUT_PARAMETERS\n2 suffix bn\n3 pseudo_dir /\n4 orbital_dir /\n5 calculation cell-relax\n6 symmetry 0\n7 basis_type 1cao\n8 ecutwfc 100\n9 scf_thr 1e-07\n10 scf_nmax 100\n11 smearing_method gauss\n12 smearing_sigma 0",
+        "lexical_score": 0.191363
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.693884,
+      "anchor_score": 231.636118,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "计算声子谱的微扰结构受力时，ABACUS 的 INPUT 中 calculation 和 cal_force 分别如何设置？",
+    "ground_truth": "calculation 设置为 scf，cal_force 设置为 1，以输出原子受力数据。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "1d4f8db6563f4a7579949e195d4e764f",
+        "parent_id": "fb654f8f58d54ee8a9171a01e3c4aae5",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 产生FORCE_SET文件  \n接着用 ABACUS 计算原子受力，其中需要注意的是calculation 需要设置为 scf，并且设置cal_force为1，因为这一步目的是输出原子受力。  \n小技巧：即为了计算不同的微扰结构的受力，可以在 INPUT 里添加关键字 stru_file 来指定 STRU文件的路径和文件名：stru_file./STRU-001  \nINPUT内容如下：  \nINPUT_PARAMETERS\n2 #Parameters (1.General)\n3 suffix Al-fcc\ncalculation scf\nesolver_type ksdft\n6 symmetry 1\npseudo_dir ./psp\n8 orbital_dir",
+        "lexical_score": 0.717135
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.802702,
+      "anchor_score": 71.861429,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用于 ShengBTE 计算的二阶力常数文件，Phonopy 输出时必须开启什么设置？",
+    "ground_truth": "必须设置 FULL_FORCE_CONSTANTS = .TRUE.，输出完整的二阶力常数，否则 ShengBTE 读取会报错。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "9c80eb8af9f18582a2f6adf8c929d14d",
+        "parent_id": "fa020f8a3b701418eaea2ff2e869576a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "TRUE.TRUE.，输出全部的二阶力常数，否则 ShengBTE 读取数据会报错。  \n此外，可以使用如下命令输出 gnuplot格式的声子谱，用于绘制声子谱：  \n```batch\n1 phonopy-bandplot --gnuplot > pho.dat\n```  \n后处理  \n注意 ShengBTE 软件要求FORCE_CONSTANTS_2ND 文件里数据的单位为eV/A^2，但是ABACUS 结合 phonopy计算的FORCE_CONSTANTS 单位为eV/(Axau)，其中au 是原子单位制，1 au=0.52918 A。可以使用 2nd 目录下提供的au2si.py 脚本进行单位转换，生成 FORCE_CONSTANTS_2ND 文件，命令如下:  \n1 python au2si",
+        "lexical_score": 0.57064
+      },
+      {
+        "chunk_id": "ade62e647ed1bb6be6303c9f2ccc1ae7",
+        "parent_id": "5f50989be3627049b324a88011e37e5e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "这一步结束之后，Phonopy 软件会产生 band.TRUE.\n8 FORCE_CONSTANTS = WRITE\n9FULL_FORCE_CONSTANTS = .TRUE.  \n这一步结束之后，Phonopy 软件会产生 band.yaml（用于绘制声子谱）和 FORCE_CONSTANTS 文件。其中，FORCE_CONSTANTS 文件包含的数据即为二阶力常数，注意这里务必设置FULL_FORCE_CONSTANTS =.",
+        "lexical_score": 0.373908
+      },
+      {
+        "chunk_id": "e211054c19bc371e8c7ad6310b5cac56",
+        "parent_id": "60e8aa613af55936e335315534a55c47",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".TDDFT Occupation Parameters)\n30 ocp 1\n31 ocp_set 11000  \n具体参数设置请参考线上文档，这里仅对部分重要参数进行说明：  \n·gamma_only：必须设置为0，gamma_only为1会采用double类型计算，rt-TDDFT使用传播子迭代计算波函数，需要complex 类型存储数据，不兼容 gamma_only为1的情况。  \n·basis_type：必须设置为1cao，目前 ABACUS 仅支持基于数值原子轨道基组的 rt-TDDFT功能。  \n·nbands：能带数，由于ocp_set 需要手动设置每一条能带的占据数到最高带，建议手动设置nbands，防止二者不对应",
+        "lexical_score": 0.195896
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.811949,
+      "anchor_score": 177.804603,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS+Phonopy 输出的 FORCE_CONSTANTS 与 ShengBTE 要求的单位有什么差异？如何转换？",
+    "ground_truth": "ABACUS+Phonopy 输出单位为 eV/(A×au)，ShengBTE 要求单位为 eV/A²；可使用 au2si.py 脚本进行单位转换，生成符合要求的 FORCE_CONSTANTS_2ND 文件。",
+    "question_type": "formula_table",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "9c80eb8af9f18582a2f6adf8c929d14d",
+        "parent_id": "fa020f8a3b701418eaea2ff2e869576a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "TRUE.TRUE.，输出全部的二阶力常数，否则 ShengBTE 读取数据会报错。  \n此外，可以使用如下命令输出 gnuplot格式的声子谱，用于绘制声子谱：  \n```batch\n1 phonopy-bandplot --gnuplot > pho.dat\n```  \n后处理  \n注意 ShengBTE 软件要求FORCE_CONSTANTS_2ND 文件里数据的单位为eV/A^2，但是ABACUS 结合 phonopy计算的FORCE_CONSTANTS 单位为eV/(Axau)，其中au 是原子单位制，1 au=0.52918 A。可以使用 2nd 目录下提供的au2si.py 脚本进行单位转换，生成 FORCE_CONSTANTS_2ND 文件，命令如下:  \n1 python au2si",
+        "lexical_score": 0.636034
+      },
+      {
+        "chunk_id": "e40c139273c915f7df0504f12ba98d1e",
+        "parent_id": "62ef08dcb07de7ea31e22a11156b86df",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "图5.8,'ks_solver':'genelpa','kspacing':0.14}，请确认ABACUS输入文件是否符合要求，若是可开展ABACUS计算。  \n图5.准备ABACUS输入文件  \n从智能体的输出中我们可以提取出所用的INPUT。  \nINPUT_PARAMETERS\n2 ecutwfc 100\n3 calculation scf\n4 basis_type lcao\n5 kspacing 0.14\n6 symmetry 1\n7 scf_thr 1e-07\n8 scf_nmax 100\n9 smearing_method gauss\n10 smearing_sigma 0.015\n11 mixing_type broyden\n12 mixing_beta 0",
+        "lexical_score": 0.194921
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.815351,
+      "anchor_score": 175.299957,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "计算三阶力常数转换结构文件时，为什么不能使用 dpdata 进行格式转换？",
+    "ground_truth": "dpdata 会强制将晶格转换为下三角矩阵，相当于旋转了晶格，会导致原子受力方向同步旋转，最终计算出错。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "806b94ace3af4f1a51e9f9a9a8583fd8",
+        "parent_id": "b815292bf5bf3edcf1f42a8b29a38914",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".POSCAR.\\*，例如这个例子一共产生了40个构型:  \n```batch\n1 thirdorder_vasp.py sow 2 2 2 -2\n```  \n运行 pos2stru.Py，将上述POSCAR 转化为 STRU文件，注意该脚本里调用了ASE 软件包的函数（需提前安装好ASE):  \n```batch\n1 python pos2stru.py\n```  \n注意：这里不能调用dpdata软件进行转化。因为dpdata 会强制将晶格改为下三角矩阵，相当于旋转了晶格，会导致原子间受力方向也相应旋转，从而发生错误。\n## 计算微扰构型的原子受力  \n可以参考目录下run_stru",
+        "lexical_score": 0.671734
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.83676,
+      "anchor_score": 325.438779,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 的 Wannier90 接口目前对两种基组的支持状态分别是什么？",
+    "ground_truth": "平面波基组完整支持 Wannier90 接口，LCAO 基组的 Wannier90 接口仍在完善中。",
+    "question_type": "comparison",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "3d45d43ab46b444d1c8d7eea3daccf20",
+        "parent_id": "b93d9664f050c4df957c98a31f00f013",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 6.9.3使用ABACUS准备Wannier90需要的文件  \n目前的 ABACUS 平面波基组功能支持Wannier90 接口，LCAO 的接口还在完善中。  \n使用Wannier90 接口不需要编译ABACUS 过程中做额外操作。",
+        "lexical_score": 0.58165
+      },
+      {
+        "chunk_id": "a2269e47ee87f3b7ad713970d8396336",
+        "parent_id": "e74ca6465b7e98dc879aa76835f0116e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 运行流程  \n这里给出了运行 ABACUS+wannier90的一个脚本文件，结合 examples/interface_wannier90/中的例子讲解结合ABACUS 和Wannier90计算最局域化Wannier函数的完整运行流程，这里的流程对平面波基组和原子轨道基组均适用，原子轨道基组的NSCF会比平面波基组慢一些。  \nexport W90=wannier90.x\n2 export ABACUS=abacus\n3 export NP=12\n4\n5 # 1．运行 Wannier90 软件，生成 nnkp 文件；\n6 cd wannier  \n```shell\n7 mpirun -np $NP $W90 -pp diamond.win\n8\n9#2．运行 ABACUS 软件，执行电子结构的自洽计算;\n10 cd .",
+        "lexical_score": 0.384415
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.812145,
+      "anchor_score": 146.83662,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 对接 Wannier90 的非自洽计算中，必须开启的两个输出参数是什么？",
+    "ground_truth": "必须开启 out_wannier_mmn 和 out_wannier_eig，分别输出 mmn 文件和 eig 文件。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "aa0f103e0dd73e65f6b495d560e7fcb5",
+        "parent_id": "5fa05855ba4b7d8b9f2d1ebccd516448",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".非自洽计算：需要注意INPUT 中需要把init_charge 参数设置为file，即读取文件中的电荷密度；一定要指定towannier90 参数为1，同时指定nnkpfile 参数为Wannier90产生的 nnkp 文件的地址；另外需要注意 KPT文件中的布里渊区k点要和Wannier90输入文件中的k点一模一样，所以最好手动输入K点坐标指定;  \n3．非自洽计算：INPUT 中有 out_wannier_mmn、out_wannier_amn、out_wanier_eig、out_wannier_unk、out_wannier_wvfn_formatted五个控制 Wannier90 相关文件输出的参数，默认值都是1，其中out_wannier_eig 和out_wannier_mmn 是必须打开的，out_wannier_unk 和out_wannier_amn 在需要使用",
+        "lexical_score": 0.387525
+      },
+      {
+        "chunk_id": "0c795e27774374ce08720d2151221ebe",
+        "parent_id": "67700aadb738b9c2008853c3b9c77699",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。</td></tr><tr><td rowspan=1 colspan=1>wannier_spin</td><td rowspan=1 colspan=1>up</td><td rowspan=1 colspan=1>string</td><td rowspan=1 colspan=1>输出向上/向下的波函数及其内积</td></tr><tr><td rowspan=1 colspan=1>out_wannier_mmn</td><td rowspan=1 colspan=1>1</td><td rowspan=1 colspan=1>bool</td><td rowspan=1 colspan=1>是否输出mmn文件，mmn文件存储了Mmnmathbf(k,b))，即布洛赫波函数之间的内积。mmn 文件在计算Wannier最后域化时必须输出",
+        "lexical_score": 0.331098
+      },
+      {
+        "chunk_id": "a2e29be5e1aba409dcbfa44eccf50750",
+        "parent_id": "b815292bf5bf3edcf1f42a8b29a38914",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 计算三阶力常数  \n要计算三阶力常数，需要结合thirdorder程序，计算后输出三阶力常数文件FORCE_CONSTANTS_3RD。但是，thirdorder目前只支持读取VASP 和QE 的输入输出文件。因此，这里我们是通过将 ABACUS 的结构文件和输出受力分别转换为POSCAR和 vasprun.xml来使用thirdorder，请先进人3rd文件夹，具体步骤将在以下叙述。获得微扰构型  \n首先将 ABACUS 软件进行结构优化（relax）后的 STRU 文件转化为POSCAR（目录下已给出转化过的POSCAR，或者需要自己动手进行这个转换）。  \n之后，运行thirdorder_vasp 程序，产生微扰过后的一系列原子构型文件3RD.POSCAR.\\*，例如这个例子一共产生了40个构型:  \n```batch\n1 thirdorder_vasp",
+        "lexical_score": 0.2788
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.710839,
+      "anchor_score": 55.703767,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Candela 软件分析 ABACUS 分子动力学轨迹时，支持计算哪四类核心性质？",
+    "ground_truth": "支持计算径向分布函数（RDF）、静态结构因子（SSF）、离子-离子动态结构因子（DSF）、均方差位移（MSD）。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "32d8dd113ccaf66c343297fa979b9fe9",
+        "parent_id": "9ce78143d45df07ec04070a35853e598",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "10 ABACUS+Candela 使用教程## 6.10.1介绍  \n本教程旨在介绍采用Candela分析ABACUS（基于3.2.4版本）分子动力学轨迹，计算径向分布函数（RadialDistribution Function，简称RDF），静态结构因子（Static Structure Factor，简称SSF），离子-离子动态结构因子(Ion-ion Dynamic Structure Factor，简称 DSF）以及均方差位移（Mean Square Displacement，简称MSD）流程。  \n上述性质的具体描述可以参考：Qianrui Liu et al 2020 J.Phys.：Condens",
+        "lexical_score": 0.819014
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.900067,
+      "anchor_score": 242.750089,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "USPEX 结合 ABACUS 进行结构预测时，提交 ABACUS 任务为什么要指定 OMP_NUM_THREADS？",
+    "ground_truth": "防止线程数过高导致内存不足，引发计算错误。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "cb9598085e1b105f6c4c62bd052eba3b",
+        "parent_id": "a155d3db733ad863c03d64d298f0d93e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".05, taskManager: TM}\n50\n51 #define TM\n52{\n53 type : QSUB,\n54 header:\"#PBS -S /bin/bash\n55 #PBS -N single\n56 #PBS -l nodes=1:ppn=16\n57 #PBS -j oe\n58 #PBS -V\"\n59}  \n注意：ABACUS在任务提交时，应注意指定OMP_NUM_THREADS，防止内存不足引起计算错误",
+        "lexical_score": 0.475097
+      },
+      {
+        "chunk_id": "e73ac3eee83325b42a956e3d5977aa40",
+        "parent_id": "f35655d80860cdb2a32f3a6a92930fc8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1\n39 dos_sigma 4\n40 dos_nche 240\n41 npart_sto 2\n以上参数在ABACUS 的线上文档中均有说明，这里再进行简单概述：  \n。 out_dos:需要设置为1，才能输出能态密度。  \ndos_emin_ev:能态密度的能量最小范围，单位eV。  \ndos_emax_ev:能态密度的能量最大范围，单位eV。  \ndos_edelta_ev:控制输出DOS 时的能量间隔，单位eV。  \ndos_sigma:能态密度的高斯展宽的因子，单位eV。  \ndos_nche:计算能态密度时切比雪夫展开阶数，默认为100。  \n·npart_sto:当使用 method_sto=2 运行例如 DOS 的 SDFT 后处理时，将控制使用内存大小为正常的1/npart_sto，防止内存不够导致无法计算，默认为1",
+        "lexical_score": 0.23672
+      },
+      {
+        "chunk_id": "0655ca5b63400fb606da678d3d191909",
+        "parent_id": "730f47d0e169736709f1f3f2eeba8ab7",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。这个例子在4进程下启动 MPI进行并行计算，一般推荐总核数(=线程数×进程数)取2的n次方或者n倍。一个较为粗糙、但基本不会造成计算资源浪费的选取n值原则是：体系有多少个原子，不要用超过这个原子个数太多的总核数进行并行计算。例如，体系如果有16个原子，不要用远大于16的总核数进行计算，一般取16的总核数或者更少就够了，具体需要测试。  \n1 mpirun -n 4 abacus  \n计算完成后，建议用脚本提取ecut数值下OUT",
+        "lexical_score": 0.179384
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.724999,
+      "anchor_score": 123.896387,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 为 Hefei-NAMD 提供输入的 MD 计算中，需要开启哪两个参数输出必要物理量？",
+    "ground_truth": "需要将 out_wfc_lcao 和 out_mat_hs 都设置为 1，输出每一步的哈密顿量矩阵、交叠矩阵和波函数数据。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "d07a4ac5fcca6ddbd9b550afd1a3f9e2",
+        "parent_id": "e35b4ba17f9947c25c1352ca1cc5ad27",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 用ABACUS 进行分子动力学(MD)计算  \n输入文件 INPUT  \n大部分参数为做分子动力学计算所需要参数，具体含义可以参考ABACUS的分子动力学教程。为了后续用Hefei NAMD 进行非绝热分子动力学计算，ABACUS 会输出每一步分子动力学模拟的哈密顿量矩阵H、交叠矩阵S、波函数文件。因此需将相关的ABACUS 的INPUT文件中的输入参数out_wfc_lcao 和out_mat_hs都设置为1，表示输出这些物理量。计算完成后，在OUT.\\*\\*文件夹中，每一个分子步都对应一个文件夹MD_n，在每个文件夹中会有 data-0-H、data-0-S、LOWF_GAMMA_S1.dat 三个文件储存我们需要输出的物理量。  \n1 INPUT_PARAMETERS\n2 #Parameters (General)\n3 suffix autotest\n4 pseudo_dir",
+        "lexical_score": 0.690716
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.803511,
+      "anchor_score": 188.947057,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "pyabacus 目前提供了哪五个核心模块？",
+    "ground_truth": "分别是 io（输入输出模块）、Cell（单元结构模块）、ModuleBase（基础数学函数模块）、ModuleNAO（数值原子轨道模块）、hsolver（哈密顿求解模块）。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "728bb92b4856db658bbbebcfed481daf",
+        "parent_id": "2b833c572228c453ff0bc9b221e1122c",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 6.13.2 模块  \npyabacus 当前提供以下模块：  \nio:pyabacus 中的输入/输出模块。  \n·Cell:用于单元结构的模块，将Python中的ModuleNAO与用户输入连接。  \n。 ModuleBase:基本数学函数模块。  \n。 ModuleNAO:数值原子轨道(NAO)模块。  \n。 hsoiver:用于求解哈密顿量的模块。",
+        "lexical_score": 0.584307
+      },
+      {
+        "chunk_id": "fd5cbf3d1b037cc4bcd4b1b3d75ee149",
+        "parent_id": "ea59034d10493fed82bee8d44f52805a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "module_hsolver # 对角化求解矩阵特征值/特征向量等哈密顿求解器模块\n12 module_io # 输入输出模块\n13 module_md # 分子动力学模块\n14 module_psi # 波函数模块\n15 module_relax # 结构优化模块\n16 module_ri #Resolution of identity 相关的 Beyond DFT 的模块  \n其中，14个主模块的核心功能如上面注释所言，代码存放建议按照模块化管理，相关功能的代码存放到对  \n应的模块当中",
+        "lexical_score": 0.369063
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.773071,
+      "anchor_score": 294.497093,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "pyabacus 的 hsolver 模块中实现了哪三种对角化算法？",
+    "ground_truth": "实现了 dav_subspace、davidson、cg 三种对角化算法。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "b298b4317ed1eab453d99eea56e46625",
+        "parent_id": "1b86d68cbc3d7c1268dac3621ce712bd",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "14 Pyabacus 文档二：HSolver 模块## 6.14.1 简介  \n目前，pyabacus.hsolver 内实现了三种对角化算法的 python 化，分别是 hsolver.dav_subspace、hsolver.davidson与 hsolver.cg，其签名分别如下：  \n```python\ndef dav_subspace(\n2 # 矩阵-向量组乘法函数，接收一个 numpy 数组，返回一个 numpy 数组\n3 mvv_op: Callable[[NDArray [np.complex128]]， NDArray[np.complex128]],\n4 # 对角化过程中的特征向量组初猜\n5 init_v: NDArray[np",
+        "lexical_score": 0.853539
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.881232,
+      "anchor_score": 95.353362,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 的 C++ 代码规范中，普通变量、私有类成员变量、全局变量分别遵循什么命名规则？",
+    "ground_truth": "普通变量采用小写下划线命名法；私有类成员变量命名规则同普通变量，但末尾加下划线；全局变量采用全大写命名。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "02c40cbe1f1de9fd7bf403ff3ecab256",
+        "parent_id": "f039edce9b25fc266667ed5e3547c4a9",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "1 class TableInfo\n2{\n3 ：\n4 4 private:\n5 string table_name_； // 好- 后加下划线\n6 string tablename_； // 好\n7 static Pool<TableInfo>\\* pool_； // 好\n8 }；## 只有全局变量用全大写命名  \n在 ABACUS 中，例如NBANDS（能带数)，NLOCAL（局域轨道数目）这种全大写的变量名是全局变量，其它的不建议用大写字母给变量命名。另外，ABACUS 将通过重构或者删除的方式逐步淘汰全局变量，因此不建议增加新的全局变量。",
+        "lexical_score": 0.399184
+      },
+      {
+        "chunk_id": "a742dace3fd9e966da23c2cc24b9b4c3",
+        "parent_id": "6165e04bd69e974f670075189c19c7a8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "2命名约定## 普通变量的命名统一是小写，并使用下划线命名法  \n以下是四种命名方法：下划线命名法、匈牙利命名法、驼峰式命名法、帕斯卡命名法  \n1 <strong>string table_name；</strong>// 下划线命名法（推荐）-用下划线区分单词（推荐使用）\n2 string sTableName；// 匈牙利命名法－前缀字母用变量类型缩写，单词首字母大写\n3 string tableName；// 驼峰命名法 - 混合大小写 (不推荐使用）\n4 string TableName；// 帕斯卡命名法 － 每个单词首字母大写 (不推荐使用)  \n下划线命名法：推荐使用  \n匈牙利命名法：目前ABACUS中有些变量（例如指针)，首字母为数据类型（指针为p)，可以考虑用这种方式命名，但不推荐用大写字母  \n驼峰命名法/帕斯卡命名法：目前ABACUS",
+        "lexical_score": 0.309099
+      },
+      {
+        "chunk_id": "9959198e70a143e028b6a9dfa5868a70",
+        "parent_id": "b5a932991db6b00b36c78074236b2ca2",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "ABACUS 文件夹中 INPUT## 痛点:  \n每加一个参数，对于ABACUS 主代码需“翻山越岭”地添加代码，不易管理  \ninput.cpp 的变量和GlobalV 的变量大部分重复，没有必要，且容易误解  \n大量的if分支改进思路：  \n将相同的参数代码集中起来  \ninput类只实现读的功能，不存储参数，参数由另一个类存储  \nGlobalV  \n其实代码有全局变量不可怕，可怕的是全局变量会在运行中改变，而部分GlobalV就是这样，因此需要限制他人在初始化参数之后改变的行为。  \n目前很多也使用了public 的类静态成员变量，这其实和全局变量是一样的。\n## 重构设计",
+        "lexical_score": 0.227366
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.702228,
+      "anchor_score": 327.896083,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Doxygen 可以识别哪三种格式的 C++ 注释？",
+    "ground_truth": "Javadoc-style（/** ... */）、Qt-style（/*! ... */）、Extended C++ style（/// 或 //!）。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "be8e07681441fc2410653bdfcf74ef41",
+        "parent_id": "54158a6d69ca7a74fcf611b0d027e285",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 基本格式  \n在c++中Doxygen 会识别以下三种注释格式：\nJavadoc-style  \n```css\n1 /** 1\n2 * This is a Javadoc-style comment\n3 */\n```  \nQt-style  \n```javascript\n1 /*!\n2 2* This is a Qt-style comment\n3 */\n```  \nExtended c++ style  \n1 /// This is the so-called extended c++-style comment\n2 //! This also works",
+        "lexical_score": 0.866632
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 1.0,
+      "anchor_score": 35.347646,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS v3.7.0 之后，新增输入参数的存储方式发生了什么核心变化？",
+    "ground_truth": "参数统一存储在 Parameter 类中，通过 PARAM.inp 进行只读访问，不再使用旧的 GlobalV 全局变量方案。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "83c694de4198b06aed852c7638f905ae",
+        "parent_id": "94f70561cfc8efec52b15b63dbd19740",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".5ABACUS 代码存放规范 324\n7.5.1背景 324\n7.5.2代码目录． 324\n7.5.3总结 327\n7.6如何在 ABACUS 中新增一个输人参数（截至 v3.5.3） 327\n7.6.1在 input 类中申明和定义. 327\n7.6.2将 input 成员转换为全局变量 329\n7.6.3添加文档．. 330\n7.7如何在 ABACUS 中新增一个输入参数（v3.7.0后） 330\n7.7.1开发者须知 330\n7.7.2设计文档参考 334\n7.8如何在 ABACUS 中进行异构计算 338\n7.8.1前言 338\n7.8.2 管理设备类型 338\n7.8.3数据内存管理（旧) 339\n7.8.4 数据内存管理(新) 345\n7.8.5执行数学计算 346\n7.9ABACUS formatter-2.0 版本使用说明书 347\n7.9.1前言 ，： 347\n7.9",
+        "lexical_score": 0.300892
+      },
+      {
+        "chunk_id": "9959198e70a143e028b6a9dfa5868a70",
+        "parent_id": "b5a932991db6b00b36c78074236b2ca2",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "ABACUS 文件夹中 INPUT## 痛点:  \n每加一个参数，对于ABACUS 主代码需“翻山越岭”地添加代码，不易管理  \ninput.cpp 的变量和GlobalV 的变量大部分重复，没有必要，且容易误解  \n大量的if分支改进思路：  \n将相同的参数代码集中起来  \ninput类只实现读的功能，不存储参数，参数由另一个类存储  \nGlobalV  \n其实代码有全局变量不可怕，可怕的是全局变量会在运行中改变，而部分GlobalV就是这样，因此需要限制他人在初始化参数之后改变的行为。  \n目前很多也使用了public 的类静态成员变量，这其实和全局变量是一样的。\n## 重构设计",
+        "lexical_score": 0.267786
+      },
+      {
+        "chunk_id": "903f584feff78a0bc5b0f609b245350a",
+        "parent_id": "10c97089a9b642c499f6555c01cf6e3a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 7.6.2将input成员转换为全局变量  \n参数参与计算一般会先转换为全局变量GlobalV，再通过传参赋值给负责计算的类（但是注意将来我们会逐步弃用GlobalV，所以这部分将来可能会变化）。  \n声明  \n路径：source/module_base/global_variable.",
+        "lexical_score": 0.241026
+      }
+    ],
+    "gold_status": "needs_review",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.349,
+      "anchor_score": 117.802172,
+      "strict_metric_eligible": false,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 的模块代码中，异构计算相关的代码应当存放在什么子目录下？",
+    "ground_truth": "存放在对应模块下的 kernels 目录中。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "4204354b538d5a0c45c105cc26e34305",
+        "parent_id": "679a0546ee71621766daa7ad3ab63bcb",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 异构计算代码存放规范  \n当前 ABACUS 中PW部分代码已经实现了初步的GPU化，Source 目录中包含GPU的module 如下，相应文件夹功能如注释所言：  \nmodule_base # 基础模块\nkernels #module_base 模块下的异构计算代码\n3 cuda #module_base/kernels 中函数的 CUDA 实现\n4 rocm #module_base/kernels 中函数的 ROCm/DCU 实现\n5 test #module_base/kernels 中函数的单元测试\n6 libm # 子模块 libm\ntest #libm 的单元测试\n8 module_container # 子模块，负责实现 ABACUS 中的底层 Tensor 容器\n9 ATen # 定义了 Tensor 容器的基本实现\n10 base # 定义了一些 Tensor",
+        "lexical_score": 0.472977
+      },
+      {
+        "chunk_id": "90b56d4da6cf0159cf4941e1b941938d",
+        "parent_id": "995100c29560d5651cbb63c127a3f53c",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "./pyabacus/hsolver内的两个py文件将类的细节隐藏，用函数在外层抽象，将三个算法以函数的形式暴露给 python  \n了解了上面几点，你大概就了解了如何 Python化ABACUS 的一个模块，剩下需要搞懂的是  \n·你要 Python化的模块，按照面向对象的思想，你可以只搞懂对应模块的头文件中暴露出来的 public方法的接□  \n但是，如果想要优化/防止python 化过度影响效率，最好要搞懂其原理作为高性能计算软件，我们时常与裸指针/底层数据打交道，但是我们处理的数据通常是矩阵or张量，所以一定要从源码中弄清楚数据的存储方式：行优先/列优先  \n不要想当然，作为有着”历史积累”的软件，不同模块可能使用不用方式存储  \n·例如：davidson 算法与dav_subspace 中的裸指针采用列优先方式，与 fortran一致，while CG算法中的",
+        "lexical_score": 0.271605
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.755918,
+      "anchor_score": 94.542714,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS formatter-2.0 工具库包含哪三部分核心功能？",
+    "ground_truth": "字符串格式化功能、自动制表功能、Python 风格的字符串处理函数。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "10845056c8b02673e75779ff7877c38f",
+        "parent_id": "4a8daaaaa28a2ee5ff13e5a8ecc35044",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "0 版本使用说明书## 7.9.1 前言  \n为系统解决 ABACUS 对输出可读内容到屏幕和文件中的需求，2023第三季度 ABACUS开发团队进行了ABACUS formatterlibrary1.0版本的开发。随着后期 ABACUS 各功能的输出需求对 formatter library 的功能要求越来越多样化,我们对 formatterlibrary代码进行了全面重构,推出了formater-2.0版本。相较于1.0版本（ABACUSformatter 库使用说明书)，重构进行了大量冗余代码删减，如今已经轻量化成为只具有头文件、有明显“即插即用”性质的工具库。该工具库功能包括简单的字符串格式化、制表和部分Python字符串处理函数实现三部分。",
+        "lexical_score": 0.599055
+      },
+      {
+        "chunk_id": "ccbf778116e60f90fe1a7b9c770dafaf",
+        "parent_id": "94f70561cfc8efec52b15b63dbd19740",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".8.5执行数学计算 346\n7.9ABACUS formatter-2.0 版本使用说明书 347\n7.9.1前言 ，： 347\n7.9.2字符串格式化 347\n7.9.3制表功能． 350\n7.9.4static Python-style 字符串函数 351\n7.9.5Find a bug? Submitissue! 352\n7.10 ABACUS 中使用格式化工具 clang-format 352\n7.10.1 引言 352\n7.10.2 在 ABACUS 中使用 clang-format 352\n7.10.3格式化时的注意事项: 353\n7.10.\n4 参考文献： 354## 第1章 基本介绍",
+        "lexical_score": 0.383179
+      },
+      {
+        "chunk_id": "c37236d0546e3404450cf9f54742735b",
+        "parent_id": "45e972999ea706b7012ccc7dfec23d2f",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "\");\n28}\n```## 7.9.3制表功能  \nformatter-1.0的另一项亮眼功能为自动制表，在 formatter-2.0版本中这一feature 得以保留，并由1.0版本的Table类重构成为更加轻量级的FmtTable类，用于提供想要制作排列整齐的数据表，又不太清楚表格的列宽的场景。  \n由于FmtTable 类的设计初衷为”每一个FmtTable instance“代表了一个Table，因此在 Table 中设计需要用户提供如下信息：  \n每列标题，组织成 std:vectorstd:string  \n每列 format string，组织成 std::vectorstd:string  \n每列数据  \n（可选）表中数据与表标题的左右对称  \n（可选）表格的各个边框  \n（可选）表格中每列的分隔符",
+        "lexical_score": 0.288979
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.860492,
+      "anchor_score": 300.011528,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 项目根目录的.clang-format 文件依赖哪个版本的 clang-format 工具？",
+    "ground_truth": "依赖 clang-format-14 版本。",
+    "question_type": "factual",
+    "source_hint": "继承自 ragas_eval_dataset_filled.json（基于 datas/abacus.md）",
+    "gold_evidence": [
+      {
+        "chunk_id": "f2d089eee1df6962f048195cbc9790fe",
+        "parent_id": "b29c48e52a7e6b4c7cbbd5eb56d1284e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".com/deepmodeling/abacus-develop/blob/develop/.clang-format)  \n注意事项：ABACUS 开源项目中的.clang-format 是依赖于clang-format-14 标准的，因此请确保你的 clang-format不低于14版本。",
+        "lexical_score": 0.790397
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 1.0,
+      "anchor_score": 11.507548,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 中的 SDFT 是什么方法？它主要用于模拟什么样的体系？",
+    "ground_truth": "SDFT 即随机波函数密度泛函理论（Stochastic Density Functional Theory），ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质。SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。",
+    "question_type": "terminology",
+    "source_hint": "5.1.1介绍：『本教程旨在介绍 ABACUS 中随机波函数密度泛函理论（Stochastic Density Functional Theory,以下简称 SDFT）计算功能』",
+    "gold_evidence": [
+      {
+        "chunk_id": "b17e087703862d2c18eaba11628292b5",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".5K)，传统的Kohn-Sham密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难，而 SDFT使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。关于ABACUS 中实现 SDFT算法的细节可以参考QianruiLiuand Mohan Chen\\*,\"Plane-wave-based stochastic-deterministic density functional theory for extended systems,\" Phys.Rev",
+        "lexical_score": 0.528715
+      },
+      {
+        "chunk_id": "7eb40b67af449eb523808588336013bd",
+        "parent_id": "0bbb26f6cd97f9b05ce34002fe93e84b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "4ABACUS无轨道密度泛函理论方法使用教程## 5.4.1无轨道密度泛函理论背景知识  \n无轨道密度泛函理论(Orbital free density functional theory,OFDFT)是一种第一性原理模拟方法,相比于 KohnSham DFT(KSDFT)，它的优势之一在于O(NInN)的算法复杂度，这使得 OFDFT可以用于上万原子甚至更大体系的电子基态计算，或者大体系、长时间的第一性原理分子动力学等。  \n目前，OFDFT已被应用于简单金属、合金、半导体、小分子、温稠密物质等体系。",
+        "lexical_score": 0.222683
+      },
+      {
+        "chunk_id": "0bd4cbf27d6b46d56f35884065eb05fc",
+        "parent_id": "7efb0f85484a4b64c88db1e6d47b518e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 5.1.6结尾  \n总体来讲，随机波函数密度泛函理论方法（SDFT或者MDFT）的使用与KSDFT并无太大的区别，直接运行ABACUS程序即可,但是对一些关键参数的选取会影响精度和效率(例如 nbands,nbands_sto,nche_sto,method_sto,kpar, bnd_par）。对于极端高温计算（>10eV），使用 SDFT可以大大提高计算速度，是比普通的 KSDFT 更好的选择。如果大家使用有问题，欢迎写信联系（见上)。\n## 5.",
+        "lexical_score": 0.214088
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.71134,
+      "anchor_score": 698.844539,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "温稠密物质（WDM）指的是什么？其温度量级大约是多少？",
+    "ground_truth": "WDM 即温稠密物质（Warm Dense Matter），ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质。在进行温稠密物质计算时，温度高达数十到上千 eV。",
+    "question_type": "terminology",
+    "source_hint": "5.1.1介绍：『特别是温稠密物质（Warm Dense Matter,简称WDM)。在进行温稠密物质计算时(温度高达数十到上千eV』",
+    "gold_evidence": [
+      {
+        "chunk_id": "3a5de8250d03b8c8d62f749039cf56ae",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "1ABACUS随机波函数DFT方法使用教程## 5.1.1介绍  \n本教程旨在介绍 ABACUS 中随机波函数密度泛函理论（Stochastic Density Functional Theory,以下简称 SDFT）计算功能。目前 ABACUS 使用 SDFT主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter,简称WDM)。在进行温稠密物质计算时(温度高达数十到上千eV,1eV=11604",
+        "lexical_score": 0.861157
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.996029,
+      "anchor_score": 493.294455,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "MDFT 是什么方法？它和 SDFT 的关系是什么？",
+    "ground_truth": "MDFT 即混合随机波函数密度泛函理论方法（mixed stochastic-deterministic DFT），即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛。",
+    "question_type": "terminology",
+    "source_hint": "5.1.1介绍：『混合随机波函数密度泛函理论方法使用（mixed stochastic-deterministic DFT，简称 MDFT)，即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛』",
+    "gold_evidence": [
+      {
+        "chunk_id": "49a5a91c90828f0d0eaced8e713c3c60",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".Rev.B,106,125132(2022)。本教程中将会展示如何在ABACUS 计算中使用 SDFT功能，此外还会介绍混合随机波函数密度泛函理论方法使用（mixed stochastic-deterministic DFT，简称 MDFT)，即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛。",
+        "lexical_score": 0.820244
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.994891,
+      "anchor_score": 372.801235,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "赝势文件名如 Al_ONCV_PBE-1.0.upf 中的 ONCV 代表什么含义？",
+    "ground_truth": "ONCV 来自 ONCVPSP（Optimized Norm-Conserving Vanderbilt PSeudoPotential），是由 D.R.Hamann 等人提出的优化版模守恒赝势，其有更高的精度与效率，ONCVPSP 依赖 Libxc，支持多种交换关联泛函。",
+    "question_type": "terminology",
+    "source_hint": "3.5.3赝势的生成：『ONCVPSP（Optimized Norm-Conserving Vanderbilt PSeudoPotential）是由 D.R.Hamann 等人提出的优化版模守恒赝势，其有更高的精度与效率』",
+    "gold_evidence": [
+      {
+        "chunk_id": "80fd6bf3874d7f7567c6c685a21df596",
+        "parent_id": "bedd91abffef691f1c0272048d334195",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "ONCVPSP## 介绍  \nONCVPSP（Optimized Norm-Conserving Vanderbilt PSeudoPotential）是由 D.R.Hamann 等人提出的优化版模守恒赝势，其有更高的精度与效率。ONCVPSP依赖Libxc，支持多种交换关联泛函。  \n参考文献： Optimized norm-conserving Vanderbilt pseudopotentials 。",
+        "lexical_score": 0.762148
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.971423,
+      "anchor_score": 433.954504,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "数值原子轨道基组命名中的 DZP 和 TZDP 分别代表什么？",
+    "ground_truth": "数值原子轨道中，对每个被电子占据的角量子数采用 2 条径向轨道称为 DZ 基组；在 DZ 轨道基础上引入 1 条角量子数更高的极化（polar）径向轨道，组成 DZP（Double valence orbitals plus SZ polarization）轨道基组；此外还有基组数量更大的 TZDP（Triple valence orbitals plus DZ polarization）轨道。",
+    "question_type": "terminology",
+    "source_hint": "3.6节：『在DZ轨道的基础上引人1条极化（polar）的径向轨道，即角量子数更高的轨道，来组成 DZP…此外，还有基组数量更大的 TZDP』",
+    "gold_evidence": [
+      {
+        "chunk_id": "b4d547ea7cc48cc2b1b3423b61d5922e",
+        "parent_id": "dc413e5c1371eda956ffa2182a0ed88d",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 数值原子轨道的命名方法  \n数值原子轨道有一套常用的命名方案用来表示选取的基组大小，早期该命名方案在 SIESTA软件中被采用[7][8][9][10]，后来在OpenMX、FHI-aims 和ABACUS 中也采取这套命名方案。具体来说是，对于每个被电子占据的角量子数1，若采用1条径向轨道，则称该基组为 Single-(轨道，简称 SZ轨道基组。若采用2条径向轨道，则称该基组为Double-( 轨道，简称DZ轨道基组。  \n目前，在许多赝势结合数值原子轨道的程序里，通常会在DZ轨道的基础上引人1条极化（polar）的径向轨道，即角量子数更高的轨道，来组成 DZP（Double-[ valence orbitals plus SZ polarization）轨道基组",
+        "lexical_score": 0.623559
+      },
+      {
+        "chunk_id": "36eb8717d82fae5bd2a6ea8bfe6b76ca",
+        "parent_id": "82e8301b0193fe8ac717034d39f8dcfa",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ". ,\n$$  \n这个公式里，左边的波函数经过正交已经包含原子轨道的成分，这样可以再次作为新的参考体系波函数生成新的数值原子轨道，以上算法已经被实现在SIAB这个程序里。  \n最小化溢出函数：优化原子轨道时，最终溢出函数值定义为选定的几个二聚体的平均溢出函数值。溢出函数可以用来评估获得的原子轨道基组的质量，溢出函数越小，则原子轨道所张成的空间越接近于参考态波函数。  \n在 ABACUS中，通过最小化溢出函数的方式来优化 $c _ { \\mu q }$ ，该系数决定了原子轨道的径向函数的形状。这种方法的好处在于  \n·轨道形状可调：可以由球贝塞尔函数基组的线性组合自动生成，而不需要任何先决条件，因此原则上可获得完全优化的原子轨道。  \n·基组数量可调：可以用统一的方式系统的增加轨道数量，包括增加径向轨道的数量（multi-C）和增加更高角动量的轨道（极化轨道）两种方式",
+        "lexical_score": 0.287941
+      },
+      {
+        "chunk_id": "8403cc8f047b9009028059929fad59d8",
+        "parent_id": "05d1aa181addc13a4d252bb2026b2f23",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 数值原子轨道基组的个数  \n数值原子轨道基组的具体个数除了取决于轨道类别（比如 SZ、DZP、TZDP）外，也取决于元素种类、所选取的赝势。  \n轨道类别：比如对于O元素的赝势而言，一般将两个1s 电子作为核内电子，在构造赝势的时候只考虑它的外层6个价电子部分2s、2p轨道，则该O赝势下的电子的极化轨道为d轨道。故它的SZ（Single-c）轨道包含1组s轨道、1组p轨道，共 $1 ^ { * } 1 + 1 ^ { * } 3 = 4$ 个轨道；DZP轨道包含2组s轨道、2组p轨道、1组d轨道，共包含$2 ^ { * } 1 + 2 ^ { * } 3 + 1 ^ { * } 5 = 1 3$ 个轨道；TZDP轨道包含3组s轨道、3组p轨道、2组d轨道，共包含 $3 ^ { * } 1 + 3 ^ { * } 3 + 2 ^ { * } 5 = 2 2$ 个轨道",
+        "lexical_score": 0.282507
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.72395,
+      "anchor_score": 517.799284,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "什么是 UPF 格式？截至 v3.2.3，ABACUS 的 Kohn-Sham 密度泛函理论计算主要支持什么格式、什么类型的赝势？",
+    "ground_truth": "UPF（unified PP format）是一种类似 XML 格式的文件格式，用于存储赝势及其相关参数，由 Quantum ESPRESSO（QE）团队开发，已成为许多量子计算软件包的标准格式之一。截至 v3.2.3，ABACUS 的 Kohn-Sham 密度泛函理论计算主要支持 UPF 格式的模守恒赝势。",
+    "question_type": "terminology",
+    "source_hint": "3.5.1介绍：『UPF（unified PPformat）是一种类似XML格式的文件格式，用于存储赝势及其相关参数……ABACUS（截至v3.2.3）的Kohn-Sham密度泛函理论计算主要支持UPF格式的模守恒赝势』",
+    "gold_evidence": [
+      {
+        "chunk_id": "2882071c7d9ae349f155d9ef6cfb61db",
+        "parent_id": "359e6d17cf30dcf0a84b1eb96ea33c2d",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "5模守恒赝势生成方法简介## 3.5.1介绍  \nUPF（unified PPformat）是一种类似XML格式的文件格式，用于存储赝势及其相关参数。该格式由QuantumESPRESSO（QE）团队开发，并已成为许多量子计算软件包的标准格式之一。  \nABACUS（截至v3.2",
+        "lexical_score": 0.635675
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.772333,
+      "anchor_score": 556.213636,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Bader charge（Bader 电荷）是如何定义和计算的？",
+    "ground_truth": "Bader charge 是将电子密度进行类似于 Voronoi 剖分，在原子间以电荷密度的梯度为 0 处创建截面，然后将原子周围所有截面包络出的 cell 进行实空间积分，即为 Bader charge。",
+    "question_type": "terminology",
+    "source_hint": "6.5.1前言：『Bader charge 是将电子密度进行类似于 Voronoi tesellation的剖分，在原子间以电荷密度的梯度为0处创建截面，然后将原子周围所有截面包络出的cell进行实空间积分，即为Bader charge』",
+    "gold_evidence": [
+      {
+        "chunk_id": "dcd8b797f813e71387ecf09e72a393e4",
+        "parent_id": "35104e8d45f36e938a7a2e5b440bd292",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \nBader charge 是将电子密度进行类似于 Voronoi tesellation的剖分，在原子间以电荷密度的梯度为0处创建截面，然后将原子周围所有截面包络出的cell进行实空间积分，即为Bader charge。考虑实际计算，我们总能对价电子的密度进行切分，但对近核电子的处理则有所差别：CP2K支持构造出核电荷分布，VASP支持从PAW势中重建核电荷分布，而QE和ABACUS 则不支持以上处理方式。",
+        "lexical_score": 0.819991
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 1.0,
+      "anchor_score": 592.045503,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "编译 ABACUS 时 ELPA 库是什么作用？如果 ELPA 难以安装应如何处理？",
+    "ground_truth": "ELPA（Eigenvalue SoLvers for Petaflop-Applications）是一个用于高性能计算的开源库，旨在解决大规模高性能计算中的特征值问题，特别是密集矩阵的特征值问题；ELPA 仅用于 LCAO 基组求解特征值与特征矩阵的过程。如果 ELPA 难以安装，可以在编译 abacus 的时候添加 -DUSE_ELPA=0 绕过，并配置 ks_solver 为 scalapack_gvx，调用 ScaLAPACK 进行求解。",
+    "question_type": "terminology",
+    "source_hint": "2.1.1介绍：『ELPA：ELPA（Eigenvalue SoLvers for Petaflop-Applications）是一个用于高性能计算的开源库』；『可以暂不安装ELPA，在编译abacus 的时候添加-DUSE_ELPA=O 即可绕过』",
+    "gold_evidence": [
+      {
+        "chunk_id": "73f4473369888ac013861b529bcbec64",
+        "parent_id": "2465ad6d9d8ebec264b878eeac158a06",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \n·LAPACK：LAPACK（Linear Algebra Package）是一个开源的数值线性代数库，用于解决线性代数问题，包括矩阵分解、方程组求解和特征值计算等。  \n·FFTW3:FFTW3（Fastest Fourier Transform in the West3）是一个高性能、开源的快速傅里叶变换（FFT）库，用于高效计算各种傅里叶变换和逆变换。  \n·ScaLAPACK：ScaLAPACK（Scalable LAPACK）是一种并行计算库，构建在LAPACK之上，用于解决大规模线性代数问题，特别适用于分布式和并行计算环境。  \n·ELPA：ELPA（Eigenvalue SoLvers for Petaflop-Applications）是一个用于高性能计算的开源库，旨在解决大规模高性能计算中的特征值问题，特别是密集矩阵的特征值问题",
+        "lexical_score": 0.489495
+      },
+      {
+        "chunk_id": "af61a72263cfae096f55eec0142bbe21",
+        "parent_id": "fa7b43834bd9790d10ee11f684e43a30",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "（用户编译安装abacus 的时候大多在这里出现问题)  \nELPA 仅用于LCAO 基组求解特征值与特征矩阵的过程，如果由于机器等原因导致ELPA难以安装，可以暂不安装ELPA，在编译abacus 的时候添加-DUSE_ELPA=O 即可绕过ELPA安装困难的问题。  \n在 ABACUS 中，LCAO基组求解特征值与特征矩阵提供了两种方法，一种是调用ELPA 进行求解（默认选项），一种是调用 ScaLAPACK进行求解。  \n如果使用-DUSE_ELPA=0编译选项，请参考使用文档配置ks_solver为 scalapack_gvx，调用 ScaLAPACK 进行求解。\n## 2.1.",
+        "lexical_score": 0.487467
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.96695,
+      "anchor_score": 823.622679,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "文档中给出的 eV 与开尔文（K）之间的换算关系是什么？",
+    "ground_truth": "文档中给出的换算关系为 1eV=11604.5K，温稠密物质计算时温度高达数十到上千 eV。",
+    "question_type": "formula_table",
+    "source_hint": "5.1.1介绍：『温度高达数十到上千eV,1eV=11604.5K』",
+    "gold_evidence": [
+      {
+        "chunk_id": "3a5de8250d03b8c8d62f749039cf56ae",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "1ABACUS随机波函数DFT方法使用教程## 5.1.1介绍  \n本教程旨在介绍 ABACUS 中随机波函数密度泛函理论（Stochastic Density Functional Theory,以下简称 SDFT）计算功能。目前 ABACUS 使用 SDFT主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter,简称WDM)。在进行温稠密物质计算时(温度高达数十到上千eV,1eV=11604",
+        "lexical_score": 0.540834
+      },
+      {
+        "chunk_id": "340e8e3c7c26b77a68e2f2e94c5a7259",
+        "parent_id": "2e74a543267942b4bde47b62cbf3b542",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。本文档中给出了该部分的中文翻译，可对照查看。",
+        "lexical_score": 0.220637
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.81146,
+      "anchor_score": 238.585571,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "SDFT 计算中 nche_sto 参数是什么含义？推荐的取值判据是什么？",
+    "ground_truth": "nche_sto 是将电子体系的哈密顿量进行切比雪夫展开的阶数，这个数取得越大则切比雪夫展开阶数越多，计算精度越高但效率会降低，阶数与温度大致成反比、与 ecut 成正比。推荐的 nche_sto 大小是使得输出文件 running_scf.log 中的 ChebyshevPrecision 小于 1e-8。",
+    "question_type": "formula_table",
+    "source_hint": "5.1.3节：『nche_sto 是将电子体系的哈密顿量进行切比雪夫展开的阶数…推荐使用的nche_sto的大小是使得输出文件 running_scf.log中的ChebyshevPrecision 小于 1e-8』",
+    "gold_evidence": [
+      {
+        "chunk_id": "b470167a0cb0563972cd80a8744472ff",
+        "parent_id": "3b20e4eba0b1a5b36b4e83299aa944c9",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".2.2版本以后）。  \n·nche_sto 是将电子体系的哈密顿量进行切比雪夫展开的阶数，这个数取得越大则用到的切比雪夫展开阶数越多，相应的计算精度也会越高但效率会降低。",
+        "lexical_score": 0.558485
+      },
+      {
+        "chunk_id": "46096773d84bbc134be26821d36c6a9d",
+        "parent_id": "1397f5cccd0c41c5062272721d01d510",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "大致关系为与温度成反比，温度越高，阶数可以取得越小；ecut（正比关系）越大，阶数越大；推荐使用的nche_sto的大小是使得输出文件 running_scf",
+        "lexical_score": 0.286785
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.91049,
+      "anchor_score": 750.823357,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用 ABACUS+pymatgen 计算金刚石弹性常数时，输出的体弹性模量、剪切模量、杨氏模量和泊松比分别是多少？单位是什么？",
+    "ground_truth": "金刚石弹性常数计算结果（单位 GPa）为：体弹性模量 Bulk Modulus BV = 419.37 GPa、剪切模量 Shear Modulus GV = 521.42 GPa、杨氏模量 Youngs Modulus EV = 1105.91 GPa、泊松比 Poission Ratio uV = 0.06；精度更高的计算结果存储在 elastic.json 内。",
+    "question_type": "formula_table",
+    "source_hint": "6.6.3金刚石的弹性常数计算：『Bulk  Modulus BV = 419.37 GPa / Shear Modulus GV = 521.42 GPa / Youngs Modulus EV = 1105.91 GPa / Poission Ratio uV = 0.06』",
+    "gold_evidence": [
+      {
+        "chunk_id": "f5fef8daa15c7e634b50468e77aaea4f",
+        "parent_id": "2451113933cd1253d31856350bd43ea4",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 计算弹性常数  \n回到例子根目录，执行如下命令：  \n1 python compute_dfm.py abacus  \n屏幕输出如下:  \n---  \n```python\n8 # Bulk  Modulus BV = 419.37 GPa\n9 # Shear Modulus GV = 521.42 GPa\n10 # Youngs Modulus EV = 1105.91 GPa\n11 # Poission Ratio uV = 0.06\n```  \n第2到7行即为计算的各种弹性常数（单位：GPa)，分别是体弹性模量（Bulk Modulus）、剪切模量（ShearModulus）、杨氏模量（Youngs Modulus）和泊松比（Poission Ratio）。精度更高的计算结果存储在 elastic",
+        "lexical_score": 0.837055
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.904315,
+      "anchor_score": 397.262501,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 隐式溶剂模型中 eb_k 参数的含义是什么？如何用 imp_sol 计算体系的溶剂化能？",
+    "ground_truth": "eb_k 是溶剂的相对介电常数，水为 80。体系溶剂化能的计算方法是：打开隐式溶剂模型（imp_sol=1）时体系总能量（结构优化之后）与真空情况（imp_sol=0）体系总能量（结构优化之后）之差；输出文件 running_scf.log 中 E_sol_el 表示静电作用引起的能量修正（一般为负值），E_sol_cav 表示空腔作用引起的能量修正（一般为正值）。",
+    "question_type": "formula_table",
+    "source_hint": "5.5.3输入参数：『eb_k：类型是Real，溶剂的相对介电常数，水为80』；5.5.4预期结果：『体系溶剂化能的计算：打开隐式溶剂模型(imp_sol=1)时体系总能量…与真空情况(imp_sol=0)体系总能量…之差』",
+    "gold_evidence": [
+      {
+        "chunk_id": "5f646ae4519cdc4d55d587f17e25cdac",
+        "parent_id": "0ccc3e6c69031a174721f1169017b01b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".ABACUS/running_scf.log中，E_sol_el和E_sol_cav分别表示静电作用和空腔作用引起的能量修正。如案例所示，E_sol_el代表溶质和溶剂分子之间的静电感应作用，贡献的能量修正一般为负值。E_sol_cav 代表溶质分子在溶剂中产生空腔所引起的能量修正，一般为正值。  \n体系溶剂化能的计算：打开隐式溶剂模型(imp_sol=1)时体系总能量(结构优化之后)与真空情况(imp_sol=0)体系总能量（结构优化之后）之差。  \n<!-- image -->  \n<table><tr><td>Energy</td><td>Rydberg</td><td>eV</td></tr><tr><td>E_KohnSham</td><td>-2.33128015246</td><td>-31",
+        "lexical_score": 0.686453
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.750455,
+      "anchor_score": 602.288584,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "STRU 文件中晶格常数（LATTICE_CONSTANT）的单位换算规则是什么？",
+    "ground_truth": "ABACUS 的默认长度单位为 Bohr，STRU 中的晶格常数将所有长度放大 1.889726 倍，即把长度单位 Bohr 转化为更为人熟知的埃（Angstrom）。",
+    "question_type": "formula_table",
+    "source_hint": "3.1节 STRU 文件讲解：『ABACUS 的默认长度单位为Bohr，这一晶格常数将所有长度放大1.889726倍，将长度单位Bohr转化为更为人熟知的埃（Angstrom）』",
+    "gold_evidence": [
+      {
+        "chunk_id": "bda4a795061b5431aa9a464c9324792d",
+        "parent_id": "1b086f223463887ac2e9dd08b6ff2fb5",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".0000000000\n14\n15 ATOMIC_POSITIONS\n16 Direct\n17\n18 Al\n19 0.0000000000\n201\n21 0.000000000 0.0000000000 0.000000000 1 1 1 mag 0.0\n```  \n可以看到一个基础的 STRU 文件包括如下内容  \n。 元素类别信息。包括元素符号，摩尔质量，赝势文件名称。  \n。 原子轨道文件名称。在使用原子轨道基组计算时使用。  \n·晶格常数单位。ABACUS 的默认长度单位为Bohr，这一晶格常数将所有长度放大1",
+        "lexical_score": 0.523614
+      },
+      {
+        "chunk_id": "2d2ec9d620d8adb5ae14952f02acff5c",
+        "parent_id": "f7399b7b3a584e6b87a22670c8d13508",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## STRU文件  \n一共有 1000 个C原子，STRU 文件较长所以不在此处展示，可以在 https://github.com/MCresearch/TEAS/blob/main/2022-PRB-CNT/1_DHU/0.01/STRU 中查看，结构如下图。  \n<!-- image -->  \n我们一起看看 STRU文件中的LATTICE_VECTORS，这是一个3×3矩阵，代表我们所计算体系在X，Y，Z三个方向上的晶格矢量大小，还要注意晶格矢量由LATTICE_CONSTANT（晶格常数）进行缩放，此处晶格常数为1Bohr。可以参考：htps://bacus.deepmodeling.com/en/latest/advanced/input_files/stru",
+        "lexical_score": 0.234091
+      },
+      {
+        "chunk_id": "78a1b2dcaf67ee9ff74a4c263714cbb7",
+        "parent_id": "2cf0945b7d75522cdfc746151429e43b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".将真空层旋转到X轴  \n<!-- image -->\n图3.将真空层旋转到Y轴  \n这些表面体系的LATTICE_VECTORS 是一个3×3矩阵，代表我们所计算体系在X,Y,Z三个方向上的晶格矢量a,b,c 大小，它们由LATTICE_CONSTANT（晶格常数）进行缩放，此处晶格常数为1.889726 Bohr,即1Angstrom。可以参考 htps:/abacus.deepmodeling.com/en/latest/advanced/input_files/stru.html#latice-vectors。它们的对比如下：  \n<!-- image -->  \n<table><tr><td>5</td><td>0.00000000000</td><td>0.",
+        "lexical_score": 0.214819
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.630789,
+      "anchor_score": 328.358596,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS+Phonopy 计算声子谱时，输出的 pho.dat 文件各列分别是什么数据？",
+    "ground_truth": "pho.dat 的第一列是声子谱图的横轴（K 点路径），其中高对称 K 点位置见 pho.dat 的第二行，第二列是图的纵轴（声子频率，单位 THz）。",
+    "question_type": "formula_table",
+    "source_hint": "6.7.3流程：『pho.dat的第一列就是上图的横轴（K点路径)，其中高对称K点位置见pho.dat的第二行，第二列就是上图的纵轴(声子频率，单位THz)』",
+    "gold_evidence": [
+      {
+        "chunk_id": "0b16a884229af7228a2a41963fda8f13",
+        "parent_id": "0338736efd15b7d961ebae8f791b2236",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".dat' using 1:(\\\\$2) w l lw 3  \nFCC Al的声子谱:  \n<!-- image -->  \n也可使用Origin 绘图，pho.dat的第一列就是上图的横轴（K点路径)，其中高对称K点位置见pho.dat的第二行，第二列就是上图的纵轴(声子频率，单位THz)。\n## 6.",
+        "lexical_score": 0.725998
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.887277,
+      "anchor_score": 307.91515,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "对比 ABACUS 和 VASP 做 SCF 计算时，能量截断值 Ecut 的单位有什么差异？",
+    "ground_truth": "ABACUS 的 Ecut 单位是 Ry，VASP 的单位是 eV，比较时需要注意换算；一般来讲 VASP 用 PAW 方法所需的 Ecut 比 ABACUS 的模守恒赝势要低。",
+    "question_type": "formula_table",
+    "source_hint": "第1章常见问题5(a)：『先检查Ecut是否一样（注意ABACS的单位是Ry，VASP是eV，要换算)，一般来讲VASP用 PAW方法所需的Ecut比ABACUS 的模守恒赝势要低』",
+    "gold_evidence": [
+      {
+        "chunk_id": "4229a5470fdd419591b0137a60266363",
+        "parent_id": "df8d89f1dfe36aa6bfad3c40b6cf8ac7",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## (a)．为什么ABACUS的SCF计算比VASP慢很多？  \n答：首先，先检查Ecut是否一样（注意ABACS的单位是Ry，VASP是eV，要换算)，一般来讲VASP用 PAW方法所需的Ecut比ABACUS 的模守恒赝势要低，目前来讲这部分参数VASP占优，你并不能降低 ABACUS的Ecut来和VASP的Ecut持平。第二，检查你所计算的元素的电子数，往往电子数不同，计算效率会有很大差别。例如Ga的模守恒赝势可能有13个电子，但VASP的Ga的 PAW 势可能只有3个电子，那么VASP的计算效率会快很多也是可以预期的。",
+        "lexical_score": 0.732679
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.837423,
+      "anchor_score": 211.499452,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请总结 ABACUS Toolchain 是什么，它支持哪些编译安装功能和愿景？",
+    "ground_truth": "ABACUS Toolchain 是一套内置于 ABACUS 仓库中的 bash 脚本集，能帮助用户在线或离线地编译安装 ABACUS 所需的软件依赖，自动处理各个依赖库的环境变量，并基于这些依赖库快速完成 ABACUS 源码编译过程。它支持 GCC Toolchain、Intel Toolchain 和 AMD Toolchain（细分为 GCC-AOCL 与 AOCC-AOCL），还支持编译 LibRI、DeePKS、DeePMD 等功能插件、离线安装和 GPU 支持。其愿景是方便用户高效地从源码编译最适合当前服务器环境的 ABACUS，并建立一套 ABACUS 源码编译的标准流程。",
+    "question_type": "summary",
+    "source_hint": "2.4.2什么是 ABACUS Toolchain：ABACUS Toolchain 是一套内置于 ABACUS 仓库中的 bash 脚本集",
+    "gold_evidence": [
+      {
+        "chunk_id": "4f8bf6d00e3671bf4de67c37a7991cb4",
+        "parent_id": "1dbdb392859d031e4731cde7b093e292",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".2什么是 ABACUS Toolchain  \nABACUS Toolchain 是一套内置于 ABACUS 仓库中的 bash 脚本集，它能帮助用户在线或离线地编译安装ABACUS 所需的软件依赖，自动处理各个依赖库的环境变量，并基于这些依赖库快速完成 ABACUS 源码编译过程。本教程基于 2025-02 版本的 ABACUS Toolchain 撰写，目前，ABACUS Toolchain 支持如下编译安装功能：  \n·GCC Toolchain，即从足够版本的GCC（也称GNU）编译套件（gcc,g++,gfortran）出发，从头编译安装ABACUS 依赖库及ABACUS 本体的 Toolchain方法",
+        "lexical_score": 0.572221
+      },
+      {
+        "chunk_id": "d5bba11a3f7dbdc39236b5bd032a8ac6",
+        "parent_id": "241aa98007a08caa0dd9553b92dfad2f",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "切换不同的ABACUS 依赖库版本.  \n总体来说，ABACUS Toolchain 希望达到的愿景是：  \n·方便用户高效地从源码编译最适合当前服务器环境的ABACUS,并能快速测试不同依赖库类型的Toolchain编译所得ABACUS 的计算效率。  \n·建立一套 ABACUS 源码编译的标准流程，ABACUS开发者可以直接在 Toolchain 中控制 ABACUS 各个依赖库的版本和编译方式，而不需要自行编译并手动加入各种编译选项。与此同时，如果 ABACUS 的安装依赖有所更新，开发者也可以在Toolchain中直接更新相关信息，即可为用户使用。",
+        "lexical_score": 0.368059
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.865706,
+      "anchor_score": 1210.285491,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请概述 ABACUS 中 SDFT（随机波函数密度泛函理论）方法的原理和主要适用场景。",
+    "ground_truth": "SDFT 即随机波函数密度泛函理论（Stochastic Density Functional Theory），目前 ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter，WDM）。传统 KSDFT 在高温计算中需要极大数量的占据态电子波函数导致计算困难，而 SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。此外还可使用混合随机-确定性密度泛函理论 MDFT，即在 SDFT 计算中混入一部分低能 Kohn-Sham 轨道以加速结果收敛。",
+    "question_type": "summary",
+    "source_hint": "5.1.1介绍：目前 ABACUS 使用 SDFT主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter,简称WDM)",
+    "gold_evidence": [
+      {
+        "chunk_id": "b17e087703862d2c18eaba11628292b5",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".5K)，传统的Kohn-Sham密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难，而 SDFT使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。关于ABACUS 中实现 SDFT算法的细节可以参考QianruiLiuand Mohan Chen\\*,\"Plane-wave-based stochastic-deterministic density functional theory for extended systems,\" Phys.Rev",
+        "lexical_score": 0.525349
+      },
+      {
+        "chunk_id": "0bd4cbf27d6b46d56f35884065eb05fc",
+        "parent_id": "7efb0f85484a4b64c88db1e6d47b518e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 5.1.6结尾  \n总体来讲，随机波函数密度泛函理论方法（SDFT或者MDFT）的使用与KSDFT并无太大的区别，直接运行ABACUS程序即可,但是对一些关键参数的选取会影响精度和效率(例如 nbands,nbands_sto,nche_sto,method_sto,kpar, bnd_par）。对于极端高温计算（>10eV），使用 SDFT可以大大提高计算速度，是比普通的 KSDFT 更好的选择。如果大家使用有问题，欢迎写信联系（见上)。\n## 5.",
+        "lexical_score": 0.263143
+      },
+      {
+        "chunk_id": "6453d51c86b24f4b7c7eabe3a9ddba62",
+        "parent_id": "ba0f854e9780bac7c20bac5600beda8e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1.3 采用 SDFT进行电子自洽迭代计算 180\n5.1.4 采用 SDFT进行分子动力学模拟. 182\n5.1.5 采用 SDFT 计算态密度 182\n5.1.6结尾 183\n5.2 ABACUS 随机波函数DFT计算电子电导热导教程 184\n5.2.1介绍 184\n5.2.2算例准备 184\n5.2.3采用 sDFT进行电子的电导热导计算 185\n5.3 ABACUS实时演化含时密度泛函理论使用教程 187\n5.3.1 背景 187\n5.3.2在 ABACUS 中使用rt-TDDFT时改变电子的占据数. 187\n5.3.3ABACUS 中使用rt-TDDFT 外加电场计算材料吸收谱 190\n5.3.4 参考文献 193\n5.4 ABACUS无轨道密度泛函理论方法使用教程 193\n5.4.1无轨道密度泛函理论背景知识． 193\n5.4",
+        "lexical_score": 0.218303
+      }
+    ],
+    "gold_status": "needs_review",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.534966,
+      "anchor_score": 910.345821,
+      "strict_metric_eligible": false,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请总结隐式溶剂模型的基本思想以及它相比显式溶剂方法的优点。",
+    "ground_truth": "隐式溶剂化模型（Implicit solvation model）将溶剂视为连续介质，而不是单独的\"显式\"溶剂分子，嵌入隐式溶剂中的溶质以及溶剂自由度的平均值将隐含在溶剂浴的性质中。与\"显式\"方法相比，这种隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统。ABACUS 中实现的隐式溶剂化模型采用了 Mathew、Sundararaman、Letchworth-Weaver、Arias 和 Hennig 在 2014 年开发的方法。",
+    "question_type": "summary",
+    "source_hint": "5.5.1介绍：这种方法将溶剂视为连续介质，而不是单独的\"显式\"溶剂分子",
+    "gold_evidence": [
+      {
+        "chunk_id": "39692403c055664232d1fc15ee035d27",
+        "parent_id": "0ea21adec3c9fa6b0c375367fff04118",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。这种方法将溶剂视为连续介质，而不是单独的“显式”溶剂分子，这意味着嵌入隐式溶剂中的  \n溶质以及溶剂自由度的平均值将隐含在溶剂浴的性质中。与“显式”方法相比，这种隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统。  \nABACUS 中实现的隐式溶剂化模型采用了Mathew、Sundararaman、Letchworth-Waver、Arias 和 Hennig 在2014 年开发的方法[1]。",
+        "lexical_score": 0.819613
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.969708,
+      "anchor_score": 1272.522283,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请概述 Bader charge（Bader 电荷）分析的基本思想。",
+    "ground_truth": "Bader charge 是将电子密度进行类似于 Voronoi tessellation 的剖分，在原子间以电荷密度的梯度为 0 处创建截面，然后将原子周围所有截面包络出的 cell 进行实空间积分，即为 Bader charge。实际计算中总能对价电子的密度进行切分，但对近核电子的处理有所差别：CP2K 支持构造出核电荷分布，VASP 支持从 PAW 势中重建核电荷分布，而 QE 和 ABACUS 则不支持以上处理方式。",
+    "question_type": "summary",
+    "source_hint": "6.5.1前言：Bader charge 是将电子密度进行类似于 Voronoi tesellation的剖分",
+    "gold_evidence": [
+      {
+        "chunk_id": "dcd8b797f813e71387ecf09e72a393e4",
+        "parent_id": "35104e8d45f36e938a7a2e5b440bd292",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \nBader charge 是将电子密度进行类似于 Voronoi tesellation的剖分，在原子间以电荷密度的梯度为0处创建截面，然后将原子周围所有截面包络出的cell进行实空间积分，即为Bader charge。考虑实际计算，我们总能对价电子的密度进行切分，但对近核电子的处理则有所差别：CP2K支持构造出核电荷分布，VASP支持从PAW势中重建核电荷分布，而QE和ABACUS 则不支持以上处理方式。",
+        "lexical_score": 0.809663
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.98681,
+      "anchor_score": 1194.376194,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请总结文档中介绍的编译安装 ABACUS 的主要途径有哪些。",
+    "ground_truth": "用户可以编译仅支持 PW 基组的 ABACUS 或者同时支持 PW 和 LCAO 两种基组的 ABACUS，针对 PW 基组还可选择串行版本或并行版本。在超算平台上编译 ABACUS 有两种基本路线：一种是基于 GCC（the GNU Compiler Collection）编译，一种是基于 Intel oneAPI 或者 Intel Parallel Studio 编译，其中使用 Intel oneAPI 将会简单很多。此外还可以使用 ABACUS Toolchain（GCC Toolchain、Intel Toolchain、AMD Toolchain）自动处理依赖库并完成编译，文档还介绍了编译 Nvidia GPU 版本以及在曙光 DCU 集群上的编译方法。",
+    "question_type": "summary",
+    "source_hint": "2.9.2超算上编译ABACUS的基本路线：一种是基于GCC（the GNU Compiler Collection）编译一种是基于Intel oneAPI或者 Intel Paralel Studio 编译",
+    "gold_evidence": [
+      {
+        "chunk_id": "71bf8c253880e0ea9729a1811f38f2a7",
+        "parent_id": "76b092e6b8e76ac739ff5aaba9396a36",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1关于 ABACUS  \n首先，再次简单介绍一下ABACUS。ABACUS（原子算筹）软件同时支持两种基矢量，一种是平面波（Planewave，PW）基组，一种是LCAO (Linear combination of atomic orbitals)或者称 NAO (Numerical atomic orbitals)基组。  \n用户可以编译仅支持PW基组的ABACUS 或者同时支持两种基组的 ABACUS。同时，针对PW基组的 ABA-CUS，用户还可以选择编译串行版本或并行版本。但因为这个文档的主题是如何在超算环境中编译ABACUS（应该没有人在超算上跑串行的ABACUS吧)，我们接下来只会介绍并行版本的编译方法",
+        "lexical_score": 0.38575
+      },
+      {
+        "chunk_id": "c0c2c0c93747694102e04b1748b0e6ef",
+        "parent_id": "2f4a1e534f3be91d85bee5484778b526",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "这里提供一些参考的教程：软件模块使用方法-上海交大超算平台用户手册 Documen-tation## 2.超算上编译ABACUS的基本路线  \n在超算平台上编译ABACUS，同样也有两种选择：  \n一种是基于GCC（the GNU Compiler Collection）编译一种是基于Intel oneAPI或者 Intel Paralel Studio 编译不得不说，使用InteloneAPI将会简单很多！因此，如果你所使用的超算平台正好有InteloneAPI，那么请毫不犹豫的使用它！",
+        "lexical_score": 0.298488
+      },
+      {
+        "chunk_id": "0459db675bde7f7e6d518e896dcbdd8c",
+        "parent_id": "77cfddec64063382730690e340dad8aa",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".6Toolchain 编译 ABACUS 教程(3)-AMD 44\n2.6.1简介 44\n2.6.2已有方案回顾 45\n2.6.3AMD Toolchain 45\n2.7编译 Nvidia GPU 版本的 ABACUS 54\n2.7.1介绍 54\n2.7.2检查环境 55\n2.7.3编译 55\n2.8ABACUS LCAO 基组GPU 版本使用说明 55\n2.8.1简介 55\n2.8.2安装 55\n2.8.3Toolchain 安装 56\n2.8.4使用 56\n2.8.5示例 57\n2.9在超算环境编译 ABACUS 的建议 65\n2.9.1关于 ABACUS 65\n2.9.2 超算平台的简单介绍 65\n2.9.3 拓展教程 67\n2.10 ABACUS 在曙光DCU 集群与 AMD 显卡上的编译与使用 67\n2.10.",
+        "lexical_score": 0.203673
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.734996,
+      "anchor_score": 790.830142,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请概述结合 ABACUS 与 Phonopy 计算声子谱的整体流程。",
+    "ground_truth": "首先使用 ABACUS 优化结构，然后用 Phonopy 执行 phonopy -d --dim=\"2 2 2\" --abacus 产生需要计算的超胞及相应微扰构型（如 STRU-001）。接着用 ABACUS 对每个微扰构型做 calculation 为 scf 且 cal_force 为 1 的计算输出原子受力，再用 phonopy -f 指定所有微扰构型的 running_scf.log 产生 FORCE_SET 文件。最后设置 band.conf（含 ATOM_NAME、DIM、MESH、BAND 等参数）并执行 phonopy -p band.conf --abacus 得到声子谱，输出 band.yaml，再用 gnuplot 绘制声子谱。",
+    "question_type": "summary",
+    "source_hint": "6.7.3流程：使用ABACUS优化结构／用Phonopy产生需要计算的超胞及相应微扰构型／产生FORCE_SET文件／设置band.conf文件计算得到声子谱",
+    "gold_evidence": [
+      {
+        "chunk_id": "76e1e0d2e4d5bd8004c50ca69c73c734",
+        "parent_id": "509c8129b53b28510907998753149be9",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "5 m 0 0 0## 用Phonopy产生需要计算的超胞及相应微扰构型  \n这里我们使用有限位移方法计算声子谱，因此需要对晶格进行扩胞并对原子位置进行微扰。执行如下命令即可生成222的扩胞并产生微扰结构：  \n```batch\n1 phonopy -d --dim=\"2 2 2\" --abacus\n```  \n这一步 phonopy 会根据晶格对称性自动产生相应个数的微扰结构。由于FCC的晶格对称性较强，因此这个例子只产生一个微扰结构：STRU-001。这里类似K 点的对称性分析，晶体结构对称性越强，所需的微扰结构就越少，对称性稍差的体系一般会产生多个微扰结构",
+        "lexical_score": 0.400427
+      },
+      {
+        "chunk_id": "d6c0d239d784d1d975bb999ad933ef19",
+        "parent_id": "cd55e19f573c8e1321c39d1655ee2f78",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "conf --abacus -d\n```  \n其中 setting.0855在计算中不起作用。  \n计算二阶力常数  \n调用 Phonopy软件产生需要计算的超胞及相应微扰的多个原子构型，命令如下：  \n```batch\n1 phonopy setting.conf --abacus -d\n```  \n其中 setting.conf 文件的内容为：  \n1 DIM = 2 2 2\n2 ATOM_NAME = Si  \n这里我们采用的 Si的例子只需要产生1个微扰构型 STRU-001即可，对所有微扰构型（这里Si的例子只有1个）进行 SCF计算（SCF 代表 Self-consistent field，这里代表进行密度泛函理论的电子迭代自洽计算）获得原子受力，算完之后用以下命令产生FORCE_SET文件：  \n```batch\n1 phonopy -f OUT",
+        "lexical_score": 0.374929
+      },
+      {
+        "chunk_id": "5bab7562581bfcf4125e1c1ed0cc38c1",
+        "parent_id": "9f87a97d725cc85191a898286aaae63a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".2用 Phonopy产生需要计算的超胞及相应微扰构型中的\"dim”一致。  \n·MESH:q点的采样网格。'888‘意味着采用8x8x8的q点网格，默认以（0，0，0）为中心。  \n·PRIMITIVE_AXES：输入晶胞到目标原胞的转换矩阵，并将根据原胞基矢量作为声子计算的坐标系。这里是FCC 的原胞转换矩阵。  \n·BAND：采样能带的q点路径。不同晶格的高对称点不同，具体可以使用 Seek-path，自动生成q点路径。  \n。 BAND_POINTS：给出了包括能带路径末端的采样点的数量。  \nBAND_CONNECTION：在能带交叉处辅助连接能带。",
+        "lexical_score": 0.293889
+      }
+    ],
+    "gold_status": "needs_review",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.482238,
+      "anchor_score": 717.94573,
+      "strict_metric_eligible": false,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请概述使用 ABACUS 的 Wannier90 接口计算最大局域化 Wannier 函数的运行流程。",
+    "ground_truth": "运行流程分为四步：第一步运行 Wannier90 软件（wannier90.x -pp）生成 nnkp 文件；第二步运行 ABACUS 执行电子结构的自洽计算，INPUT 中需指定 out_chg 为 1 输出电荷密度；第三步将 nnkp 文件放到指定位置，运行 ABACUS 执行非自洽计算，其中 init_charge 设为 file、towannier90 设为 1，且 KPT 文件中的 k 点要和 Wannier90 输入文件中的 k 点一模一样；第四步将非自洽计算生成的 mmn、amn、eig、UNK 等文件放到 Wannier90 的运行路径下，运行 Wannier90 得到最大局域化 Wannier 函数。",
+    "question_type": "summary",
+    "source_hint": "6.9.3 运行流程：1．运行 Wannier90 软件，生成 nnkp 文件；2．运行 ABACUS 软件，执行电子结构的自洽计算",
+    "gold_evidence": [
+      {
+        "chunk_id": "a2269e47ee87f3b7ad713970d8396336",
+        "parent_id": "e74ca6465b7e98dc879aa76835f0116e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 运行流程  \n这里给出了运行 ABACUS+wannier90的一个脚本文件，结合 examples/interface_wannier90/中的例子讲解结合ABACUS 和Wannier90计算最局域化Wannier函数的完整运行流程，这里的流程对平面波基组和原子轨道基组均适用，原子轨道基组的NSCF会比平面波基组慢一些。  \nexport W90=wannier90.x\n2 export ABACUS=abacus\n3 export NP=12\n4\n5 # 1．运行 Wannier90 软件，生成 nnkp 文件；\n6 cd wannier  \n```shell\n7 mpirun -np $NP $W90 -pp diamond.win\n8\n9#2．运行 ABACUS 软件，执行电子结构的自洽计算;\n10 cd .",
+        "lexical_score": 0.368391
+      },
+      {
+        "chunk_id": "aa0f103e0dd73e65f6b495d560e7fcb5",
+        "parent_id": "5fa05855ba4b7d8b9f2d1ebccd516448",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".非自洽计算：需要注意INPUT 中需要把init_charge 参数设置为file，即读取文件中的电荷密度；一定要指定towannier90 参数为1，同时指定nnkpfile 参数为Wannier90产生的 nnkp 文件的地址；另外需要注意 KPT文件中的布里渊区k点要和Wannier90输入文件中的k点一模一样，所以最好手动输入K点坐标指定;  \n3．非自洽计算：INPUT 中有 out_wannier_mmn、out_wannier_amn、out_wanier_eig、out_wannier_unk、out_wannier_wvfn_formatted五个控制 Wannier90 相关文件输出的参数，默认值都是1，其中out_wannier_eig 和out_wannier_mmn 是必须打开的，out_wannier_unk 和out_wannier_amn 在需要使用",
+        "lexical_score": 0.271442
+      },
+      {
+        "chunk_id": "9ba8eab6abf71a08330c124b2a221e06",
+        "parent_id": "6c254647b04a92b05d7c1bf96d67e340",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。2008年，用于产生MLWF的Wannier90 软件发布，并在随后几年获得了广泛的应用。  \n本教程分为两部分，第一部分最大局域化Wannier函数方法简介介绍最大局域化Wannier 函数的算法，主要介绍1997年和 2001年的两篇 PRB 文章中提出的优化算法，侧重物理与算法原理；第二部分即本文档，是Wannier90 软件的ABACUS 接口说明，主要介绍如何使用ABACUS 计算Wannier90需要的输入文件，侧重具体软件使用。",
+        "lexical_score": 0.269912
+      }
+    ],
+    "gold_status": "needs_review",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.55371,
+      "anchor_score": 499.194538,
+      "strict_metric_eligible": false,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请总结 ABACUS 分子动力学模拟的输出文件以及 MD 续算功能的使用方法。",
+    "ground_truth": "ABACUS 的 MD 模拟会产生 3 类输出文件：结构文件 STRU_MD_$istep（由 md_restartfreq 控制输出频率，格式与 STRU 相同）、续算文件 Restart_md.dat 和信息文件 MD_dump（由 md_dumpfreq 控制，输出 MD 步数、晶格常数、原子位置、受力、速度等信息）。如果 ABACUS 运行达到指定的 MD 步数或者计算中断，可以通过 MD 续算功能继续之前的 MD 计算：将 md_restart 参数设为 1，其他参数不变，ABACUS 会读取 Restart_md.dat 获取当前 MD 步数 istep 及恒温器、恒压器等信息，再根据 istep 读取相应的结构文件 STRU_MD_$istep 进行续算。",
+    "question_type": "summary",
+    "source_hint": "三、MD输出和续算功能：ABACUS 的MD 模拟会产生3类输出文件：结构文件 STRU_MD_$istep，续算文件Restart_md.dat，信息文件 MD_dump",
+    "gold_evidence": [
+      {
+        "chunk_id": "ac4fba13b0eac0106b119b68d28c69f5",
+        "parent_id": "3f1a009ada9f0ffb13d6247e7ce9be46",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "001122226311\n```## 2 MD续算功能  \n如果 ABACUS 运行达到指定的MD步数，或者计算中断，可以通过MD续算功能继续之前的MD 计算。以上一个INPUT 文件为例：  \n1 INPUT_PARAMETERS\n2 #Parameters (General)\n3 suffix autotest\n4 calculation md\n5 pseudo_dir ../../PP_ORB\n6\n7 esolver_type dp\n8 pot_file ../../P_ORB/A1-SCAN",
+        "lexical_score": 0.300675
+      },
+      {
+        "chunk_id": "7450da2be5e2096f6ce91b0c3523f830",
+        "parent_id": "777b13c78f3055b3c8b23cc249e05942",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".3\n22\n23 init_vel 1  \n这些参数在ABACUS线上文档中均有说明，在这里再进行简单概述：  \ncalculation：设置ABACUS 计算类型，做分子动力学模拟请设置为 md  \nesolver_type：给定原子位置后的能量求解方式，默认 Kohn-Sham 密度泛函理论（ksdft），还可以设置LJ势  \n(lj）或者深度势能（dp)，这里设置为dp  \nmd_type：MD 算法种类，例如选择不同的系综 nve、nvt、npt 等  \nmd_nstep：MD 模拟的总步数  \nmd_dt：MD 计算每一步的时间步长（单位是fs)，与md_nstep 共同决定MD 总时长  \nmd_tfirst:MD系统的初始温度(单位是K)  \npot_file:DP 模型文件路径  \nmd_dumpfreq：MD 输出文件MD_dump 中原子以及晶胞信息的输出频率",
+        "lexical_score": 0.260435
+      },
+      {
+        "chunk_id": "e72b8d331d33b9ba8c82e95f091bdd50",
+        "parent_id": "6023a9eff65b367a10e864560d4b9913",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "028</td></tr><tr><td>21 msst_vis</td><td>0.028</td></tr><tr><td>21 msst_vis</td><td>0.3</td></tr><tr><td>22</td><td></td></tr><tr><td>init_vel</td><td></td></tr><tr><td></td><td>1</td></tr></table>  \nesolver_type：设置为dp\npot_file:DP模型文件路径\nmd_dumpfreq：MD 输出文件MD_dump 中原子以及晶胞信息的输出频率\nmd_restartfreq：结构文件 STRU_MD_\\$istep 的输出频率，MD 续算文件Restart_md.\ndat的更新频率## 三、MD输出和续算功能",
+        "lexical_score": 0.252666
+      }
+    ],
+    "gold_status": "needs_review",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.459725,
+      "anchor_score": 505.161185,
+      "strict_metric_eligible": false,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请概述 pyabacus 项目是什么，它提供哪些模块？",
+    "ground_truth": "pyabacus 是密度泛函理论软件 ABACUS（原子算筹）的 Python 接口，提供了与 ABACUS 软件交互的 Python API，该项目基于 pybind11 和 scikit-build-core 构建。pyabacus 当前提供的模块包括：io（输入/输出模块）、Cell（用于单元结构的模块）、ModuleBase（基本数学函数模块）、ModuleNAO（数值原子轨道 NAO 模块）和 hsolver（用于求解哈密顿量的模块）。",
+    "question_type": "summary",
+    "source_hint": "6.13.1 简介：pyabacus 是密度泛函理论软件ABACUS（原子算筹）的Python 接口，提供了与 ABACUS 软件交互的 PythonAPI",
+    "gold_evidence": [
+      {
+        "chunk_id": "728bb92b4856db658bbbebcfed481daf",
+        "parent_id": "2b833c572228c453ff0bc9b221e1122c",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 6.13.2 模块  \npyabacus 当前提供以下模块：  \nio:pyabacus 中的输入/输出模块。  \n·Cell:用于单元结构的模块，将Python中的ModuleNAO与用户输入连接。  \n。 ModuleBase:基本数学函数模块。  \n。 ModuleNAO:数值原子轨道(NAO)模块。  \n。 hsoiver:用于求解哈密顿量的模块。",
+        "lexical_score": 0.510183
+      },
+      {
+        "chunk_id": "b9a9a932575f28916ad6ed26692075d3",
+        "parent_id": "0f5e598ee0d94ea9094e349545007413",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "13 Pyabacus 文档一：用户手册## 6.13.1 简介  \npyabacus 是密度泛函理论软件ABACUS（原子算筹）的Python 接口，提供了与 ABACUS 软件交互的 PythonAPI。  \n该项目基于 pybindl1 和 scikit-build-core 构建。",
+        "lexical_score": 0.352312
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.916038,
+      "anchor_score": 638.071085,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "请总结无轨道密度泛函理论（OFDFT）的基本思想、优势以及 ABACUS 中实现的动能泛函。",
+    "ground_truth": "无轨道密度泛函理论（OFDFT）是一种第一性原理模拟方法，相比于 Kohn-Sham DFT，它的优势之一在于 O(NlnN) 的算法复杂度，可用于上万原子甚至更大体系的电子基态计算或大体系、长时间的第一性原理分子动力学。OFDFT 的精度高度依赖于动能泛函（KEDF）的精度，目前 ABACUS 中实现了 Thomas-Fermi (TF)、von Weizsäcker (vW)、TFλvW、Wang-Teter (WT)、Luo-Karasiev-Trickey (LKT) 共五种动能泛函，默认采用 WT。由于 OFDFT 中舍弃了单电子轨道，无法采用模守恒等非局域赝势，必须采用局域赝势，目前 ABACUS 支持 BLPS。",
+    "question_type": "summary",
+    "source_hint": "5.4.1无轨道密度泛函理论背景知识：目前 ABACUS中实现了Thomas-Fermi (TF),von Weizsacker (vW),TFAvW, Wang-Teter (WT),Luo-Karasiev-Trickey(LKT)共五种动能泛函",
+    "gold_evidence": [
+      {
+        "chunk_id": "7eb40b67af449eb523808588336013bd",
+        "parent_id": "0bbb26f6cd97f9b05ce34002fe93e84b",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "4ABACUS无轨道密度泛函理论方法使用教程## 5.4.1无轨道密度泛函理论背景知识  \n无轨道密度泛函理论(Orbital free density functional theory,OFDFT)是一种第一性原理模拟方法,相比于 KohnSham DFT(KSDFT)，它的优势之一在于O(NInN)的算法复杂度，这使得 OFDFT可以用于上万原子甚至更大体系的电子基态计算，或者大体系、长时间的第一性原理分子动力学等。  \n目前，OFDFT已被应用于简单金属、合金、半导体、小分子、温稠密物质等体系。",
+        "lexical_score": 0.540971
+      },
+      {
+        "chunk_id": "6a2e8f1e970f7b39722b761bbc5ac09c",
+        "parent_id": "4fcd648e5a5b35e74b0f61611bf9e368",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 动能泛函  \nOFDFT 的精度高度依赖于动能泛函（kinetic energy density functional,简称 KEDF）的精度，目前 ABACUS中实现了Thomas-Fermi (TF)[1],von Weizsacker (vW)[2],TFAvW [3], Wang-Teter (WT)[4],Luo-Karasiev-Trickey(LKT)[5]共五种动能泛函。  \n下面我们对这些泛函做简单介绍，并且介绍在 ABACUS 的INPUT文件中如何设置相关的参数",
+        "lexical_score": 0.270562
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.750079,
+      "anchor_score": 1010.430316,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "SDFT 和传统 KSDFT 在高温计算中有什么区别？",
+    "ground_truth": "在进行温稠密物质等高温计算时（温度高达数十到上千 eV），传统的 Kohn-Sham 密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难。而 SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。在 ABACUS 中通过将 esolver_type 从默认的 ksdft 设置为 sdft 来使用 SDFT 计算。",
+    "question_type": "comparison",
+    "source_hint": "5.1.1介绍：传统的Kohn-Sham密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难，而 SDFT使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题",
+    "gold_evidence": [
+      {
+        "chunk_id": "b17e087703862d2c18eaba11628292b5",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".5K)，传统的Kohn-Sham密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难，而 SDFT使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。关于ABACUS 中实现 SDFT算法的细节可以参考QianruiLiuand Mohan Chen\\*,\"Plane-wave-based stochastic-deterministic density functional theory for extended systems,\" Phys.Rev",
+        "lexical_score": 0.632168
+      },
+      {
+        "chunk_id": "0bd4cbf27d6b46d56f35884065eb05fc",
+        "parent_id": "7efb0f85484a4b64c88db1e6d47b518e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 5.1.6结尾  \n总体来讲，随机波函数密度泛函理论方法（SDFT或者MDFT）的使用与KSDFT并无太大的区别，直接运行ABACUS程序即可,但是对一些关键参数的选取会影响精度和效率(例如 nbands,nbands_sto,nche_sto,method_sto,kpar, bnd_par）。对于极端高温计算（>10eV），使用 SDFT可以大大提高计算速度，是比普通的 KSDFT 更好的选择。如果大家使用有问题，欢迎写信联系（见上)。\n## 5.",
+        "lexical_score": 0.223342
+      },
+      {
+        "chunk_id": "d33b089054339e4fcbce55c884f5b733",
+        "parent_id": "1397f5cccd0c41c5062272721d01d510",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。  \n平面波能量截断值ecut 的测试：由于随机误差的出现，SDFT的ecut的测试与传统的 KSDFT稍有区别，但是原理是类似的。在确定好 nbands_sto后，就可以测试ecut了。与测试nbands_sto类似，在不同的ecut，需要采用10个左右不同的随机种子生成的相同数目的随机波函数轨道进行SDFT计算，然后取平均能量。由于温稠密物质能量一般都比较高，因此只要控制相邻二个ecut（相差为10Ry）对应的平均能量差小于一定标准即可（例如万分之一)。  \n注1：在这个例子里我们提供的赝势是Si",
+        "lexical_score": 0.195961
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.749281,
+      "anchor_score": 966.525097,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "在 ABACUS 中 PW 基组和 LCAO 基组各有什么特点，应该如何选择？",
+    "ground_truth": "PW（平面波）和 LCAO（数值原子轨道 NAO）是 ABACUS 支持的两种基矢量：如果是较小原子数的固体体系，建议采用 PW 效率较高；如果体系原子数较大（例如大于 50 个原子），建议用 LCAO，效率会更高。数值原子轨道作为基矢量的优点是基矢量个数相比平面波大幅度降低，且空间上可以严格截断，构建哈密顿量的效率可以达到线性标度的时间复杂度。此外，LCAO 基组相比 PW 需要额外准备数值原子轨道文件，且轨道文件要和对应的赝势相匹配。",
+    "question_type": "comparison",
+    "source_hint": "3.基矢量(b)：如果是较小原子数的固体体系，建议可以采用PW效率较高。如果是体系原子数较大（例如大于50个原子)，建议可以用LCAO试试，效率会更高",
+    "gold_evidence": [
+      {
+        "chunk_id": "407368cd466013d83f6a300bec2e735a",
+        "parent_id": "6ee7ae167dff2b84be92bbef1833b2ca",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 数值原子轨道作为基矢量的优点  \n数值原子轨道作为基矢量有几个优点：第一，基矢量个数相比于一些常用的基矢量（例如平面波和实空间网格）大幅度降低；第二，数值原子轨道是局域的，空间上可以严格截断，采用数值原子轨道来构建体系的哈密顿量的效率可以达到线性标度的时间复杂度。",
+        "lexical_score": 0.384372
+      },
+      {
+        "chunk_id": "a625ccdaec838f3b3129235aa9fdc12f",
+        "parent_id": "d991a86c3f4d7c6f26a2135ee92a1b99",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## (b)．怎么选择是采用PW还是用LCAO基矢量来做计算？  \n答：如果是较小原子数的固体体系，建议可以采用PW效率较高。如果是体系原子数较大（例如大于50个原子)，建议可以用LCAO试试，效率会更高。此外，当使用LCAO做计算时，可以先用PW这组相对完备的基组来测试赝势带来的能量收敛性。",
+        "lexical_score": 0.285593
+      },
+      {
+        "chunk_id": "15fc0419f17d41ce96eb698c338a5568",
+        "parent_id": "1c2e25c59407152b0e94d6ff11e54424",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## (c).LCAO基组相比于PW基组需要额外准备的文件？  \n答：数值原子轨道文件，下载地址为https://abacus.ustc.edu.cn/pseudo/list.htm。注意轨道文件要和对应的赝势相匹配。  \n关于数值原子轨道的背景知识，可以参考文献：  \n· https://mcresearch.gitee.io/abacus-user-guide/abacus-nac1.html  \n· https://mcresearch.gitee.io/abacus-user-guide/abacus-nac2.html  \nhttps://mcresearch.gitee.io/abacus-user-guide/abacus-nac3.",
+        "lexical_score": 0.226064
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.879435,
+      "anchor_score": 1224.975271,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "数值原子轨道基组中 DZP 和 TZDP 有什么区别？",
+    "ground_truth": "DZP 是在 DZ（Double-ζ，即每个占据角量子数采用 2 条径向轨道）的基础上引入 1 条角量子数更高的极化径向轨道组成的基组；TZDP（Triple-ζ valence orbitals plus DZ polarization）则是基组数量更大的基组。以 O 元素赝势为例，DZP 轨道包含 2 组 s 轨道、2 组 p 轨道、1 组 d 轨道共 13 个轨道，TZDP 轨道包含 3 组 s 轨道、3 组 p 轨道、2 组 d 轨道共 22 个轨道。要使 LCAO 基矢量更完备需要从例如 DZP 增加到 TZDP，而不是增加 Ecut；轨道类型从 SZ、DZP 提升到 TZDP，精度越高，结果更接近平面波。",
+    "question_type": "comparison",
+    "source_hint": "3.6.2 数值原子轨道的命名方法：DZP轨道包含2组s轨道、2组p轨道、1组d轨道…TZDP轨道包含3组s轨道、3组p轨道、2组d轨道",
+    "gold_evidence": [
+      {
+        "chunk_id": "b4d547ea7cc48cc2b1b3423b61d5922e",
+        "parent_id": "dc413e5c1371eda956ffa2182a0ed88d",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 数值原子轨道的命名方法  \n数值原子轨道有一套常用的命名方案用来表示选取的基组大小，早期该命名方案在 SIESTA软件中被采用[7][8][9][10]，后来在OpenMX、FHI-aims 和ABACUS 中也采取这套命名方案。具体来说是，对于每个被电子占据的角量子数1，若采用1条径向轨道，则称该基组为 Single-(轨道，简称 SZ轨道基组。若采用2条径向轨道，则称该基组为Double-( 轨道，简称DZ轨道基组。  \n目前，在许多赝势结合数值原子轨道的程序里，通常会在DZ轨道的基础上引人1条极化（polar）的径向轨道，即角量子数更高的轨道，来组成 DZP（Double-[ valence orbitals plus SZ polarization）轨道基组",
+        "lexical_score": 0.370724
+      },
+      {
+        "chunk_id": "ef54de6fd2d4311802bbf1bd55fa3651",
+        "parent_id": "d483c9f674b62c7db7dca245922d07cb",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## (d)．ABACUS中LCAO 的 Ecut 是做什么用的  \n答：LCAO和PW一样，都会有一个 Ecut，在使用LCAO 的时候，增加 Ecut 只会增加局域势格点积分部分的精度（赝势的局域部分+交换关联势+Hartree 势)，并不增加数值原子轨道基矢量的完备性，所以原先用于PW 的收敛性测试方法是不能这样直接用于LCAO的。如果要增加LCAO的基矢量使得基矢量更完备，需要从例如DZP增加到TZDP，而不是增加Ecut。",
+        "lexical_score": 0.331565
+      },
+      {
+        "chunk_id": "31188cf56099252563db2b1016180109",
+        "parent_id": "b432b7d7d61b8ac6e66e3efaf4675966",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "---## 如何选择数值原子轨道文件  \n用户需要根据精度要求，选择数值原子轨道合适的截断能量值、截断半径及轨道类型。截断能量值、截断半径越大，轨道类型提升（SZ、DZP、TZDP)，精度越高，结果更接近平面波。注意对于不同元素，要达到同样的精度，以上数值设置并不一定相同。",
+        "lexical_score": 0.281876
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.683463,
+      "anchor_score": 613.91781,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 中 SDFT 计算的参数 method_sto 取 1 和取 2 有什么区别？",
+    "ground_truth": "method_sto 是进行 SDFT 计算使用的方法：1 代表消耗内存较少但稍慢的方法，2 代表更快但需要更大内存的方法，默认是 2。用户可以根据服务器的内存条件和对计算速度的需求在两者之间取舍。",
+    "question_type": "comparison",
+    "source_hint": "5.1.3：method_sto是进行 SDFT计算使用的方法：1代表消耗内存较少但稍慢的方法，2代表更快但需要更大内存的方法，默认是2",
+    "gold_evidence": [
+      {
+        "chunk_id": "19aa0676fdba510bd153920961a47b80",
+        "parent_id": "1397f5cccd0c41c5062272721d01d510",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".log中的ChebyshevPrecision 小于 1e-8。  \n·method_sto是进行 SDFT计算使用的方法：1代表消耗内存较少但稍慢的方法，2代表更快但需要更大内存的方法，默认是2。  \n此外还有如下参数可能会用到：  \n·seed_sto:生成随机轨道的随机种子。默认是0，代表随时间随机生成；若要控制使用相同的随机种子，可以设置一个大于1的整数。  \n·bndpar:将所有并行的进程分成 bndpar个组，计算所用随机轨道将平均分布在每个组中，可以提高并行效率，默认为1。值得注意的是，这个参数并不是越大越好，并且不如K点并行（kpar 参数）有效，实际计算中应该优先使用K点并行，然后测试不同大小的bndpar，确定最佳的bndpar。  \n平面波能量截断值ecut 的测试：由于随机误差的出现，SDFT的ecut的测试与传统的 KSDFT稍有区别，但是原理是类似的",
+        "lexical_score": 0.579543
+      },
+      {
+        "chunk_id": "0bd4cbf27d6b46d56f35884065eb05fc",
+        "parent_id": "7efb0f85484a4b64c88db1e6d47b518e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 5.1.6结尾  \n总体来讲，随机波函数密度泛函理论方法（SDFT或者MDFT）的使用与KSDFT并无太大的区别，直接运行ABACUS程序即可,但是对一些关键参数的选取会影响精度和效率(例如 nbands,nbands_sto,nche_sto,method_sto,kpar, bnd_par）。对于极端高温计算（>10eV），使用 SDFT可以大大提高计算速度，是比普通的 KSDFT 更好的选择。如果大家使用有问题，欢迎写信联系（见上)。\n## 5.",
+        "lexical_score": 0.172761
+      },
+      {
+        "chunk_id": "e73ac3eee83325b42a956e3d5977aa40",
+        "parent_id": "f35655d80860cdb2a32f3a6a92930fc8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1\n39 dos_sigma 4\n40 dos_nche 240\n41 npart_sto 2\n以上参数在ABACUS 的线上文档中均有说明，这里再进行简单概述：  \n。 out_dos:需要设置为1，才能输出能态密度。  \ndos_emin_ev:能态密度的能量最小范围，单位eV。  \ndos_emax_ev:能态密度的能量最大范围，单位eV。  \ndos_edelta_ev:控制输出DOS 时的能量间隔，单位eV。  \ndos_sigma:能态密度的高斯展宽的因子，单位eV。  \ndos_nche:计算能态密度时切比雪夫展开阶数，默认为100。  \n·npart_sto:当使用 method_sto=2 运行例如 DOS 的 SDFT 后处理时，将控制使用内存大小为正常的1/npart_sto，防止内存不够导致无法计算，默认为1",
+        "lexical_score": 0.145248
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.697834,
+      "anchor_score": 462.618385,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "显式溶剂模型和隐式溶剂模型有什么区别，各适合什么场景？",
+    "ground_truth": "显式溶剂方法将溶剂作为单独的\"显式\"溶剂分子处理，而隐式溶剂化模型（Implicit solvation model）将溶剂视为连续介质，溶质以及溶剂自由度的平均值隐含在溶剂浴的性质中。与显式方法相比，隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统，在有限系统和周期系统中都得到了广泛应用。",
+    "question_type": "comparison",
+    "source_hint": "5.5.1介绍：与\"显式\"方法相比，这种隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统",
+    "gold_evidence": [
+      {
+        "chunk_id": "39692403c055664232d1fc15ee035d27",
+        "parent_id": "0ea21adec3c9fa6b0c375367fff04118",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。这种方法将溶剂视为连续介质，而不是单独的“显式”溶剂分子，这意味着嵌入隐式溶剂中的  \n溶质以及溶剂自由度的平均值将隐含在溶剂浴的性质中。与“显式”方法相比，这种隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统。  \nABACUS 中实现的隐式溶剂化模型采用了Mathew、Sundararaman、Letchworth-Waver、Arias 和 Hennig 在2014 年开发的方法[1]。",
+        "lexical_score": 0.679469
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.77889,
+      "anchor_score": 955.298817,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Mulliken、Hirshfeld 和 Bader 等布居分析方法各自存在什么问题？",
+    "ground_truth": "文档指出各种布居分析方法各自存在或致命或物理上定义不明的问题：Mulliken 电荷具有非常显著的基组相关效应；Hirshfeld 电荷经常对过渡元素计算出携带负电；Bader 对于电荷分布极其不均匀的体系会得出异常结果。尽管如此，这些方法仍然有足够普遍的受众群体。",
+    "question_type": "comparison",
+    "source_hint": "6.5.1前言：如Mullken 电荷具有非常显著的基组相关效应，Hirshfeld电荷经常对过渡元素计算出携带负电，Bader对于电荷分布极其不均匀的体系会得出异常结果等",
+    "gold_evidence": [
+      {
+        "chunk_id": "8d474d185ca9e2d71c557c87a3339e3f",
+        "parent_id": "35104e8d45f36e938a7a2e5b440bd292",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1前言  \n我们在软件开发时不可避免遇到化学相关应用场景的需求，其中一个可能重点关注的信息便是“价态”。尽管从原理上考虑，“价态”这个量的定义并不明确，但化学场景的使用者总希望找到各式各样的方法来契合他们的“化学直觉”，便诞生了各种布居分析（Population Analysis）方法：如Mullken、Hirshfeld、Hirshfeld-Iterative(Hirshfeld-I)、ADCH、DDEC6、CM5、Mayer、Bader等，以及各种电子的定域化分析方法，如Wannier、ELF等。尽管他们各自存在或致命或物理上定义不明的问题，如Mullken 电荷具有非常显著的基组相关效应，Hirshfeld电荷经常对过渡元素计算出携带负电，Bader对于电荷分布极其不均匀的体系会得出异常结果等，但仍然有足够普遍的受众群体",
+        "lexical_score": 0.904989
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.945956,
+      "anchor_score": 1178.672475,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "在超算平台上基于 GCC 编译 ABACUS 和基于 Intel oneAPI 编译 ABACUS 有什么区别？",
+    "ground_truth": "GCC（the GNU Compiler Collection）同时包含 C/C++ 编译器和 Fortran 编译器，但不包含 MPI Library，因此还需要额外的 MPI 库（Open MPI 或者 MPICH），且如果超算环境没有提供 BLAS、LAPACK、FFTW3、ScaLAPACK、ELPA 和 CEREAL 的 modules，这些数学库都需要用户一个个手动编译安装。而 Intel oneAPI 同时包含 C/C++ 编译器、Fortran 编译器和 Intel MPI Library，还包含 Intel oneAPI Math Kernel Library（MKL），里面有 ABACUS 依赖的 BLAS、LAPACK、FFTW3 和 ScaLAPACK 共 4 个软件库，因此使用 Intel oneAPI 将会简单很多；但若编译同时支持两种基组的 ABACUS，仍需手动编译安装 ELPA 和 CEREAL。",
+    "question_type": "comparison",
+    "source_hint": "2.9.2 基于Intel oneAPI编译ABACUS／基于GCC 编译ABACUS：不得不说，使用InteloneAPI将会简单很多",
+    "gold_evidence": [
+      {
+        "chunk_id": "6953473bf6922a3068222b880b7cc608",
+        "parent_id": "e5f368d48fa6f3a27783f79e7f804302",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 基于GCC 编译ABACUS  \nGCC（the GNU Compiler Collection）它同时包含 C/C++ 编译器和Fortran 编译器，但其不包含 MPI Library。因此我们还需要额外的 MPI库（Open MPI或者MPICH)。  \n由于这是基于GCC 编译 ABACUS，如果用户所使用的超算环境中没有提供 BLAS、LAPACK、FFTW3、ScaLAPACK、ELPA 和CEREAL的modules，那么这些数学库都需要用户一个个手动编译安装。  \n在安装完成后，可以参考官方文档中的 ABACUS-Installation-Options 编译 ABACUS。\n## 2.9.\n3拓展教程## 1.",
+        "lexical_score": 0.528268
+      },
+      {
+        "chunk_id": "11e8bf9db555d91c758a9f83e2cbe026",
+        "parent_id": "630ff993969aad8dd5c8731e2c0a488e",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "? oneAPIMath Kermel Library（简称为 MKL），这个软件库里面包含了大量常用的数学库，包括 ABACUS 依赖的 BLAS、LAPACK、FFTW3 和 ScaLAPACK4个软件库。  \n因此，如果你只编译支持PW基组的ABACUS，那么Intel oneAPI就已经可以解决所有的依赖问题。  \n如果你要编译同时支持两种基组的 ABACUS，那么还需要手动编译安装 ELPA和CEREAL，安装完成后，可以参考官方文档中的 ABACUS-Installation-Options 编译 ABACUS。  \n注意：在使用Intel oneAPI编译ABACUS 的时候,并不意味着软件环境中不需要GCC。refer:Howthe CompilerUses GCC Intel compilers 需要使用GCC 中的头文件和库。因此同时也需要加载 GCC。",
+        "lexical_score": 0.347524
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.814605,
+      "anchor_score": 791.585209,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 中 SDFT 和 MDFT 有什么区别，如何通过输入参数区分？",
+    "ground_truth": "MDFT 即混合随机波函数密度泛函理论（mixed stochastic-deterministic DFT），是在 SDFT 计算中混入一部分低能 Kohn-Sham 轨道，从而加速结果收敛。在输入参数上，如果 nbands 设置为 0 且 nbands_sto（随机轨道数目）不为 0，则会进行 SDFT 计算；如果 nbands>0 且 nbands_sto>0，则会进行混合 KS 电子轨道和随机轨道的 MDFT 计算。两者都通过 esolver_type 设为 sdft 来启用。",
+    "question_type": "comparison",
+    "source_hint": "5.1.3：如果nbands 设置为O，且nbands_sto…不为O，则会进行SDFT计算；如果nbands>0，且nbands_sto>0，则会进行混合KS 电子轨道和随机轨道（stochastic orbitals）的MDFT计算",
+    "gold_evidence": [
+      {
+        "chunk_id": "49a5a91c90828f0d0eaced8e713c3c60",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".Rev.B,106,125132(2022)。本教程中将会展示如何在ABACUS 计算中使用 SDFT功能，此外还会介绍混合随机波函数密度泛函理论方法使用（mixed stochastic-deterministic DFT，简称 MDFT)，即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛。",
+        "lexical_score": 0.43931
+      },
+      {
+        "chunk_id": "26e62cbdab827151453855c6445ab0d3",
+        "parent_id": "3b20e4eba0b1a5b36b4e83299aa944c9",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。如果nbands 设置为O，且nbands_sto（随机轨道数目，这里设成64）不为O，则会进行SDFT计算；如果nbands>0，且nbands_sto>0，则会进行混合KS 电子轨道和随机轨道（stochastic orbitals）的MDFT计算。注意：一般nbands 设置为能量低于费米能级对应的能带数，计算效率会比较高。  \n·nbands_sto是使用随机波函数（stochastic orbitals）轨道数目，原则上取得越大则随机误差越小，但计算效率也会相应降低。  \n·判断随机波函数个数是否足够的一个经验法则是：测试能量误差。实际计算中，一般可以采用10个左右不同的随机数种子（可以参考 seed_sto参数设置随机数种子，下面有介绍）生成的相同数目的随机波函数轨道进行 SDFT计算，得到系统能量并求得相应误差，增加随机波函数轨道数目直到控制能量误差小于万分之一即可",
+        "lexical_score": 0.377996
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.80429,
+      "anchor_score": 550.681146,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用 ABACUS 计算二维材料的非自旋极化能带（如 4.7.3 节 nanoribbon 算例）需要先后进行哪两步计算？这两步的 INPUT 文件中 calculation、nspin、out_chg、init_chg 分别该如何设置？",
+    "ground_truth": "分两步：第一步 1_unspin_scf，做非自旋极化（nspin 设为 1）的自洽场迭代 SCF 计算（calculation 设为 scf），并输出自洽迭代之后的电子密度（out_chg 设为 1）；第二步 2_unspin_band，采用非自洽计算 NSCF（calculation 设为 nscf），读入上一个步骤输出的电荷密度（init_chg 设为 file），从而读入体系的基态电荷密度进行能带计算。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 4.7.3 节：约第 7246 行（1_unspin_scf 的 nspin/calculation/out_chg 设置）与约第 7252 行（2_unspin_band 的 calculation=nscf 与 init_chg=file 设置）",
+    "gold_evidence": [
+      {
+        "chunk_id": "f3e53c7cd15fb4e03edb99ce4888fd30",
+        "parent_id": "d5e8c2ef7d904662a10f8d7c92db1e77",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".459512146645，所以对应的布里渊区k点取的是1101，因为实空间周期长度小的方向对应的布里渊区大，所以需要取更多k点得到收敛结果。  \n---  \n2_unspin_band：采用非自洽计算NSCF（INPUT文件中的calculation 设为nscf)，读入上一个步骤输出的电荷密度（INPUT文件中的init_chg设为 file)，从而可以读入体系的基态电荷密度进行能带计算。  \n3_spin_scf：同1_unspin_scf 的计算，只是把nspin 设为2。  \n4_spin_band:同2_unspin_band 的计算，只是把 nspin 设为2。  \n5_spin_elec_scf：同3_spin_scf的计算，只是又外加了电场的参数。  \n6_spin_elec_band：同4_spin_band的计算，只是又外加了电场的参数",
+        "lexical_score": 0.508095
+      },
+      {
+        "chunk_id": "65d0589402a723a2f611dbdc76f1a4a6",
+        "parent_id": "94e6cce9042d8b4f69c70786d1190d41",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "。DOS 和能带结构紧密相关，通过对能带结构在能量上的积分得到。DOS 的峰值通常对应于能带结构中的范霍夫奇点，这些点是电子浓度变化剧烈的地方，且在费米能级（通常把这个能量设为0点，负数代表费米面以下，正数代表费米面以上）附近的行为对材料的电学性质有显著影响。例如，金属的高DOS导致高电导率，而半导体和绝缘体在费米能级附近的低DOS 则导致低电导率。  \n使用密度泛函理论软件来计算电子态密度和能带一般包括以下两个步骤：第一步，对结构弛豫后的稳定晶体结构（一般来讲是这样操作）做 self-consistent field（简称 scf）自洽计算输出收敛的体系基态电子密度文件；第二步，读人上一步的电子密度，选取想要计算的能级和K点，固定电子密度，做一次非自洽（non-self-consistentfield，简称nscf）计算得到态密度以及能带结构。\n## 6",
+        "lexical_score": 0.259681
+      },
+      {
+        "chunk_id": "18a565a809d35e126bc1d953be4d14a5",
+        "parent_id": "cc028a44bfcd628d0fc7785e520304ba",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "4 2 2 0 6 3 2 * 1 0 ^ { 1 } 0 V / m\n$$## 4.7.4预期计算结果  \n运行完算例2_unspin_band 后会通过非自洽计算得到体系非自旋极化能带图，横坐标是对二维材料布里渊区取k点，从Gamma点（坐标为000）取到π点（坐标为00.50)，取了100个k点算出来的能带图；纵坐标是能级，将费米面设置为0，取了费米面附近2eV的能量区间画出能带。以下两张图是同样取法。  \n运行完算例4_spin_band 后会得到非自洽计算得到的自旋极化能带图（图3)。  \n运行完算例6_spin_elec_band 后会得到自旋极化加电场的能带图（图4），注意这里所加的电场为0.1V/A,由输入文件 INPUT中的efield_amp 设置，但efield_amp 的单位是a.u.，需要换算。  \n<!-- image -->\n图3",
+        "lexical_score": 0.229661
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.750205,
+      "anchor_score": 663.899733,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "在 4.7.3 节的二维 nanoribbon 算例中，把 nspin 从 1 改成 2 后能带图会发生什么变化？若要进一步施加 0.1 V/A 的电场，应通过 INPUT 中哪个参数设置，其单位需要注意什么？",
+    "ground_truth": "不考虑自旋时（nspin=1）计算出的能带图中没有带隙，为金属；考虑自旋（nspin=2）之后带隙打开，成为半导体；在自旋极化基础上外加恒定电场后，其中一个自旋表现为半导体，另一个自旋则为金属。电场由 INPUT 中的 efield_amp 设置（算例中所加电场为 0.1 V/A），但 efield_amp 的单位是 a.u.，需要换算。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 4.7.3 节：约第 7215 行（nspin=1 无带隙为金属、nspin=2 带隙打开为半导体）与约第 7323 行（电场由 efield_amp 设置、单位为 a.u. 需换算）",
+    "gold_evidence": [
+      {
+        "chunk_id": "15c9a9e9c072a94be5ab563bd724d78f",
+        "parent_id": "067759143523a6456f38957a24197a2f",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".u.，但实际上也可以使用平面波基矢量，只是前者效率更高所以在这里采用。我们还会使用到电子的自洽场（self-consistent field，简称 SCF）计算，非自洽计算（non-self-consistentfield，简称NSCF)，自旋非极化和极化计算等概念。在不考虑自旋时（即设置nspin=1时)，计算出的能带图中没有带隙，为金属；考虑自旋之后，带隙打开，成为半导体；在自旋极化基础上，外加恒定电场之后，其中一个自旋表现为半导体，另一个自旋则为金属。  \n<!",
+        "lexical_score": 0.638178
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.783906,
+      "anchor_score": 594.479722,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用 ABACUS 的 SDFT 方法（如 186_PW_SDOS_10D10S 算例）计算态密度时，必须打开哪个输出参数？计算结果输出到哪个文件？dos_edelta_ev 和 dos_sigma 两个参数分别控制什么？",
+    "ground_truth": "需要把 out_dos 设置为 1 才能输出能态密度；态密度的输出文件是 OUT 文件夹下的 DOS1_smearing.dat。dos_edelta_ev 控制输出 DOS 时的能量间隔，单位 eV；dos_sigma 是能态密度的高斯展宽的因子，单位 eV。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 5.1.5 节：约第 7595-7603 行（out_dos=1、dos_edelta_ev、dos_sigma 参数说明）与约第 7609 行（输出文件为 DOS1_smearing.dat）",
+    "gold_evidence": [
+      {
+        "chunk_id": "e73ac3eee83325b42a956e3d5977aa40",
+        "parent_id": "f35655d80860cdb2a32f3a6a92930fc8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".1\n39 dos_sigma 4\n40 dos_nche 240\n41 npart_sto 2\n以上参数在ABACUS 的线上文档中均有说明，这里再进行简单概述：  \n。 out_dos:需要设置为1，才能输出能态密度。  \ndos_emin_ev:能态密度的能量最小范围，单位eV。  \ndos_emax_ev:能态密度的能量最大范围，单位eV。  \ndos_edelta_ev:控制输出DOS 时的能量间隔，单位eV。  \ndos_sigma:能态密度的高斯展宽的因子，单位eV。  \ndos_nche:计算能态密度时切比雪夫展开阶数，默认为100。  \n·npart_sto:当使用 method_sto=2 运行例如 DOS 的 SDFT 后处理时，将控制使用内存大小为正常的1/npart_sto，防止内存不够导致无法计算，默认为1",
+        "lexical_score": 0.637611
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.746227,
+      "anchor_score": 318.875277,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用 ABACUS+Phonopy 以有限位移法计算 FCC Al 声子谱时，如何生成微扰构型？之后用 ABACUS 计算这些构型的受力时 INPUT 中 calculation 和 cal_force 应如何设置？算完后用什么命令生成 FORCE_SET 文件？",
+    "ground_truth": "先执行 phonopy -d --dim=\"2 2 2\" --abacus 生成 2x2x2 扩胞的微扰构型（FCC Al 因对称性强只产生一个微扰结构 STRU-001）；接着用 ABACUS 计算原子受力，INPUT 中 calculation 需要设置为 scf，并且设置 cal_force 为 1，因为这一步目的是输出原子受力（还可用 stru_file 关键字指定微扰结构文件，如 stru_file ./STRU-001）；算完后用 phonopy -f 命令指定所有微扰构型算完之后的 running_scf.log 文件位置来产生 FORCE_SET 文件。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 6.7.3 节：约第 9620-9628 行（phonopy -d --dim 生成 STRU-001）与约第 9632-9675 行（calculation=scf、cal_force=1、phonopy -f 生成 FORCE_SET）",
+    "gold_evidence": [
+      {
+        "chunk_id": "1d4f8db6563f4a7579949e195d4e764f",
+        "parent_id": "fb654f8f58d54ee8a9171a01e3c4aae5",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 产生FORCE_SET文件  \n接着用 ABACUS 计算原子受力，其中需要注意的是calculation 需要设置为 scf，并且设置cal_force为1，因为这一步目的是输出原子受力。  \n小技巧：即为了计算不同的微扰结构的受力，可以在 INPUT 里添加关键字 stru_file 来指定 STRU文件的路径和文件名：stru_file./STRU-001  \nINPUT内容如下：  \nINPUT_PARAMETERS\n2 #Parameters (1.General)\n3 suffix Al-fcc\ncalculation scf\nesolver_type ksdft\n6 symmetry 1\npseudo_dir ./psp\n8 orbital_dir",
+        "lexical_score": 0.439376
+      },
+      {
+        "chunk_id": "76e1e0d2e4d5bd8004c50ca69c73c734",
+        "parent_id": "509c8129b53b28510907998753149be9",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "5 m 0 0 0## 用Phonopy产生需要计算的超胞及相应微扰构型  \n这里我们使用有限位移方法计算声子谱，因此需要对晶格进行扩胞并对原子位置进行微扰。执行如下命令即可生成222的扩胞并产生微扰结构：  \n```batch\n1 phonopy -d --dim=\"2 2 2\" --abacus\n```  \n这一步 phonopy 会根据晶格对称性自动产生相应个数的微扰结构。由于FCC的晶格对称性较强，因此这个例子只产生一个微扰结构：STRU-001。这里类似K 点的对称性分析，晶体结构对称性越强，所需的微扰结构就越少，对称性稍差的体系一般会产生多个微扰结构",
+        "lexical_score": 0.342164
+      },
+      {
+        "chunk_id": "d6c0d239d784d1d975bb999ad933ef19",
+        "parent_id": "cd55e19f573c8e1321c39d1655ee2f78",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "conf --abacus -d\n```  \n其中 setting.0855在计算中不起作用。  \n计算二阶力常数  \n调用 Phonopy软件产生需要计算的超胞及相应微扰的多个原子构型，命令如下：  \n```batch\n1 phonopy setting.conf --abacus -d\n```  \n其中 setting.conf 文件的内容为：  \n1 DIM = 2 2 2\n2 ATOM_NAME = Si  \n这里我们采用的 Si的例子只需要产生1个微扰构型 STRU-001即可，对所有微扰构型（这里Si的例子只有1个）进行 SCF计算（SCF 代表 Self-consistent field，这里代表进行密度泛函理论的电子迭代自洽计算）获得原子受力，算完之后用以下命令产生FORCE_SET文件：  \n```batch\n1 phonopy -f OUT",
+        "lexical_score": 0.277652
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.771459,
+      "anchor_score": 746.303666,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS+Phonopy 流程中执行 phonopy -p band.conf --abacus 之后会得到什么文件？进一步用 phonopy-bandplot --gnuplot 生成的 pho.dat 中，第一列和第二列分别是什么含义？",
+    "ground_truth": "执行 phonopy -p band.conf --abacus 这一步结束之后会有 band.yaml 文件输出；再用 phonopy-bandplot --gnuplot > pho.dat 输出 gnuplot 格式的声子谱数据，其中 pho.dat 的第一列是声子谱图的横轴（K 点路径，高对称 K 点位置见 pho.dat 的第二行），第二列是纵轴（声子频率，单位 THz）。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 6.7.3 节：约第 9677-9697 行（phonopy -p band.conf --abacus 输出 band.yaml）与约第 9756 行（pho.dat 两列的含义）",
+    "gold_evidence": [
+      {
+        "chunk_id": "0b16a884229af7228a2a41963fda8f13",
+        "parent_id": "0338736efd15b7d961ebae8f791b2236",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".dat' using 1:(\\\\$2) w l lw 3  \nFCC Al的声子谱:  \n<!-- image -->  \n也可使用Origin 绘图，pho.dat的第一列就是上图的横轴（K点路径)，其中高对称K点位置见pho.dat的第二行，第二列就是上图的纵轴(声子频率，单位THz)。\n## 6.",
+        "lexical_score": 0.451479
+      },
+      {
+        "chunk_id": "6dda2bed0ae9736285e9a8370b213b72",
+        "parent_id": "9f87a97d725cc85191a898286aaae63a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 设置band.conf文件计算得到声子谱  \n执行如下命令：  \n```batch\n1 phonopy -p band.conf --abacus\n```  \nband.conf 内容如下：  \n```python\n1 ATOM_NAME = Al\n2 DIM = 2 2 2\n3 MESH = 8 8 8\n4 PRIMITIVE_AXES = 0 1/2 1/2 1/2 0 1/2 1/2 1/2 0\n5 BAND = 1 1 1 1/2 1/2 1 3/8 3/8 3/4 000 1/2 1/2 1/2\n6 BAND_POINTS = 101\n7 BAND_CONNECTION = .TRUE.\n```  \n这一步结束之后会有band",
+        "lexical_score": 0.269904
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.727527,
+      "anchor_score": 405.041283,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用 ABACUS+ShengBTE 计算晶格热导率时，Phonopy 输出的 FORCE_CONSTANTS 文件为什么还要用 au2si.py 转换？转换得到什么文件？另外 band.conf 中哪个关于力常数的设置必须打开，否则会怎样？",
+    "ground_truth": "因为 ShengBTE 软件要求 FORCE_CONSTANTS_2ND 文件里数据的单位为 eV/A^2，而 ABACUS 结合 phonopy 计算的 FORCE_CONSTANTS 单位为 eV/(A·au)（1 au=0.52918 A），所以需要用 2nd 目录下提供的 au2si.py 脚本进行单位转换，生成 FORCE_CONSTANTS_2ND 文件。另外 band.conf 中务必设置 FULL_FORCE_CONSTANTS = .TRUE.，输出全部的二阶力常数，否则 ShengBTE 读取数据会报错。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 6.8.3 节：约第 9850-9853 行（FORCE_CONSTANTS = WRITE 与 FULL_FORCE_CONSTANTS = .TRUE. 的必要性）与约第 9863 行（au2si.py 单位转换生成 FORCE_CONSTANTS_2ND）",
+    "gold_evidence": [
+      {
+        "chunk_id": "9c80eb8af9f18582a2f6adf8c929d14d",
+        "parent_id": "fa020f8a3b701418eaea2ff2e869576a",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "TRUE.TRUE.，输出全部的二阶力常数，否则 ShengBTE 读取数据会报错。  \n此外，可以使用如下命令输出 gnuplot格式的声子谱，用于绘制声子谱：  \n```batch\n1 phonopy-bandplot --gnuplot > pho.dat\n```  \n后处理  \n注意 ShengBTE 软件要求FORCE_CONSTANTS_2ND 文件里数据的单位为eV/A^2，但是ABACUS 结合 phonopy计算的FORCE_CONSTANTS 单位为eV/(Axau)，其中au 是原子单位制，1 au=0.52918 A。可以使用 2nd 目录下提供的au2si.py 脚本进行单位转换，生成 FORCE_CONSTANTS_2ND 文件，命令如下:  \n1 python au2si",
+        "lexical_score": 0.684776
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.830444,
+      "anchor_score": 518.183182,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "ABACUS 对接 Wannier90 时需要分别准备 SCF 和 NSCF 两套计算，这两步的 INPUT 各有哪条关键设置？NSCF 的 KPT 文件又有什么额外要求？",
+    "ground_truth": "自洽计算（SCF）的 INPUT 中一定要指定 out_chg 参数为 1，即输出电荷密度，以供给非自洽计算使用；非自洽计算（NSCF）的 INPUT 中需要把 init_charge 参数设置为 file，即读取文件中的电荷密度，同时一定要指定 towannier90 参数为 1，并指定 nnkpfile 参数为 Wannier90 产生的 nnkp 文件的地址。此外 KPT 文件中的布里渊区 k 点要和 Wannier90 输入文件中的 k 点一模一样，所以最好手动输入 K 点坐标指定。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 6.9.3 节：约第 9939 行（SCF 需 out_chg=1）与约第 9941 行（NSCF 需 init_charge=file、towannier90=1、nnkpfile 及 KPT 要求）",
+    "gold_evidence": [
+      {
+        "chunk_id": "aa0f103e0dd73e65f6b495d560e7fcb5",
+        "parent_id": "5fa05855ba4b7d8b9f2d1ebccd516448",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": ".非自洽计算：需要注意INPUT 中需要把init_charge 参数设置为file，即读取文件中的电荷密度；一定要指定towannier90 参数为1，同时指定nnkpfile 参数为Wannier90产生的 nnkp 文件的地址；另外需要注意 KPT文件中的布里渊区k点要和Wannier90输入文件中的k点一模一样，所以最好手动输入K点坐标指定;  \n3．非自洽计算：INPUT 中有 out_wannier_mmn、out_wannier_amn、out_wanier_eig、out_wannier_unk、out_wannier_wvfn_formatted五个控制 Wannier90 相关文件输出的参数，默认值都是1，其中out_wannier_eig 和out_wannier_mmn 是必须打开的，out_wannier_unk 和out_wannier_amn 在需要使用",
+        "lexical_score": 0.659439
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.803635,
+      "anchor_score": 619.706199,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "用 ABACUS+pymatgen 计算金刚石弹性常数时，结构弛豫后如何产生应变构型、共产生多少个？每个应变构型的 ABACUS 计算中 calculation 应设为什么、为什么？最后用哪个脚本得到弹性常数？",
+    "ground_truth": "先在 relax 文件夹运行 ABACUS 结构弛豫，得到 OUT.C8 下的 STRU_ION_D 文件，之后的应变都在该构型基础上产生；回到例子根目录执行 python gene_dfm.py abacus，按默认应变大小产生 task.000 到 task.023 共 24 个文件夹（6 种应变状态各施加 4 种应变大小）。每个 task 的 INPUT 中 calculation 设置为 relax，因为需要固定晶格矢量、但允许原子弛豫来计算应力。最后回到例子根目录执行 python compute_dfm.py abacus，对各应变状态的应力-应变做线性拟合，输出体弹性模量、剪切模量、杨氏模量和泊松比（单位 GPa），精度更高的结果存储在 elastic.json 内。",
+    "question_type": "multi_hop",
+    "source_hint": "datas/abacus.md 6.6.3 节：约第 9505-9522 行（STRU_ION_D、gene_dfm.py 生成 24 个 task、calculation=relax）与约第 9530-9547 行（compute_dfm.py 输出弹性常数、elastic.json）",
+    "gold_evidence": [
+      {
+        "chunk_id": "f5fef8daa15c7e634b50468e77aaea4f",
+        "parent_id": "2451113933cd1253d31856350bd43ea4",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "## 计算弹性常数  \n回到例子根目录，执行如下命令：  \n1 python compute_dfm.py abacus  \n屏幕输出如下:  \n---  \n```python\n8 # Bulk  Modulus BV = 419.37 GPa\n9 # Shear Modulus GV = 521.42 GPa\n10 # Youngs Modulus EV = 1105.91 GPa\n11 # Poission Ratio uV = 0.06\n```  \n第2到7行即为计算的各种弹性常数（单位：GPa)，分别是体弹性模量（Bulk Modulus）、剪切模量（ShearModulus）、杨氏模量（Youngs Modulus）和泊松比（Poission Ratio）。精度更高的计算结果存储在 elastic",
+        "lexical_score": 0.301243
+      },
+      {
+        "chunk_id": "747814fb0147e39202bb88eb880c09e7",
+        "parent_id": "9fda13ac8045e1c8b3ce32baf0e7d830",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "对于6种应变状态中的每一种，应用4种不同的默认应变大小：  \n$$\n\\varepsilon _ { i } \\in \\{ - 0. 0 1 , - 0 . 0 0 5 , 0 . 0 0 5 , 0 . 0 1 \\} ,\n$$  \n将产生24种构型。接着对这24种构型分别使用DFT计算（固定晶格矢量，但允许原子驰豫，即relax），对所获得的每种应变状态的4个应力和应变的集合使用线性拟合来计算相应的弹性常数。",
+        "lexical_score": 0.27795
+      },
+      {
+        "chunk_id": "557530f67639ca97763c9be13c594474",
+        "parent_id": "232ce77cde8fd01bda4897b1cb0e91e8",
+        "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+        "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+        "source": "eval://abacus.pdf",
+        "passage": "./。此外需要进行固定晶格矢量，但允许原子弛豫来计算应力，因此calculation 设置为 relax。STRU 和 strain.json 分别是生成的构型文件和相应的应变大小。",
+        "lexical_score": 0.24364
+      }
+    ],
+    "gold_status": "auto_verified",
+    "gold_verification": {
+      "method": "deterministic_reference_lexical_alignment_v1",
+      "answerable": true,
+      "weighted_reference_coverage": 0.687968,
+      "anchor_score": 901.934156,
+      "strict_metric_eligible": true,
+      "human_verified": false
+    }
+  },
+  {
+    "question": "Gaussian 软件中用 B3LYP/6-31G(d) 方法做几何优化时，输入文件里的路由段和基组该怎么写？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库内容为 ABACUS 使用文档与材料计算论文，未包含 Gaussian 软件输入文件的编写细节。",
+    "question_type": "unanswerable",
+    "source_hint": "无文档依据；已确认 datas/abacus.md 中 Gaussian 仅作为 atomkit 可转换的文件格式（*.gjf）被提及，无任何 Gaussian 输入设置内容",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "VASP 的 INCAR 中 ISIF=3 与 IBRION=2 组合用于哪类计算，这两个参数分别控制什么？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库中的 ABACUS 文档仅提到 INPUT 文件可类比 VASP 的 INCAR，未介绍 VASP 的 ISIF、IBRION 等具体参数含义。",
+    "question_type": "unanswerable",
+    "source_hint": "无文档依据；已确认 datas/abacus.md 不含 ISIF/IBRION 相关内容",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "用 ABACUS 以 PBE 泛函计算体相硅（Si）的带隙，具体数值是多少 eV？",
+    "ground_truth": "根据现有资料无法回答该问题。文档给出了 Si 的晶格热导率等算例结果，但未给出 ABACUS 计算体相 Si 带隙的具体数值。",
+    "question_type": "unanswerable",
+    "source_hint": "无文档依据；已检索 datas/abacus.md 中带隙相关段落，仅有 nanoribbon 带隙有无的定性讨论，无 Si 带隙数值",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "在铜衬底上用化学气相沉积（CVD）法生长单层石墨烯，推荐的衬底温度和甲烷/氢气流量比是多少？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库为材料计算模拟（DFT/ABACUS）方向文档，未包含 CVD 实验合成工艺条件的内容。",
+    "question_type": "unanswerable",
+    "source_hint": "无文档依据；已确认 datas/abacus.md 中无 CVD、化学气相沉积、实验合成条件相关内容",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "在 LAMMPS 中调用 EAM 势函数文件时，pair_style 和 pair_coeff 命令应该怎么写？",
+    "ground_truth": "根据现有资料无法回答该问题。文档中 LAMMPS 仅作为 DP-GEN 流程中执行 MD 模拟的工具被提及，未讲解 pair_style/pair_coeff 等 LAMMPS 输入命令的用法。",
+    "question_type": "unanswerable",
+    "source_hint": "无文档依据；已确认 datas/abacus.md 不含 pair_style/pair_coeff 内容",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "如何用 VESTA 把晶体结构导出为 VASP 的 POSCAR 格式，具体操作步骤是什么？",
+    "ground_truth": "根据现有资料无法回答该问题。文档中 VESTA 仅被提到用于绘制 Wannier 函数等值面图，未介绍 VESTA 导出 POSCAR 的操作步骤。",
+    "question_type": "unanswerable",
+    "source_hint": "无文档依据；datas/abacus.md 约第 9977 行仅提及用 VESTA 画 Wannier 函数等值面，无格式导出教学",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "今天北京的天气怎么样，出门需要带伞吗？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库为材料科学计算文档，不包含天气信息。",
+    "question_type": "unanswerable",
+    "source_hint": "与知识库主题无关的问题",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "红烧肉怎么做才能肥而不腻、入口即化？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库为材料科学计算文档，不包含烹饪内容。",
+    "question_type": "unanswerable",
+    "source_hint": "与知识库主题无关的问题",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "2024 年欧洲杯足球赛的冠军是哪支球队？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库为材料科学计算文档，不包含体育赛事信息。",
+    "question_type": "unanswerable",
+    "source_hint": "与知识库主题无关的问题",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  },
+  {
+    "question": "怎么训练一只边境牧羊犬接飞盘？大概需要多长时间？",
+    "ground_truth": "根据现有资料无法回答该问题。知识库为材料科学计算文档，不包含宠物训练内容。",
+    "question_type": "unanswerable",
+    "source_hint": "与知识库主题无关的问题",
+    "gold_evidence": [],
+    "gold_status": "not_applicable",
+    "gold_verification": {
+      "method": "dataset_label",
+      "answerable": false,
+      "strict_metric_eligible": false
+    }
+  }
+]

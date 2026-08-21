@@ -1,0 +1,197 @@
+[
+  {
+    "sample_index": 36,
+    "question": "ABACUS v3.7.0 之后，新增输入参数的存储方式发生了什么核心变化？",
+    "ground_truth": "参数统一存储在 Parameter 类中，通过 PARAM.inp 进行只读访问，不再使用旧的 GlobalV 全局变量方案。",
+    "coverage": 0.349,
+    "anchor_score": 117.802172,
+    "top_candidates": [
+      {
+        "chunk_id": "83c694de4198b06aed852c7638f905ae",
+        "parent_id": "94f70561cfc8efec52b15b63dbd19740",
+        "passage": ".5ABACUS 代码存放规范 324\n7.5.1背景 324\n7.5.2代码目录． 324\n7.5.3总结 327\n7.6如何在 ABACUS 中新增一个输人参数（截至 v3.5.3） 327\n7.6.1在 input 类中申明和定义. 327\n7.6.2将 input 成员转换为全局变量 329\n7.6.3添加文档．. 330\n7.7如何在 ABACUS 中新增一个输入参数（v3.7.0后） 330\n7.7.1开发者须知 330\n7.7.2设计文档参考 334\n7.8如何在 ABACUS 中进行异构计算 338\n7.8.1前言 338\n7.8.2 管理设备类型 338\n7.8.3数据内存管理（旧) 339\n7.8.4 数据内存管理(新) 345\n7.8.5执行数学计算 346\n7.9ABACUS formatter-2.0 版本使用说明书 347\n7.9.1前言 ，： 347\n7.9",
+        "score": 0.300892
+      },
+      {
+        "chunk_id": "9959198e70a143e028b6a9dfa5868a70",
+        "parent_id": "b5a932991db6b00b36c78074236b2ca2",
+        "passage": "ABACUS 文件夹中 INPUT## 痛点:  \n每加一个参数，对于ABACUS 主代码需“翻山越岭”地添加代码，不易管理  \ninput.cpp 的变量和GlobalV 的变量大部分重复，没有必要，且容易误解  \n大量的if分支改进思路：  \n将相同的参数代码集中起来  \ninput类只实现读的功能，不存储参数，参数由另一个类存储  \nGlobalV  \n其实代码有全局变量不可怕，可怕的是全局变量会在运行中改变，而部分GlobalV就是这样，因此需要限制他人在初始化参数之后改变的行为。  \n目前很多也使用了public 的类静态成员变量，这其实和全局变量是一样的。\n## 重构设计",
+        "score": 0.267786
+      },
+      {
+        "chunk_id": "903f584feff78a0bc5b0f609b245350a",
+        "parent_id": "10c97089a9b642c499f6555c01cf6e3a",
+        "passage": "## 7.6.2将input成员转换为全局变量  \n参数参与计算一般会先转换为全局变量GlobalV，再通过传参赋值给负责计算的类（但是注意将来我们会逐步弃用GlobalV，所以这部分将来可能会变化）。  \n声明  \n路径：source/module_base/global_variable.",
+        "score": 0.241026
+      },
+      {
+        "chunk_id": "e64a9643eb19c1e54272e0202da1006e",
+        "parent_id": "81627cf5ac0a4dac11b903fe16779a1b",
+        "passage": "2 ABACUS项目的Issues标签分类  \n提交Issues 会让提交者（提交者可以是用户或者开发者）选择标签，以下是ABACUS开发者团队推荐的标签及其使用场景## 分类：  \nBug Report（开发者/用户)：用于报告代码问题，例如崩溃、错误或意外行为。  \n·Code Quality（开发者)：用于报告与代码质量相关的问题，例如代码不规范、设计不良、全局类或去全局变量使用不当、或者可维护性问题，开发者会用重构来解决相关问题。  \n·Docs (开发者/用户)：用于报告与软件文档相关的问题，例如缺少或不完整的文档，或难以理解的文档。  \nFeature Request（开发者/用户)：用于请求新功能或对现有功能进行增强。  \n·Performance（开发者/用户)：用于报告与用户角度下软件性能相关的问题，例如响应时间慢、资源使用率高或可扩展性问题。",
+        "score": 0.201435
+      },
+      {
+        "chunk_id": "02c40cbe1f1de9fd7bf403ff3ecab256",
+        "parent_id": "f039edce9b25fc266667ed5e3547c4a9",
+        "passage": "1 class TableInfo\n2{\n3 ：\n4 4 private:\n5 string table_name_； // 好- 后加下划线\n6 string tablename_； // 好\n7 static Pool<TableInfo>\\* pool_； // 好\n8 }；## 只有全局变量用全大写命名  \n在 ABACUS 中，例如NBANDS（能带数)，NLOCAL（局域轨道数目）这种全大写的变量名是全局变量，其它的不建议用大写字母给变量命名。另外，ABACUS 将通过重构或者删除的方式逐步淘汰全局变量，因此不建议增加新的全局变量。",
+        "score": 0.198958
+      }
+    ]
+  },
+  {
+    "sample_index": 56,
+    "question": "请概述 ABACUS 中 SDFT（随机波函数密度泛函理论）方法的原理和主要适用场景。",
+    "ground_truth": "SDFT 即随机波函数密度泛函理论（Stochastic Density Functional Theory），目前 ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter，WDM）。传统 KSDFT 在高温计算中需要极大数量的占据态电子波函数导致计算困难，而 SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。此外还可使用混合随机-确定性密度泛函理论 MDFT，即在 SDFT 计算中混入一部分低能 Kohn-Sham 轨道以加速结果收敛。",
+    "coverage": 0.534966,
+    "anchor_score": 910.345821,
+    "top_candidates": [
+      {
+        "chunk_id": "b17e087703862d2c18eaba11628292b5",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "passage": ".5K)，传统的Kohn-Sham密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难，而 SDFT使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。关于ABACUS 中实现 SDFT算法的细节可以参考QianruiLiuand Mohan Chen\\*,\"Plane-wave-based stochastic-deterministic density functional theory for extended systems,\" Phys.Rev",
+        "score": 0.525349
+      },
+      {
+        "chunk_id": "3a5de8250d03b8c8d62f749039cf56ae",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "passage": "1ABACUS随机波函数DFT方法使用教程## 5.1.1介绍  \n本教程旨在介绍 ABACUS 中随机波函数密度泛函理论（Stochastic Density Functional Theory,以下简称 SDFT）计算功能。目前 ABACUS 使用 SDFT主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter,简称WDM)。在进行温稠密物质计算时(温度高达数十到上千eV,1eV=11604",
+        "score": 0.41652
+      },
+      {
+        "chunk_id": "49a5a91c90828f0d0eaced8e713c3c60",
+        "parent_id": "02c2fd9c3566a6bba4f0e70bbf852a70",
+        "passage": ".Rev.B,106,125132(2022)。本教程中将会展示如何在ABACUS 计算中使用 SDFT功能，此外还会介绍混合随机波函数密度泛函理论方法使用（mixed stochastic-deterministic DFT，简称 MDFT)，即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛。",
+        "score": 0.341068
+      },
+      {
+        "chunk_id": "0bd4cbf27d6b46d56f35884065eb05fc",
+        "parent_id": "7efb0f85484a4b64c88db1e6d47b518e",
+        "passage": "## 5.1.6结尾  \n总体来讲，随机波函数密度泛函理论方法（SDFT或者MDFT）的使用与KSDFT并无太大的区别，直接运行ABACUS程序即可,但是对一些关键参数的选取会影响精度和效率(例如 nbands,nbands_sto,nche_sto,method_sto,kpar, bnd_par）。对于极端高温计算（>10eV），使用 SDFT可以大大提高计算速度，是比普通的 KSDFT 更好的选择。如果大家使用有问题，欢迎写信联系（见上)。\n## 5.",
+        "score": 0.263143
+      },
+      {
+        "chunk_id": "389ff7b8a337bf0275f710edcc1fc8d8",
+        "parent_id": "1d32ff4067804ac340d059497ed7fd64",
+        "passage": "## 4.3.2ABACUS中计算静电势具体流程  \n此功能在平面波基组、原子轨道基组下的 Kohn-ShamDFT（KSDFT)，以及随机波函数密度泛函理论和无轨道密度泛函理论中均适用。接下来，我们以平面波基组下的 KSDFT为例介绍其使用方法，如果需要使用其它的能量求解器，只需要设置 INPUT 文件里的 esolver_type、basis_type 更换能量求解器并设置相应求解器的参数即可。\n## 计算实例",
+        "score": 0.241066
+      }
+    ]
+  },
+  {
+    "sample_index": 60,
+    "question": "请概述结合 ABACUS 与 Phonopy 计算声子谱的整体流程。",
+    "ground_truth": "首先使用 ABACUS 优化结构，然后用 Phonopy 执行 phonopy -d --dim=\"2 2 2\" --abacus 产生需要计算的超胞及相应微扰构型（如 STRU-001）。接着用 ABACUS 对每个微扰构型做 calculation 为 scf 且 cal_force 为 1 的计算输出原子受力，再用 phonopy -f 指定所有微扰构型的 running_scf.log 产生 FORCE_SET 文件。最后设置 band.conf（含 ATOM_NAME、DIM、MESH、BAND 等参数）并执行 phonopy -p band.conf --abacus 得到声子谱，输出 band.yaml，再用 gnuplot 绘制声子谱。",
+    "coverage": 0.482238,
+    "anchor_score": 717.94573,
+    "top_candidates": [
+      {
+        "chunk_id": "76e1e0d2e4d5bd8004c50ca69c73c734",
+        "parent_id": "509c8129b53b28510907998753149be9",
+        "passage": "5 m 0 0 0## 用Phonopy产生需要计算的超胞及相应微扰构型  \n这里我们使用有限位移方法计算声子谱，因此需要对晶格进行扩胞并对原子位置进行微扰。执行如下命令即可生成222的扩胞并产生微扰结构：  \n```batch\n1 phonopy -d --dim=\"2 2 2\" --abacus\n```  \n这一步 phonopy 会根据晶格对称性自动产生相应个数的微扰结构。由于FCC的晶格对称性较强，因此这个例子只产生一个微扰结构：STRU-001。这里类似K 点的对称性分析，晶体结构对称性越强，所需的微扰结构就越少，对称性稍差的体系一般会产生多个微扰结构",
+        "score": 0.400427
+      },
+      {
+        "chunk_id": "d6c0d239d784d1d975bb999ad933ef19",
+        "parent_id": "cd55e19f573c8e1321c39d1655ee2f78",
+        "passage": "conf --abacus -d\n```  \n其中 setting.0855在计算中不起作用。  \n计算二阶力常数  \n调用 Phonopy软件产生需要计算的超胞及相应微扰的多个原子构型，命令如下：  \n```batch\n1 phonopy setting.conf --abacus -d\n```  \n其中 setting.conf 文件的内容为：  \n1 DIM = 2 2 2\n2 ATOM_NAME = Si  \n这里我们采用的 Si的例子只需要产生1个微扰构型 STRU-001即可，对所有微扰构型（这里Si的例子只有1个）进行 SCF计算（SCF 代表 Self-consistent field，这里代表进行密度泛函理论的电子迭代自洽计算）获得原子受力，算完之后用以下命令产生FORCE_SET文件：  \n```batch\n1 phonopy -f OUT",
+        "score": 0.374929
+      },
+      {
+        "chunk_id": "5bab7562581bfcf4125e1c1ed0cc38c1",
+        "parent_id": "9f87a97d725cc85191a898286aaae63a",
+        "passage": ".2用 Phonopy产生需要计算的超胞及相应微扰构型中的\"dim”一致。  \n·MESH:q点的采样网格。'888‘意味着采用8x8x8的q点网格，默认以（0，0，0）为中心。  \n·PRIMITIVE_AXES：输入晶胞到目标原胞的转换矩阵，并将根据原胞基矢量作为声子计算的坐标系。这里是FCC 的原胞转换矩阵。  \n·BAND：采样能带的q点路径。不同晶格的高对称点不同，具体可以使用 Seek-path，自动生成q点路径。  \n。 BAND_POINTS：给出了包括能带路径末端的采样点的数量。  \nBAND_CONNECTION：在能带交叉处辅助连接能带。",
+        "score": 0.293889
+      },
+      {
+        "chunk_id": "909b3a8090f11d8b896d30d68c59e4f7",
+        "parent_id": "cefcce8129f93c2dce5c20e6dafde4e8",
+        "passage": "7 ABACUS+Phonopy 计算声子谱## 6.7.1介绍  \n本教程旨在介绍采用ABACUS（基于 ABACUS 3.2.2版本）做密度泛函理论计算，并且结合Phonopy 软件计算声子谱的流程。此外，本教程还用到gnuplot来绘图。  \n首先推荐大家阅读以下文档中的详细说明：  \nABACUS 官方文档：Phonopy-ABACUS documentation  \nPhonopy 相关文档：ABACUS & phonopy calculation—Phonopy v.2.19.",
+        "score": 0.246214
+      },
+      {
+        "chunk_id": "bead8a70a2475ac671c3df3208e9e6ed",
+        "parent_id": "2419391ab2246357dcbe594ca61da416",
+        "passage": ".875 0.875 0.875 m 0.00\n22 0.125 0.125 0.125 m 000  \n注意：第一行Si的质量28.0855在计算中不起作用。  \n计算二阶力常数  \n调用 Phonopy软件产生需要计算的超胞及相应微扰的多个原子构型，命令如下：  \n```batch\n1 phonopy setting.",
+        "score": 0.236116
+      }
+    ]
+  },
+  {
+    "sample_index": 61,
+    "question": "请概述使用 ABACUS 的 Wannier90 接口计算最大局域化 Wannier 函数的运行流程。",
+    "ground_truth": "运行流程分为四步：第一步运行 Wannier90 软件（wannier90.x -pp）生成 nnkp 文件；第二步运行 ABACUS 执行电子结构的自洽计算，INPUT 中需指定 out_chg 为 1 输出电荷密度；第三步将 nnkp 文件放到指定位置，运行 ABACUS 执行非自洽计算，其中 init_charge 设为 file、towannier90 设为 1，且 KPT 文件中的 k 点要和 Wannier90 输入文件中的 k 点一模一样；第四步将非自洽计算生成的 mmn、amn、eig、UNK 等文件放到 Wannier90 的运行路径下，运行 Wannier90 得到最大局域化 Wannier 函数。",
+    "coverage": 0.55371,
+    "anchor_score": 499.194538,
+    "top_candidates": [
+      {
+        "chunk_id": "a2269e47ee87f3b7ad713970d8396336",
+        "parent_id": "e74ca6465b7e98dc879aa76835f0116e",
+        "passage": "## 运行流程  \n这里给出了运行 ABACUS+wannier90的一个脚本文件，结合 examples/interface_wannier90/中的例子讲解结合ABACUS 和Wannier90计算最局域化Wannier函数的完整运行流程，这里的流程对平面波基组和原子轨道基组均适用，原子轨道基组的NSCF会比平面波基组慢一些。  \nexport W90=wannier90.x\n2 export ABACUS=abacus\n3 export NP=12\n4\n5 # 1．运行 Wannier90 软件，生成 nnkp 文件；\n6 cd wannier  \n```shell\n7 mpirun -np $NP $W90 -pp diamond.win\n8\n9#2．运行 ABACUS 软件，执行电子结构的自洽计算;\n10 cd .",
+        "score": 0.368391
+      },
+      {
+        "chunk_id": "aa0f103e0dd73e65f6b495d560e7fcb5",
+        "parent_id": "5fa05855ba4b7d8b9f2d1ebccd516448",
+        "passage": ".非自洽计算：需要注意INPUT 中需要把init_charge 参数设置为file，即读取文件中的电荷密度；一定要指定towannier90 参数为1，同时指定nnkpfile 参数为Wannier90产生的 nnkp 文件的地址；另外需要注意 KPT文件中的布里渊区k点要和Wannier90输入文件中的k点一模一样，所以最好手动输入K点坐标指定;  \n3．非自洽计算：INPUT 中有 out_wannier_mmn、out_wannier_amn、out_wanier_eig、out_wannier_unk、out_wannier_wvfn_formatted五个控制 Wannier90 相关文件输出的参数，默认值都是1，其中out_wannier_eig 和out_wannier_mmn 是必须打开的，out_wannier_unk 和out_wannier_amn 在需要使用",
+        "score": 0.271442
+      },
+      {
+        "chunk_id": "9ba8eab6abf71a08330c124b2a221e06",
+        "parent_id": "6c254647b04a92b05d7c1bf96d67e340",
+        "passage": "。2008年，用于产生MLWF的Wannier90 软件发布，并在随后几年获得了广泛的应用。  \n本教程分为两部分，第一部分最大局域化Wannier函数方法简介介绍最大局域化Wannier 函数的算法，主要介绍1997年和 2001年的两篇 PRB 文章中提出的优化算法，侧重物理与算法原理；第二部分即本文档，是Wannier90 软件的ABACUS 接口说明，主要介绍如何使用ABACUS 计算Wannier90需要的输入文件，侧重具体软件使用。",
+        "score": 0.269912
+      },
+      {
+        "chunk_id": "94c0eab1da3d61194e4638b22d2f3b77",
+        "parent_id": "e74ca6465b7e98dc879aa76835f0116e",
+        "passage": ".out\n20\n21#4．将非自洽计算生成的 Wannier90 所需要的文件（mmn、amn、eig、UNK）放在 Wannier90 的运行路径下，运行 Wannier90 软\n22 cd ../wannier\n23 cP/ABACUS/OUT.ABACUS/diamond.amn../ABACUS/OUT.ABACUS/diamond.mn../ABACUS/OUT.ABACUS/diamond.eig../ABACUS\n24 mpirun -np $NP $W9O diamond.win\n```  \n在这个例子中，Wannier90 的输人文件 diamond.",
+        "score": 0.264026
+      },
+      {
+        "chunk_id": "753b9b8bad01068633672b106cc2b174",
+        "parent_id": "e74ca6465b7e98dc879aa76835f0116e",
+        "passage": ".win\n8\n9#2．运行 ABACUS 软件，执行电子结构的自洽计算;\n10 cd ../ABACUS\n11 cp INPUT-scf INPUT\n12 cp KPT-scf KPT\n13 mpirun -np $NP $ABACUS >> scf.out\n14\n15 #3．将 nnkp 文件放在 ABACUS 的非自洽计算的 INPUT 文件中指定的位置，运行 ABACUS 软件，执行非自洽计算；\n16 cp ../wannier/diamond.nnkp .\n17 cp INPUT-nscf INPUT\n18 cp KPT-nscf KPT\n19 mpirun -np $NP $ABACUS >> nscf",
+        "score": 0.236384
+      }
+    ]
+  },
+  {
+    "sample_index": 62,
+    "question": "请总结 ABACUS 分子动力学模拟的输出文件以及 MD 续算功能的使用方法。",
+    "ground_truth": "ABACUS 的 MD 模拟会产生 3 类输出文件：结构文件 STRU_MD_$istep（由 md_restartfreq 控制输出频率，格式与 STRU 相同）、续算文件 Restart_md.dat 和信息文件 MD_dump（由 md_dumpfreq 控制，输出 MD 步数、晶格常数、原子位置、受力、速度等信息）。如果 ABACUS 运行达到指定的 MD 步数或者计算中断，可以通过 MD 续算功能继续之前的 MD 计算：将 md_restart 参数设为 1，其他参数不变，ABACUS 会读取 Restart_md.dat 获取当前 MD 步数 istep 及恒温器、恒压器等信息，再根据 istep 读取相应的结构文件 STRU_MD_$istep 进行续算。",
+    "coverage": 0.459725,
+    "anchor_score": 505.161185,
+    "top_candidates": [
+      {
+        "chunk_id": "ac4fba13b0eac0106b119b68d28c69f5",
+        "parent_id": "3f1a009ada9f0ffb13d6247e7ce9be46",
+        "passage": "001122226311\n```## 2 MD续算功能  \n如果 ABACUS 运行达到指定的MD步数，或者计算中断，可以通过MD续算功能继续之前的MD 计算。以上一个INPUT 文件为例：  \n1 INPUT_PARAMETERS\n2 #Parameters (General)\n3 suffix autotest\n4 calculation md\n5 pseudo_dir ../../PP_ORB\n6\n7 esolver_type dp\n8 pot_file ../../P_ORB/A1-SCAN",
+        "score": 0.300675
+      },
+      {
+        "chunk_id": "7450da2be5e2096f6ce91b0c3523f830",
+        "parent_id": "777b13c78f3055b3c8b23cc249e05942",
+        "passage": ".3\n22\n23 init_vel 1  \n这些参数在ABACUS线上文档中均有说明，在这里再进行简单概述：  \ncalculation：设置ABACUS 计算类型，做分子动力学模拟请设置为 md  \nesolver_type：给定原子位置后的能量求解方式，默认 Kohn-Sham 密度泛函理论（ksdft），还可以设置LJ势  \n(lj）或者深度势能（dp)，这里设置为dp  \nmd_type：MD 算法种类，例如选择不同的系综 nve、nvt、npt 等  \nmd_nstep：MD 模拟的总步数  \nmd_dt：MD 计算每一步的时间步长（单位是fs)，与md_nstep 共同决定MD 总时长  \nmd_tfirst:MD系统的初始温度(单位是K)  \npot_file:DP 模型文件路径  \nmd_dumpfreq：MD 输出文件MD_dump 中原子以及晶胞信息的输出频率",
+        "score": 0.260435
+      },
+      {
+        "chunk_id": "f3f836fa22cf0730733209eadb6a266c",
+        "parent_id": "3f1a009ada9f0ffb13d6247e7ce9be46",
+        "passage": ".dat文件，从中获取当前 MD 步数istep 以及续算所需的其他参数如恒温器以及恒压器的信息，根据istep 从OUT.\\$sufix/STRU/文件夹中读取相应的结构文件 STRU_MD_\\$istep，之后就可以进行MD 续算了。",
+        "score": 0.256065
+      },
+      {
+        "chunk_id": "e72b8d331d33b9ba8c82e95f091bdd50",
+        "parent_id": "6023a9eff65b367a10e864560d4b9913",
+        "passage": "028</td></tr><tr><td>21 msst_vis</td><td>0.028</td></tr><tr><td>21 msst_vis</td><td>0.3</td></tr><tr><td>22</td><td></td></tr><tr><td>init_vel</td><td></td></tr><tr><td></td><td>1</td></tr></table>  \nesolver_type：设置为dp\npot_file:DP模型文件路径\nmd_dumpfreq：MD 输出文件MD_dump 中原子以及晶胞信息的输出频率\nmd_restartfreq：结构文件 STRU_MD_\\$istep 的输出频率，MD 续算文件Restart_md.\ndat的更新频率## 三、MD输出和续算功能",
+        "score": 0.252666
+      },
+      {
+        "chunk_id": "baa8b3d4d227c172a23356e39a51f8c4",
+        "parent_id": "c32cb1078f8c0f05abaaddc268312faa",
+        "passage": "## 1.MD 输出文件  \nABACUS 的MD 模拟会产生3类输出文件：结构文件 STRU_MD_\\$istep，续算文件Restart_md.dat，信息文件 MD_dump。",
+        "score": 0.240032
+      }
+    ]
+  }
+]
