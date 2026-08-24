@@ -10,6 +10,7 @@ import psycopg
 BASE_TABLES = (
     "rag_documents",
     "rag_document_versions",
+    "rag_artifacts",
     "rag_ingest_tasks",
     "rag_file_states",
     "rag_kb_state",
@@ -29,6 +30,7 @@ def normalize_conn_str(conn_str: str) -> str:
 def _ddl_statements(table_prefix: str = "") -> list[str]:
     docs = t("rag_documents", table_prefix)
     versions = t("rag_document_versions", table_prefix)
+    artifacts = t("rag_artifacts", table_prefix)
     tasks = t("rag_ingest_tasks", table_prefix)
     files = t("rag_file_states", table_prefix)
     kb = t("rag_kb_state", table_prefix)
@@ -58,6 +60,8 @@ def _ddl_statements(table_prefix: str = "") -> list[str]:
                 -- staging → validated → active → retired；staging/validated → failed
             parent_count    INTEGER NOT NULL DEFAULT 0,
             child_count     INTEGER NOT NULL DEFAULT 0,
+            artifact_count  INTEGER NOT NULL DEFAULT 0,
+            visual_count    INTEGER NOT NULL DEFAULT 0,
             failure_stage   TEXT,
             failure_reason  TEXT,
             created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -75,6 +79,57 @@ def _ddl_statements(table_prefix: str = "") -> list[str]:
         f"""
         CREATE INDEX IF NOT EXISTS {table_prefix}rag_versions_status_idx
         ON {versions} (status)
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {artifacts} (
+            artifact_id       TEXT PRIMARY KEY,
+            document_id       TEXT NOT NULL,
+            version_id        TEXT NOT NULL,
+            artifact_type     TEXT NOT NULL CHECK (artifact_type IN ('figure', 'table')),
+            ordinal           INTEGER NOT NULL,
+            page_start        INTEGER,
+            page_end          INTEGER,
+            bbox              JSONB,
+            caption           TEXT NOT NULL DEFAULT '',
+            nearby_context    TEXT NOT NULL DEFAULT '',
+            searchable_text   TEXT NOT NULL,
+            structured_content TEXT NOT NULL DEFAULT '',
+            asset_uri         TEXT,
+            content_hash      TEXT NOT NULL,
+            parser            TEXT NOT NULL DEFAULT 'mineru',
+            visual_description JSONB,
+            visual_summary    TEXT NOT NULL DEFAULT '',
+            visual_model      TEXT,
+            visual_status     TEXT NOT NULL DEFAULT 'not_requested'
+                              CHECK (visual_status IN (
+                                  'not_requested', 'completed', 'failed', 'skipped_limit'
+                              )),
+            visual_confidence DOUBLE PRECISION,
+            visual_prompt_version TEXT,
+            visual_content_hash TEXT,
+            visual_error_code TEXT,
+            visual_asset_uri  TEXT,
+            panel_assets      JSONB NOT NULL DEFAULT '[]'::jsonb,
+            readability_status TEXT NOT NULL DEFAULT 'unknown',
+            legend_mapping_status TEXT NOT NULL DEFAULT 'not_applicable',
+            numeric_fact_status TEXT NOT NULL DEFAULT 'not_applicable',
+            verified_key_values JSONB NOT NULL DEFAULT '[]'::jsonb,
+            status            TEXT NOT NULL DEFAULT 'staging'
+                              CHECK (status IN ('staging', 'active', 'retired')),
+            created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+            FOREIGN KEY (document_id, version_id)
+                REFERENCES {versions}(document_id, version_id) ON DELETE CASCADE,
+            UNIQUE (document_id, version_id, artifact_type, ordinal)
+        )
+        """,
+        f"""
+        CREATE INDEX IF NOT EXISTS {table_prefix}rag_artifacts_version_idx
+        ON {artifacts} (document_id, version_id, status)
+        """,
+        f"""
+        CREATE INDEX IF NOT EXISTS {table_prefix}rag_artifacts_type_status_idx
+        ON {artifacts} (artifact_type, status)
         """,
         # ── 5.3 rag_ingest_tasks：持久化任务队列 ──────────────────
         f"""
@@ -141,6 +196,31 @@ def _ddl_statements(table_prefix: str = "") -> list[str]:
         f"""
         ALTER TABLE {tasks}
         ADD COLUMN IF NOT EXISTS lease_generation BIGINT NOT NULL DEFAULT 0
+        """,
+        f"""
+        ALTER TABLE {versions}
+        ADD COLUMN IF NOT EXISTS artifact_count INTEGER NOT NULL DEFAULT 0
+        """,
+        f"""
+        ALTER TABLE {versions}
+        ADD COLUMN IF NOT EXISTS visual_count INTEGER NOT NULL DEFAULT 0
+        """,
+        f"""
+        ALTER TABLE {artifacts}
+        ADD COLUMN IF NOT EXISTS visual_description JSONB,
+        ADD COLUMN IF NOT EXISTS visual_summary TEXT NOT NULL DEFAULT '',
+        ADD COLUMN IF NOT EXISTS visual_model TEXT,
+        ADD COLUMN IF NOT EXISTS visual_status TEXT NOT NULL DEFAULT 'not_requested',
+        ADD COLUMN IF NOT EXISTS visual_confidence DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS visual_prompt_version TEXT,
+        ADD COLUMN IF NOT EXISTS visual_content_hash TEXT,
+        ADD COLUMN IF NOT EXISTS visual_error_code TEXT,
+        ADD COLUMN IF NOT EXISTS visual_asset_uri TEXT,
+        ADD COLUMN IF NOT EXISTS panel_assets JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS readability_status TEXT NOT NULL DEFAULT 'unknown',
+        ADD COLUMN IF NOT EXISTS legend_mapping_status TEXT NOT NULL DEFAULT 'not_applicable',
+        ADD COLUMN IF NOT EXISTS numeric_fact_status TEXT NOT NULL DEFAULT 'not_applicable',
+        ADD COLUMN IF NOT EXISTS verified_key_values JSONB NOT NULL DEFAULT '[]'::jsonb
         """,
     ]
 

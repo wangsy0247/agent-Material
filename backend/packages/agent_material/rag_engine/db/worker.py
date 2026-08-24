@@ -67,6 +67,11 @@ def validate_ingest_chunk_quality(chunks) -> list[str]:
         for meta in pdf_metadata
     ):
         problems.append("PDF 包含扫描页但未路由到 OCR 能力解析器")
+    from agent_material.rag_engine.indexing.structured_artifacts import (
+        validate_artifact_documents,
+    )
+
+    problems.extend(validate_artifact_documents(chunks))
     return problems
 
 
@@ -521,6 +526,7 @@ class BackgroundWorker:
         document_id = versioning.compute_document_id(source, kb_id=multi_index.base_name)
         version_id = versioning.compute_version_id(content_hash)
         small_col, large_col = self._pg_collections(multi_index)
+        visual_col = getattr(multi_index, "visual_name", None)
         version_repo = self._version_repo
         log_ctx = {
             "task_id": task["task_id"],
@@ -596,9 +602,24 @@ class BackgroundWorker:
             self._task_stage = "pipeline"
             raise ValueError(reason)
 
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            artifact_rows_from_documents,
+        )
+        from agent_material.rag_engine.indexing.visual_vector_index import (
+            build_visual_index_documents,
+        )
+
+        artifact_rows = artifact_rows_from_documents(chunks)
+        expected_visual_count = (
+            len(build_visual_index_documents(chunks)) if visual_col else 0
+        )
+
         # stage=store：清 staging 残留（失败抛错终止）→ 确定性写入
         def _store():
             multi_index.delete_by_version(document_id, version_id)
+            version_repo.replace_staging_artifacts(
+                document_id, version_id, artifact_rows
+            )
             return multi_index.insert(chunks, source=source, versioned=True)
 
         # stage=validate：SQL 校验 + 预期/实际父子块数量比对（Spec 6.6）
@@ -619,21 +640,36 @@ class BackgroundWorker:
                 problems.append(
                     f"子块数量不符: 预期 {expected_children} 实际 {stats.get('child_count')}"
                 )
+            if stats.get("visual_count", 0) != expected_visual_count:
+                problems.append(
+                    "图片向量数量不符: "
+                    f"预期 {expected_visual_count} 实际 {stats.get('visual_count', 0)}"
+                )
+            artifacts_ok, artifact_stats = version_repo.validate_artifacts(
+                document_id, version_id, len(artifact_rows)
+            )
+            if not artifacts_ok:
+                problems.append(f"图表实体校验未通过: {artifact_stats}")
             if problems:
                 reason = "; ".join(problems)
                 version_repo.mark_failed(document_id, version_id, "validate", reason)
                 raise ValueError(reason)
             version_repo.mark_validated(
-                document_id, version_id, stats["parent_count"], stats["child_count"]
+                document_id,
+                version_id,
+                stats["parent_count"],
+                stats["child_count"],
+                artifact_count=len(artifact_rows),
+                visual_count=expected_visual_count,
             )
-            return stats
+            return {**stats, **artifact_stats}
 
         # stage=activate：单事务翻牌（内含 fencing 校验、行数校验、任务
         # completed）；失败整体回滚（仓储保证），任务进重试
         def _activate():
             old = version_repo.activate_version(
                 document_id, version_id, source, content_hash,
-                file_mtime, file_size, small_col, large_col,
+                file_mtime, file_size, small_col, large_col, visual_col,
                 task_id=task["task_id"], worker_id=self._worker_id,
                 lease_generation=self._lease_generation,
             )
@@ -725,6 +761,7 @@ class BackgroundWorker:
         multi_index = self._get_multi_index()
         document_id = versioning.compute_document_id(source, kb_id=multi_index.base_name)
         small_col, large_col = self._pg_collections(multi_index)
+        visual_col = getattr(multi_index, "visual_name", None)
         log_ctx = {
             "task_id": task["task_id"],
             "document_id": document_id,
@@ -744,7 +781,7 @@ class BackgroundWorker:
                 extra={**log_ctx, "wait_ms": (time.time() - lock_t0) * 1000},
             )
             result = self._version_repo.delete_document(
-                document_id, small_col, large_col,
+                document_id, small_col, large_col, visual_col,
                 task_id=task["task_id"], worker_id=self._worker_id,
                 lease_generation=self._lease_generation,
             )

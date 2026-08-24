@@ -19,7 +19,10 @@ DEFAULT_RRF_K = 60
 
 
 def doc_fusion_key(doc: Document) -> str:
-    """返回文档的稳定去重键：优先 chunk_id，否则内容 sha256。"""
+    """返回稳定去重键：图表按 artifact_id，其余按 chunk_id。"""
+    artifact_id = doc.metadata.get("artifact_id", "")
+    if artifact_id:
+        return f"artifact:{artifact_id}"
     chunk_id = doc.metadata.get("chunk_id", "")
     if chunk_id:
         return str(chunk_id)
@@ -47,11 +50,30 @@ def weighted_rrf(
     original_rank: dict[str, int] = {}
 
     for branch_index, (branch_docs, weight) in enumerate(rankings):
+        seen_in_branch: set[str] = set()
         for rank, doc in enumerate(branch_docs, start=1):
             key = doc_fusion_key(doc)
-            scores[key] = scores.get(key, 0.0) + weight / (rrf_k + rank)
             if key not in docs:
                 docs[key] = doc
+            else:
+                _merge_retrieval_metadata(docs[key], doc)
+            # 同一通道中的 main/panel 或重复 chunk 只贡献一次，避免单路刷分。
+            if key in seen_in_branch:
+                continue
+            seen_in_branch.add(key)
+            contribution = weight / (rrf_k + rank)
+            scores[key] = scores.get(key, 0.0) + contribution
+            channel = str(doc.metadata.get("retrieval_channel") or "")
+            if channel:
+                channels = list(docs[key].metadata.get("retrieval_channels") or [])
+                if channel not in channels:
+                    channels.append(channel)
+                docs[key].metadata["retrieval_channels"] = channels
+                contributions = dict(
+                    docs[key].metadata.get("rrf_channel_contributions") or {}
+                )
+                contributions[channel] = contributions.get(channel, 0.0) + contribution
+                docs[key].metadata["rrf_channel_contributions"] = contributions
             if branch_index == 0 and key not in original_rank:
                 original_rank[key] = rank
 
@@ -67,3 +89,39 @@ def weighted_rrf(
         doc.metadata["rrf_score"] = scores[key]
         fused.append(doc)
     return fused
+
+
+def _merge_retrieval_metadata(target: Document, incoming: Document) -> None:
+    """Merge cross-modal evidence without replacing the canonical text document."""
+
+    channel = str(incoming.metadata.get("retrieval_channel") or "")
+    channels = list(target.metadata.get("retrieval_channels") or [])
+    if channel and channel not in channels:
+        channels.append(channel)
+    if channels:
+        target.metadata["retrieval_channels"] = channels
+
+    if channel != "visual":
+        return
+    panel_id = incoming.metadata.get("panel_id")
+    if panel_id and not target.metadata.get("matched_panel_id"):
+        target.metadata["matched_panel_id"] = panel_id
+    target.metadata.setdefault(
+        "matched_visual_entity_id", incoming.metadata.get("visual_entity_id")
+    )
+    target.metadata.setdefault(
+        "matched_visual_asset_uri", incoming.metadata.get("visual_asset_uri")
+    )
+    target.metadata.setdefault(
+        "matched_evidence_bbox", incoming.metadata.get("evidence_bbox")
+    )
+    target.metadata.setdefault(
+        "matched_evidence_bbox_coordinate_space",
+        incoming.metadata.get("evidence_bbox_coordinate_space")
+        or incoming.metadata.get("bbox_coordinate_space"),
+    )
+    if incoming.metadata.get("visual_similarity") is not None:
+        current = target.metadata.get("visual_similarity")
+        incoming_score = incoming.metadata["visual_similarity"]
+        if current is None or incoming_score > current:
+            target.metadata["visual_similarity"] = incoming_score

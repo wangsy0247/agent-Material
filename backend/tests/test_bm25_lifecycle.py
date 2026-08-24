@@ -867,17 +867,13 @@ class _SlowFakeService:
 
 
 class TestSseCancel:
-    @pytest.mark.parametrize("use_new", [True, False])
-    def test_cancel_stops_consume_thread(self, monkeypatch, use_new):
+    def test_cancel_stops_consume_thread(self, monkeypatch):
         """取消后 _consume_stream 因取消标志退出：生成提前终止、
         底层 stream 被关闭、cancelled 帧语义保留。"""
         from app.gateway.routers import rag as rag_router
 
         service = _SlowFakeService()
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: service)
-        monkeypatch.setattr(
-            rag_router, "_single_retrieval_enabled", lambda: use_new
-        )
 
         async def main():
             frames: list[str] = []
@@ -913,7 +909,6 @@ class TestSseCancel:
 
         service = _SlowFakeService(total=3, delay=0.01)
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: service)
-        monkeypatch.setattr(rag_router, "_single_retrieval_enabled", lambda: True)
 
         async def main():
             frames: list[str] = []
@@ -955,7 +950,8 @@ class TestKbStateConsistency:
         _insert_chunk(
             CONN_STR, LARGE, "父块内容",
             {
-                "source": "manual://clean", "parent_id": "p-1", "chunk_id": "p-1",
+                "source": "manual://clean", "parent_id": "p-1",
+                "chunk_type": "parent",
                 "document_id": "d-1", "version_id": "v-1", "is_active": True,
             },
         )
@@ -963,6 +959,7 @@ class TestKbStateConsistency:
             CONN_STR, SMALL, "子块内容",
             {
                 "chunk_id": "c-1",
+                "chunk_type": "child",
                 "source": "manual://clean",
                 "parent_id": "p-1",
                 "document_id": "d-1",

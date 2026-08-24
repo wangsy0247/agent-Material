@@ -1,4 +1,4 @@
-"""LangFuse 可观测性配置模块 — 替代 LangSmith。
+"""LangFuse 可观测性配置模块。
 
 默认使用云端 LangFuse（https://cloud.langfuse.com），
 提供 LangChain Callback Handler 自动追踪 LLM / Chain / Agent 调用。
@@ -51,7 +51,11 @@ def setup_langfuse(
     """
     global _handler, _client, _enabled
 
-    if not enabled:
+    env_enabled = os.environ.get("LANGFUSE_ENABLED", "true").strip().lower()
+    if not enabled or env_enabled in {"0", "false", "no", "off"}:
+        _handler = None
+        _client = None
+        _enabled = False
         logger.info("[LangFuse] env LANGFUSE_ENABLED=false，跳过初始化")
         return False
 

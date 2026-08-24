@@ -152,7 +152,10 @@ class TopKRetriever(BaseRetriever):
 
 # 可选依赖：BM25
 try:
-    from langchain_community.retrievers import BM25Retriever
+    from agent_material.rag_engine.bm25_retriever import (
+        MaterialBM25Retriever as BM25Retriever,
+        build_material_bm25_retriever,
+    )
 
     BM25_AVAILABLE = True
 except ImportError:
@@ -333,7 +336,12 @@ class VectorStore:
 
         # 2. BM25 关键词检索器
         if BM25_AVAILABLE and self.all_documents:
-            self._bm25_retriever = BM25Retriever.from_documents(self.all_documents, k=k)
+            self._bm25_retriever = build_material_bm25_retriever(
+                self.all_documents,
+                k=k,
+                config=vector_store_config,
+                retriever_cls=BM25Retriever,
+            )
             logger.info(f"BM25 检索器初始化成功，文档数：{len(self.all_documents)}")
         else:
             self._bm25_retriever = None
@@ -796,7 +804,12 @@ class VectorStore:
         try:
             k = vector_store_config.get("k", 10)
             new_bm25 = (
-                BM25Retriever.from_documents(docs, k=k)
+                build_material_bm25_retriever(
+                    docs,
+                    k=k,
+                    config=vector_store_config,
+                    retriever_cls=BM25Retriever,
+                )
                 if BM25_AVAILABLE and docs
                 else None
             )
@@ -964,6 +977,12 @@ class VectorStore:
         """显式重试 failed 索引任务。"""
         return self._get_indexing_service().retry_failed_task(task_id)
 
+    def get_active_artifact(self, artifact_id: str) -> dict | None:
+        """读取 active 版本的图表元数据，供受认证的资源接口使用。"""
+        return self._get_pg_repos()["versions"].get_artifact(
+            artifact_id, active_only=True
+        )
+
     def get_kb_state(self) -> dict | None:
         """知识库 revision 状态（active_revision/bm25_revision 可观测）。"""
         kb_id = self._kb_id()
@@ -1057,6 +1076,7 @@ class VectorStore:
                 orphan = cur.fetchone()[0]
 
             # ③ 所有参与版本化检索的行都必须具备完整身份与显式 active 标记。
+            # chunk_id 是子块身份，父块只要求 parent_id；不能把合法父块误报为缺口。
             cur.execute(
                 """
                 SELECT COUNT(*)
@@ -1067,11 +1087,16 @@ class VectorStore:
                     NULLIF(e.cmetadata->>'source', '') IS NULL OR
                     NULLIF(e.cmetadata->>'document_id', '') IS NULL OR
                     NULLIF(e.cmetadata->>'version_id', '') IS NULL OR
-                    NULLIF(e.cmetadata->>'chunk_id', '') IS NULL OR
+                    NULLIF(e.cmetadata->>'parent_id', '') IS NULL OR
+                    (
+                      c.name = %s
+                      AND COALESCE(e.cmetadata->>'chunk_type', 'child') <> 'parent'
+                      AND NULLIF(e.cmetadata->>'chunk_id', '') IS NULL
+                    ) OR
                     NOT (e.cmetadata ? 'is_active')
                   )
                 """,
-                (names,),
+                (names, small),
             )
             metadata_gaps = cur.fetchone()[0]
             cur.close()

@@ -27,7 +27,10 @@ from agent_material.utils.logger import logger
 
 # 可选依赖
 try:
-    from langchain_community.retrievers import BM25Retriever
+    from agent_material.rag_engine.bm25_retriever import (
+        MaterialBM25Retriever as BM25Retriever,
+        build_material_bm25_retriever,
+    )
 
     BM25_AVAILABLE = True
 except ImportError:
@@ -91,6 +94,7 @@ class MultiGranularityRetriever(BaseRetriever):
         self._bm25_retriever = None
         self._vector_retriever = None  # HyDE 模式需要访问内部的向量检索器
         self._compressor = None  # BM25 原子刷新时复用
+        self._visual_index = None
         self._lock = threading.Lock()  # 原子替换检索器链
 
     def _get_relevant_documents(
@@ -200,8 +204,11 @@ class MultiGranularityRetriever(BaseRetriever):
 
         # BM25
         if BM25_AVAILABLE and self.all_documents:
-            self._bm25_retriever = BM25Retriever.from_documents(
-                self.all_documents, k=k
+            self._bm25_retriever = build_material_bm25_retriever(
+                self.all_documents,
+                k=k,
+                config=vector_store_config,
+                retriever_cls=BM25Retriever,
             )
         else:
             self._bm25_retriever = None
@@ -315,7 +322,12 @@ class MultiGranularityRetriever(BaseRetriever):
             k = vector_store_config.get("k", 10)
             # 锁外构建新实例
             if BM25_AVAILABLE and docs:
-                new_bm25 = BM25Retriever.from_documents(docs, k=k)
+                new_bm25 = build_material_bm25_retriever(
+                    docs,
+                    k=k,
+                    config=vector_store_config,
+                    retriever_cls=BM25Retriever,
+                )
             else:
                 new_bm25 = None
 
@@ -440,6 +452,9 @@ class MultiGranularityRetriever(BaseRetriever):
         query: str,
         k: int | None = None,
         hyde_embedding: list[float] | None = None,
+        *,
+        enable_vector: bool = True,
+        enable_bm25: bool = True,
     ) -> tuple[list[Document], list[Document]]:
         """请求级子chunk召回（ONL-005/ONL-008）：返回 (向量路结果, BM25 路结果)。
 
@@ -451,6 +466,8 @@ class MultiGranularityRetriever(BaseRetriever):
             query: 查询文本（BM25 路与无 HyDE 时的向量路使用）
             k: 各路召回数量上限，None 时用实例默认
             hyde_embedding: 请求级 HyDE 假设文档 embedding（仅向量路使用）
+            enable_vector: 是否实际执行向量召回（用于可复现消融）
+            enable_bm25: 是否实际执行 BM25 召回（用于可复现消融）
         """
         if not self._retrievers_initialized:
             self._init_retrievers()
@@ -458,7 +475,8 @@ class MultiGranularityRetriever(BaseRetriever):
         k = k or self._k
 
         # ── 向量路 ──
-        if hyde_embedding is not None:
+        vector_docs: list[Document] = []
+        if enable_vector and hyde_embedding is not None:
             # HyDE：直接用预计算 embedding 检索（active 过滤与阈值逻辑
             # 与 VectorSimilarityThresholdRetriever 保持一致）
             search_filter = None
@@ -476,18 +494,31 @@ class MultiGranularityRetriever(BaseRetriever):
                     vector_docs.append(doc)
             if not vector_docs and docs_with_scores:
                 vector_docs.append(docs_with_scores[0][0])  # Top-1 兜底
-        else:
+        elif enable_vector:
             vector_docs = self._vector_retriever.search(query)
 
         # ── BM25 路（失败降级为空列表，由调用方记 degradation）──
         bm25_docs: list[Document] = []
-        if self._bm25_retriever is not None:
+        if enable_bm25 and self._bm25_retriever is not None:
             try:
                 bm25_docs = self._bm25_retriever.invoke(query)
             except Exception as e:
                 logger.error(f"[MultiRetriever] BM25 检索失败（降级 vector-only）: {e}")
 
         return vector_docs, bm25_docs
+
+    def search_visual(self, query: str, k: int | None = None) -> list[Document]:
+        """使用独立多模态 collection 执行文本到图片/Panel 的跨模态召回。"""
+        from agent_material.rag_engine.indexing.visual_vector_index import (
+            VisualVectorIndex,
+            visual_embedding_enabled,
+        )
+
+        if not visual_embedding_enabled():
+            return []
+        if self._visual_index is None:
+            self._visual_index = VisualVectorIndex()
+        return self._visual_index.search(query, k=k)
 
     def set_hyde_embedding(self, embedding: list[float] | None) -> None:
         """设置/清除 HyDE embedding 覆盖到内部的向量检索器。

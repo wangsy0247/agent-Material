@@ -1,0 +1,16 @@
+{
+  "target_kb": "agent_eval",
+  "target_collections": [
+    "agent_eval_small",
+    "agent_eval_large"
+  ],
+  "target_source": "abacus.pdf",
+  "document_id": "99fcc0bc192525cf14fe92357330dbcc",
+  "version_id": "1d607ca9a07e3007bfc9abcb4b68e0be",
+  "content_hash": "1d607ca9a07e3007bfc9abcb4b68e0be7400b549de3aba3c70f02eb917530f6b",
+  "child_count": 2154,
+  "parent_count": 976,
+  "source_collection_prefix": "agent",
+  "source_document_id": "d81a4f94edc6f11c12cf480a15bea91f",
+  "source_version_id": "legacy-5778863cf9462f6f"
+}

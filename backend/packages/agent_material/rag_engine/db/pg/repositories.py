@@ -405,6 +405,7 @@ class VersionRepository:
         self._conn_str = normalize_conn_str(conn_str)
         self._docs = t("rag_documents", table_prefix)
         self._versions = t("rag_document_versions", table_prefix)
+        self._artifacts = t("rag_artifacts", table_prefix)
         self._files = t("rag_file_states", table_prefix)
         self._kb = t("rag_kb_state", table_prefix)
         self._tasks = t("rag_ingest_tasks", table_prefix)
@@ -537,12 +538,144 @@ class VersionRepository:
             )
             conn.commit()
 
+    def replace_staging_artifacts(
+        self, document_id: str, version_id: str, artifacts: list[dict]
+    ) -> int:
+        """幂等替换目标版本的 staging 图表实体。"""
+        with self._connect() as conn, conn.transaction():
+            version = conn.execute(
+                f"""
+                SELECT status FROM {self._versions}
+                WHERE document_id = %s AND version_id = %s
+                FOR UPDATE
+                """,
+                (document_id, version_id),
+            ).fetchone()
+            if version is None or version["status"] not in {"staging", "failed", "validated"}:
+                raise ValueError(
+                    f"版本状态不允许写入图表: {document_id}/{version_id} "
+                    f"status={version['status'] if version else 'missing'}"
+                )
+            conn.execute(
+                f"DELETE FROM {self._artifacts} WHERE document_id = %s AND version_id = %s",
+                (document_id, version_id),
+            )
+            for artifact in artifacts:
+                conn.execute(
+                    f"""
+                    INSERT INTO {self._artifacts} (
+                        artifact_id, document_id, version_id, artifact_type, ordinal,
+                        page_start, page_end, bbox, caption, nearby_context,
+                        searchable_text, structured_content, asset_uri, content_hash,
+                        parser, visual_description, visual_summary, visual_model,
+                        visual_status, visual_confidence, visual_prompt_version,
+                        visual_content_hash, visual_error_code, visual_asset_uri,
+                        panel_assets, readability_status, legend_mapping_status,
+                        numeric_fact_status, verified_key_values, status
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, 'staging'
+                    )
+                    """,
+                    (
+                        artifact["artifact_id"], document_id, version_id,
+                        artifact["artifact_type"], artifact["ordinal"],
+                        artifact.get("page_start"), artifact.get("page_end"),
+                        Jsonb(artifact.get("bbox")) if artifact.get("bbox") is not None else None,
+                        artifact.get("caption", ""),
+                        artifact.get("nearby_context", ""),
+                        artifact["searchable_text"],
+                        artifact.get("structured_content", ""),
+                        artifact.get("asset_uri"), artifact.get("content_hash", ""),
+                        artifact.get("parser", "mineru"),
+                        Jsonb(artifact.get("visual_description"))
+                        if artifact.get("visual_description") is not None
+                        else None,
+                        artifact.get("visual_summary", ""),
+                        artifact.get("visual_model"),
+                        artifact.get("visual_status", "not_requested"),
+                        artifact.get("visual_confidence"),
+                        artifact.get("visual_prompt_version"),
+                        artifact.get("visual_content_hash"),
+                        artifact.get("visual_error_code"),
+                        artifact.get("visual_asset_uri"),
+                        Jsonb(artifact.get("panel_assets") or []),
+                        artifact.get("readability_status", "unknown"),
+                        artifact.get("legend_mapping_status", "not_applicable"),
+                        artifact.get("numeric_fact_status", "not_applicable"),
+                        Jsonb(artifact.get("verified_key_values") or []),
+                    ),
+                )
+            return len(artifacts)
+
+    def validate_artifacts(
+        self, document_id: str, version_id: str, expected_count: int
+    ) -> tuple[bool, dict]:
+        """校验 staging 图表数量、身份字段和逻辑资源 URI。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS artifact_count,
+                       COUNT(*) FILTER (
+                           WHERE artifact_id = '' OR searchable_text = ''
+                              OR artifact_type NOT IN ('figure', 'table')
+                              OR (asset_uri IS NOT NULL AND asset_uri NOT LIKE 'rag-asset://%%')
+                       ) AS invalid_count
+                FROM {self._artifacts}
+                WHERE document_id = %s AND version_id = %s AND status = 'staging'
+                """,
+                (document_id, version_id),
+            ).fetchone()
+        stats = {
+            "artifact_count": int(row["artifact_count"]),
+            "invalid_count": int(row["invalid_count"]),
+            "expected_count": expected_count,
+        }
+        return (
+            stats["artifact_count"] == expected_count
+            and stats["invalid_count"] == 0,
+            stats,
+        )
+
+    def list_artifacts(
+        self, document_id: str, version_id: str | None = None, *, active_only: bool = True
+    ) -> list[dict]:
+        clauses = ["document_id = %s"]
+        params: list = [document_id]
+        if version_id is not None:
+            clauses.append("version_id = %s")
+            params.append(version_id)
+        if active_only:
+            clauses.append("status = 'active'")
+        with self._connect() as conn:
+            return conn.execute(
+                f"SELECT * FROM {self._artifacts} WHERE {' AND '.join(clauses)} ORDER BY ordinal",
+                tuple(params),
+            ).fetchall()
+
+    def get_artifact(
+        self, artifact_id: str, *, active_only: bool = True
+    ) -> dict | None:
+        """按稳定 ID 查询单个图表实体；在线读取默认只允许 active 版本。"""
+        clauses = ["artifact_id = %s"]
+        params: list = [artifact_id]
+        if active_only:
+            clauses.append("status = 'active'")
+        with self._connect() as conn:
+            return conn.execute(
+                f"SELECT * FROM {self._artifacts} WHERE {' AND '.join(clauses)}",
+                tuple(params),
+            ).fetchone()
+
     def mark_validated(
         self,
         document_id: str,
         version_id: str,
         parent_count: int,
         child_count: int,
+        artifact_count: int = 0,
+        visual_count: int = 0,
     ) -> bool:
         """staging → validated，记录父子块数量（active/retired 不允许回退）。"""
         with self._connect() as conn:
@@ -552,11 +685,20 @@ class VersionRepository:
                 SET status = 'validated',
                     parent_count = %s,
                     child_count = %s,
+                    artifact_count = %s,
+                    visual_count = %s,
                     validated_at = now()
                 WHERE document_id = %s AND version_id = %s
                   AND status NOT IN ('active', 'retired')
                 """,
-                (parent_count, child_count, document_id, version_id),
+                (
+                    parent_count,
+                    child_count,
+                    artifact_count,
+                    visual_count,
+                    document_id,
+                    version_id,
+                ),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -584,7 +726,8 @@ class VersionRepository:
             cur = conn.execute(
                 f"""
                 UPDATE {self._versions}
-                SET status = 'staging', validated_at = NULL
+                SET status = 'staging', parent_count = 0, child_count = 0,
+                    artifact_count = 0, visual_count = 0, validated_at = NULL
                 WHERE document_id = %s AND version_id = %s AND status = 'failed'
                 """,
                 (document_id, version_id),
@@ -603,6 +746,7 @@ class VersionRepository:
                 f"""
                 UPDATE {self._versions} v
                 SET status = 'staging', parent_count = 0, child_count = 0,
+                    artifact_count = 0, visual_count = 0,
                     validated_at = NULL, activated_at = NULL, retired_at = NULL,
                     failure_stage = NULL, failure_reason = NULL
                 FROM {self._docs} d
@@ -666,6 +810,7 @@ class VersionRepository:
         file_size: int,
         small_collection: str,
         large_collection: str,
+        visual_collection: str | None = None,
         *,
         task_id: int,
         worker_id: str,
@@ -701,7 +846,8 @@ class VersionRepository:
             # 2. 锁定目标版本行，要求 validated，从锁定行读取父子块数量
             target = conn.execute(
                 f"""
-                SELECT status, parent_count, child_count FROM {self._versions}
+                SELECT status, parent_count, child_count, artifact_count, visual_count
+                FROM {self._versions}
                 WHERE document_id = %s AND version_id = %s
                 FOR UPDATE
                 """,
@@ -716,6 +862,8 @@ class VersionRepository:
                 )
             parent_count = target["parent_count"]
             child_count = target["child_count"]
+            artifact_count = target["artifact_count"]
+            visual_count = target["visual_count"]
             if parent_count <= 0 or child_count <= 0:
                 raise RowcountMismatchError(
                     f"validated 记录计数非法: {document_id}/{new_version_id} "
@@ -726,7 +874,10 @@ class VersionRepository:
 
             # 3. 旧版本父子块下线（collection 去重，单粒度模式不重复更新）
             if old_version_id:
-                for col_name in dict.fromkeys((small_collection, large_collection)):
+                old_collections = [small_collection, large_collection]
+                if visual_collection:
+                    old_collections.append(visual_collection)
+                for col_name in dict.fromkeys(old_collections):
                     conn.execute(
                         """
                         UPDATE langchain_pg_embedding e
@@ -739,6 +890,14 @@ class VersionRepository:
                         """,
                         (col_name, document_id, old_version_id),
                     )
+                conn.execute(
+                    f"""
+                    UPDATE {self._artifacts}
+                    SET status = 'retired', updated_at = now()
+                    WHERE document_id = %s AND version_id = %s AND status = 'active'
+                    """,
+                    (document_id, old_version_id),
+                )
 
             # 4. 新版本父子块上线：实际更新行数必须严格等于 validated 记录
             for col_name, expected in self._collection_plan(
@@ -762,6 +921,45 @@ class VersionRepository:
                         f"document={document_id} version={new_version_id} "
                         f"期望 {expected} 行，实际更新 {cur.rowcount} 行（INV-005）"
                     )
+
+            if visual_count:
+                if not visual_collection:
+                    raise RowcountMismatchError(
+                        "版本包含图片向量，但激活事务未提供 visual collection"
+                    )
+                visual_cur = conn.execute(
+                    """
+                    UPDATE langchain_pg_embedding e
+                    SET cmetadata = e.cmetadata || '{"is_active": true}'::jsonb
+                    FROM langchain_pg_collection c
+                    WHERE e.collection_id = c.uuid
+                      AND c.name = %s
+                      AND e.cmetadata->>'document_id' = %s
+                      AND e.cmetadata->>'version_id' = %s
+                    """,
+                    (visual_collection, document_id, new_version_id),
+                )
+                if visual_cur.rowcount != visual_count:
+                    raise RowcountMismatchError(
+                        f"activation_visual_count_mismatch: collection={visual_collection} "
+                        f"document={document_id} version={new_version_id} "
+                        f"期望 {visual_count} 行，实际更新 {visual_cur.rowcount} 行"
+                    )
+
+            artifact_cur = conn.execute(
+                f"""
+                UPDATE {self._artifacts}
+                SET status = 'active', updated_at = now()
+                WHERE document_id = %s AND version_id = %s AND status = 'staging'
+                """,
+                (document_id, new_version_id),
+            )
+            if artifact_cur.rowcount != artifact_count:
+                raise RowcountMismatchError(
+                    f"activation_artifact_count_mismatch: document={document_id} "
+                    f"version={new_version_id} 期望 {artifact_count} 行，"
+                    f"实际更新 {artifact_cur.rowcount} 行"
+                )
 
             # 5. 版本状态流转：旧 retired、新 active
             if old_version_id:
@@ -840,6 +1038,7 @@ class VersionRepository:
         document_id: str,
         small_collection: str,
         large_collection: str,
+        visual_collection: str | None = None,
         *,
         task_id: int,
         worker_id: str,
@@ -886,7 +1085,8 @@ class VersionRepository:
             if active_version_id:
                 active_ver = conn.execute(
                     f"""
-                    SELECT status, parent_count, child_count FROM {self._versions}
+                    SELECT status, parent_count, child_count, artifact_count, visual_count
+                    FROM {self._versions}
                     WHERE document_id = %s AND version_id = %s
                     FOR UPDATE
                     """,
@@ -920,6 +1120,44 @@ class VersionRepository:
                             f"document={document_id} version={active_version_id} "
                             f"期望下线 {expected} 行，实际 {cur.rowcount} 行"
                         )
+                if active_ver["visual_count"]:
+                    if not visual_collection:
+                        raise RowcountMismatchError(
+                            "活动版本包含图片向量，但删除事务未提供 visual collection"
+                        )
+                    visual_cur = conn.execute(
+                        """
+                        UPDATE langchain_pg_embedding e
+                        SET cmetadata = e.cmetadata || '{"is_active": false}'::jsonb
+                        FROM langchain_pg_collection c
+                        WHERE e.collection_id = c.uuid
+                          AND c.name = %s
+                          AND e.cmetadata->>'document_id' = %s
+                          AND e.cmetadata->>'version_id' = %s
+                        """,
+                        (visual_collection, document_id, active_version_id),
+                    )
+                    if visual_cur.rowcount != active_ver["visual_count"]:
+                        raise RowcountMismatchError(
+                            f"delete_visual_count_mismatch: collection={visual_collection} "
+                            f"document={document_id} version={active_version_id} "
+                            f"期望下线 {active_ver['visual_count']} 行，"
+                            f"实际 {visual_cur.rowcount} 行"
+                        )
+                artifact_cur = conn.execute(
+                    f"""
+                    UPDATE {self._artifacts}
+                    SET status = 'retired', updated_at = now()
+                    WHERE document_id = %s AND version_id = %s AND status = 'active'
+                    """,
+                    (document_id, active_version_id),
+                )
+                if artifact_cur.rowcount != active_ver["artifact_count"]:
+                    raise RowcountMismatchError(
+                        f"delete_artifact_count_mismatch: document={document_id} "
+                        f"version={active_version_id} 期望下线 "
+                        f"{active_ver['artifact_count']} 行，实际 {artifact_cur.rowcount} 行"
+                    )
                 conn.execute(
                     f"""
                     UPDATE {self._versions}

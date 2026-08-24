@@ -49,6 +49,7 @@ from unittest.mock import MagicMock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend" / "packages"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -65,12 +66,15 @@ if not hasattr(langchain_community.chat_models, "vertexai"):
     sys.modules["langchain_community.chat_models.vertexai"] = _mock
 
 from agent_material.rag_engine.rag_service import RagService  # noqa: E402
+from agent_material.utils.config_handler import vector_store_config  # noqa: E402
 from agent_material.utils.logger import logger  # noqa: E402
+from eval_reproducibility import collect, repo_relative_path  # noqa: E402
 
 EVAL_DIR = ROOT / "evaluation_data"
-DEFAULT_DATASET = EVAL_DIR / "fixed_eval_dataset.json"
-DEFAULT_FILLED = EVAL_DIR / "ragas_v2_filled.json"
-DEFAULT_SCORES = EVAL_DIR / "ragas_v2_scores.json"
+DEFAULT_DATASET = EVAL_DIR / "fixed_eval_dataset_v2.json"
+DEFAULT_FILLED = EVAL_DIR / "ragas_v3_filled.json"
+DEFAULT_SCORES = EVAL_DIR / "ragas_v3_scores.json"
+SEED = 20260820
 
 METRIC_NAMES = [
     "faithfulness",
@@ -139,6 +143,10 @@ def fill_dataset(
                 "question": question,
                 "ground_truth": item.get("ground_truth", ""),
                 "question_type": qtype,
+                "gold_status": item.get("gold_status"),
+                "strict_metric_eligible": item.get("gold_verification", {}).get(
+                    "strict_metric_eligible", False
+                ),
                 "route_decision": ctx.route_decision,
                 "contexts": _contexts_from_ctx(ctx),
                 "answer": answer,
@@ -156,6 +164,10 @@ def fill_dataset(
                 "question": question,
                 "ground_truth": item.get("ground_truth", ""),
                 "question_type": qtype,
+                "gold_status": item.get("gold_status"),
+                "strict_metric_eligible": item.get("gold_verification", {}).get(
+                    "strict_metric_eligible", False
+                ),
                 "contexts": [],
                 "answer": "",
                 "error": str(e)[:300],
@@ -293,6 +305,8 @@ async def _run_evaluation(
             "index": r["index"],
             "question": r["question"],
             "question_type": r["question_type"],
+            "gold_status": r.get("gold_status"),
+            "strict_metric_eligible": r.get("strict_metric_eligible", False),
             "route_decision": r.get("route_decision", ""),
             **scores,
         }
@@ -365,9 +379,19 @@ def run_evaluation(
     records: list[dict],
     scores_path: Path,
     concurrency: int,
+    meta: dict,
 ) -> dict:
     """对填充结果执行 RAGAS 评分并落盘。"""
-    valid = [r for r in records if r.get("answer") and not r.get("error")]
+    valid = [
+        r
+        for r in records
+        if r.get("answer")
+        and not r.get("error")
+        and (
+            r.get("question_type") == "unanswerable"
+            or r.get("strict_metric_eligible", False)
+        )
+    ]
     if not valid:
         logger.error("没有有效条目可供评估")
         return {"error": "无有效条目"}
@@ -388,17 +412,13 @@ def run_evaluation(
         logger.info(f"断点续跑: 已评分 {len(scored_idx)} 条，剩余 {len(valid)} 条")
     if not valid and prior_details:
         logger.info("全部条目均已评分，直接汇总")
-        _save_scores(scores_path, {}, prior_details, partial=False)
+        _save_scores(scores_path, meta, prior_details, partial=False)
         return json.loads(scores_path.read_text(encoding="utf-8"))
 
     logger.info(f"RAGAS 评估: {len(valid)} 条待评（并发={concurrency}）")
 
     metrics = _build_metrics()
-    meta = {
-        "dataset": str(DEFAULT_DATASET),
-        "filled": str(DEFAULT_FILLED),
-        "concurrency": concurrency,
-    }
+    meta = {**meta, "concurrency": concurrency}
     t0 = time.time()
     details = asyncio.run(
         _run_evaluation(valid, metrics, concurrency, scores_path, meta, prior_details)
@@ -411,7 +431,7 @@ def run_evaluation(
 
 def _print_report(result: dict) -> None:
     print("\n" + "=" * 64)
-    print("RAGAS V2 评估结果（answerable 题均值；unanswerable 单独统计）")
+    print("RAGAS V3 评估结果（answerable 题均值；unanswerable 单独统计）")
     print("=" * 64)
     print(f"{'指标':<22}{'均值':>8}{'中位数':>8}{'最低':>8}{'最高':>8}{'n':>5}")
     print("-" * 64)
@@ -436,7 +456,7 @@ def _print_report(result: dict) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="RAGAS 端到端质量评测（Spec V2 阶段 5）")
+    parser = argparse.ArgumentParser(description="RAGAS 端到端质量评测（V3）")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--filled", type=Path, default=DEFAULT_FILLED)
     parser.add_argument("--scores", type=Path, default=DEFAULT_SCORES)
@@ -446,21 +466,46 @@ def main() -> int:
     parser.add_argument("--eval-concurrency", type=int, default=5)
     args = parser.parse_args()
 
-    dataset = json.loads(args.dataset.read_text(encoding="utf-8"))
+    dataset_path = args.dataset.resolve()
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
     logger.info(f"加载评测集: {args.dataset}（{len(dataset)} 题）")
 
-    if args.skip_fill:
-        records = json.loads(args.filled.read_text(encoding="utf-8"))
-    else:
-        records = fill_dataset(dataset, args.filled, limit=args.limit)
+    collection_backup = vector_store_config.get("character_name")
+    vector_store_config["character_name"] = "agent_eval"
+    reproducibility = collect(
+        root=ROOT,
+        dataset=dataset_path,
+        config=vector_store_config,
+        seed=SEED,
+        artifacts=[
+            EVAL_DIR / "index_manifest_v2.json",
+            EVAL_DIR / "index_audit_v2.json",
+        ],
+    )
+    try:
+        if args.skip_fill:
+            records = json.loads(args.filled.read_text(encoding="utf-8"))
+        else:
+            records = fill_dataset(dataset, args.filled, limit=args.limit)
 
-    if args.only_fill:
+        if args.only_fill:
+            return 0
+
+        meta = {
+            "schema_version": 3,
+            "dataset": repo_relative_path(dataset_path, ROOT),
+            "filled": repo_relative_path(args.filled.resolve(), ROOT),
+            "evaluation_scope": "auto_verified answerable + unanswerable separate",
+            "reproducibility": reproducibility,
+        }
+        result = run_evaluation(
+            records, args.scores, args.eval_concurrency, meta
+        )
+        if "error" not in result:
+            _print_report(result)
         return 0
-
-    result = run_evaluation(records, args.scores, args.eval_concurrency)
-    if "error" not in result:
-        _print_report(result)
-    return 0
+    finally:
+        vector_store_config["character_name"] = collection_backup
 
 
 if __name__ == "__main__":

@@ -1,0 +1,110 @@
+[
+  {
+    "question": "请总结 ABACUS Toolchain 是什么，它支持哪些编译安装功能和愿景？",
+    "ground_truth": "ABACUS Toolchain 是一套内置于 ABACUS 仓库中的 bash 脚本集，能帮助用户在线或离线地编译安装 ABACUS 所需的软件依赖，自动处理各个依赖库的环境变量，并基于这些依赖库快速完成 ABACUS 源码编译过程。它支持 GCC Toolchain、Intel Toolchain 和 AMD Toolchain（细分为 GCC-AOCL 与 AOCC-AOCL），还支持编译 LibRI、DeePKS、DeePMD 等功能插件、离线安装和 GPU 支持。其愿景是方便用户高效地从源码编译最适合当前服务器环境的 ABACUS，并建立一套 ABACUS 源码编译的标准流程。",
+    "question_type": "summary",
+    "source_hint": "2.4.2什么是 ABACUS Toolchain：ABACUS Toolchain 是一套内置于 ABACUS 仓库中的 bash 脚本集"
+  },
+  {
+    "question": "请概述 ABACUS 中 SDFT（随机波函数密度泛函理论）方法的原理和主要适用场景。",
+    "ground_truth": "SDFT 即随机波函数密度泛函理论（Stochastic Density Functional Theory），目前 ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter，WDM）。传统 KSDFT 在高温计算中需要极大数量的占据态电子波函数导致计算困难，而 SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。此外还可使用混合随机-确定性密度泛函理论 MDFT，即在 SDFT 计算中混入一部分低能 Kohn-Sham 轨道以加速结果收敛。",
+    "question_type": "summary",
+    "source_hint": "5.1.1介绍：目前 ABACUS 使用 SDFT主要聚焦在高温高压物质的模拟，特别是温稠密物质（Warm Dense Matter,简称WDM)"
+  },
+  {
+    "question": "请总结隐式溶剂模型的基本思想以及它相比显式溶剂方法的优点。",
+    "ground_truth": "隐式溶剂化模型（Implicit solvation model）将溶剂视为连续介质，而不是单独的\"显式\"溶剂分子，嵌入隐式溶剂中的溶质以及溶剂自由度的平均值将隐含在溶剂浴的性质中。与\"显式\"方法相比，这种隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统。ABACUS 中实现的隐式溶剂化模型采用了 Mathew、Sundararaman、Letchworth-Weaver、Arias 和 Hennig 在 2014 年开发的方法。",
+    "question_type": "summary",
+    "source_hint": "5.5.1介绍：这种方法将溶剂视为连续介质，而不是单独的\"显式\"溶剂分子"
+  },
+  {
+    "question": "请概述 Bader charge（Bader 电荷）分析的基本思想。",
+    "ground_truth": "Bader charge 是将电子密度进行类似于 Voronoi tessellation 的剖分，在原子间以电荷密度的梯度为 0 处创建截面，然后将原子周围所有截面包络出的 cell 进行实空间积分，即为 Bader charge。实际计算中总能对价电子的密度进行切分，但对近核电子的处理有所差别：CP2K 支持构造出核电荷分布，VASP 支持从 PAW 势中重建核电荷分布，而 QE 和 ABACUS 则不支持以上处理方式。",
+    "question_type": "summary",
+    "source_hint": "6.5.1前言：Bader charge 是将电子密度进行类似于 Voronoi tesellation的剖分"
+  },
+  {
+    "question": "请总结文档中介绍的编译安装 ABACUS 的主要途径有哪些。",
+    "ground_truth": "用户可以编译仅支持 PW 基组的 ABACUS 或者同时支持 PW 和 LCAO 两种基组的 ABACUS，针对 PW 基组还可选择串行版本或并行版本。在超算平台上编译 ABACUS 有两种基本路线：一种是基于 GCC（the GNU Compiler Collection）编译，一种是基于 Intel oneAPI 或者 Intel Parallel Studio 编译，其中使用 Intel oneAPI 将会简单很多。此外还可以使用 ABACUS Toolchain（GCC Toolchain、Intel Toolchain、AMD Toolchain）自动处理依赖库并完成编译，文档还介绍了编译 Nvidia GPU 版本以及在曙光 DCU 集群上的编译方法。",
+    "question_type": "summary",
+    "source_hint": "2.9.2超算上编译ABACUS的基本路线：一种是基于GCC（the GNU Compiler Collection）编译一种是基于Intel oneAPI或者 Intel Paralel Studio 编译"
+  },
+  {
+    "question": "请概述结合 ABACUS 与 Phonopy 计算声子谱的整体流程。",
+    "ground_truth": "首先使用 ABACUS 优化结构，然后用 Phonopy 执行 phonopy -d --dim=\"2 2 2\" --abacus 产生需要计算的超胞及相应微扰构型（如 STRU-001）。接着用 ABACUS 对每个微扰构型做 calculation 为 scf 且 cal_force 为 1 的计算输出原子受力，再用 phonopy -f 指定所有微扰构型的 running_scf.log 产生 FORCE_SET 文件。最后设置 band.conf（含 ATOM_NAME、DIM、MESH、BAND 等参数）并执行 phonopy -p band.conf --abacus 得到声子谱，输出 band.yaml，再用 gnuplot 绘制声子谱。",
+    "question_type": "summary",
+    "source_hint": "6.7.3流程：使用ABACUS优化结构／用Phonopy产生需要计算的超胞及相应微扰构型／产生FORCE_SET文件／设置band.conf文件计算得到声子谱"
+  },
+  {
+    "question": "请概述使用 ABACUS 的 Wannier90 接口计算最大局域化 Wannier 函数的运行流程。",
+    "ground_truth": "运行流程分为四步：第一步运行 Wannier90 软件（wannier90.x -pp）生成 nnkp 文件；第二步运行 ABACUS 执行电子结构的自洽计算，INPUT 中需指定 out_chg 为 1 输出电荷密度；第三步将 nnkp 文件放到指定位置，运行 ABACUS 执行非自洽计算，其中 init_charge 设为 file、towannier90 设为 1，且 KPT 文件中的 k 点要和 Wannier90 输入文件中的 k 点一模一样；第四步将非自洽计算生成的 mmn、amn、eig、UNK 等文件放到 Wannier90 的运行路径下，运行 Wannier90 得到最大局域化 Wannier 函数。",
+    "question_type": "summary",
+    "source_hint": "6.9.3 运行流程：1．运行 Wannier90 软件，生成 nnkp 文件；2．运行 ABACUS 软件，执行电子结构的自洽计算"
+  },
+  {
+    "question": "请总结 ABACUS 分子动力学模拟的输出文件以及 MD 续算功能的使用方法。",
+    "ground_truth": "ABACUS 的 MD 模拟会产生 3 类输出文件：结构文件 STRU_MD_$istep（由 md_restartfreq 控制输出频率，格式与 STRU 相同）、续算文件 Restart_md.dat 和信息文件 MD_dump（由 md_dumpfreq 控制，输出 MD 步数、晶格常数、原子位置、受力、速度等信息）。如果 ABACUS 运行达到指定的 MD 步数或者计算中断，可以通过 MD 续算功能继续之前的 MD 计算：将 md_restart 参数设为 1，其他参数不变，ABACUS 会读取 Restart_md.dat 获取当前 MD 步数 istep 及恒温器、恒压器等信息，再根据 istep 读取相应的结构文件 STRU_MD_$istep 进行续算。",
+    "question_type": "summary",
+    "source_hint": "三、MD输出和续算功能：ABACUS 的MD 模拟会产生3类输出文件：结构文件 STRU_MD_$istep，续算文件Restart_md.dat，信息文件 MD_dump"
+  },
+  {
+    "question": "请概述 pyabacus 项目是什么，它提供哪些模块？",
+    "ground_truth": "pyabacus 是密度泛函理论软件 ABACUS（原子算筹）的 Python 接口，提供了与 ABACUS 软件交互的 Python API，该项目基于 pybind11 和 scikit-build-core 构建。pyabacus 当前提供的模块包括：io（输入/输出模块）、Cell（用于单元结构的模块）、ModuleBase（基本数学函数模块）、ModuleNAO（数值原子轨道 NAO 模块）和 hsolver（用于求解哈密顿量的模块）。",
+    "question_type": "summary",
+    "source_hint": "6.13.1 简介：pyabacus 是密度泛函理论软件ABACUS（原子算筹）的Python 接口，提供了与 ABACUS 软件交互的 PythonAPI"
+  },
+  {
+    "question": "请总结无轨道密度泛函理论（OFDFT）的基本思想、优势以及 ABACUS 中实现的动能泛函。",
+    "ground_truth": "无轨道密度泛函理论（OFDFT）是一种第一性原理模拟方法，相比于 Kohn-Sham DFT，它的优势之一在于 O(NlnN) 的算法复杂度，可用于上万原子甚至更大体系的电子基态计算或大体系、长时间的第一性原理分子动力学。OFDFT 的精度高度依赖于动能泛函（KEDF）的精度，目前 ABACUS 中实现了 Thomas-Fermi (TF)、von Weizsäcker (vW)、TFλvW、Wang-Teter (WT)、Luo-Karasiev-Trickey (LKT) 共五种动能泛函，默认采用 WT。由于 OFDFT 中舍弃了单电子轨道，无法采用模守恒等非局域赝势，必须采用局域赝势，目前 ABACUS 支持 BLPS。",
+    "question_type": "summary",
+    "source_hint": "5.4.1无轨道密度泛函理论背景知识：目前 ABACUS中实现了Thomas-Fermi (TF),von Weizsacker (vW),TFAvW, Wang-Teter (WT),Luo-Karasiev-Trickey(LKT)共五种动能泛函"
+  },
+  {
+    "question": "SDFT 和传统 KSDFT 在高温计算中有什么区别？",
+    "ground_truth": "在进行温稠密物质等高温计算时（温度高达数十到上千 eV），传统的 Kohn-Sham 密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难。而 SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。在 ABACUS 中通过将 esolver_type 从默认的 ksdft 设置为 sdft 来使用 SDFT 计算。",
+    "question_type": "comparison",
+    "source_hint": "5.1.1介绍：传统的Kohn-Sham密度泛函理论（KSDFT）需要用到极大数量的占据态电子波函数导致计算困难，而 SDFT使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题"
+  },
+  {
+    "question": "在 ABACUS 中 PW 基组和 LCAO 基组各有什么特点，应该如何选择？",
+    "ground_truth": "PW（平面波）和 LCAO（数值原子轨道 NAO）是 ABACUS 支持的两种基矢量：如果是较小原子数的固体体系，建议采用 PW 效率较高；如果体系原子数较大（例如大于 50 个原子），建议用 LCAO，效率会更高。数值原子轨道作为基矢量的优点是基矢量个数相比平面波大幅度降低，且空间上可以严格截断，构建哈密顿量的效率可以达到线性标度的时间复杂度。此外，LCAO 基组相比 PW 需要额外准备数值原子轨道文件，且轨道文件要和对应的赝势相匹配。",
+    "question_type": "comparison",
+    "source_hint": "3.基矢量(b)：如果是较小原子数的固体体系，建议可以采用PW效率较高。如果是体系原子数较大（例如大于50个原子)，建议可以用LCAO试试，效率会更高"
+  },
+  {
+    "question": "数值原子轨道基组中 DZP 和 TZDP 有什么区别？",
+    "ground_truth": "DZP 是在 DZ（Double-ζ，即每个占据角量子数采用 2 条径向轨道）的基础上引入 1 条角量子数更高的极化径向轨道组成的基组；TZDP（Triple-ζ valence orbitals plus DZ polarization）则是基组数量更大的基组。以 O 元素赝势为例，DZP 轨道包含 2 组 s 轨道、2 组 p 轨道、1 组 d 轨道共 13 个轨道，TZDP 轨道包含 3 组 s 轨道、3 组 p 轨道、2 组 d 轨道共 22 个轨道。要使 LCAO 基矢量更完备需要从例如 DZP 增加到 TZDP，而不是增加 Ecut；轨道类型从 SZ、DZP 提升到 TZDP，精度越高，结果更接近平面波。",
+    "question_type": "comparison",
+    "source_hint": "3.6.2 数值原子轨道的命名方法：DZP轨道包含2组s轨道、2组p轨道、1组d轨道…TZDP轨道包含3组s轨道、3组p轨道、2组d轨道"
+  },
+  {
+    "question": "ABACUS 中 SDFT 计算的参数 method_sto 取 1 和取 2 有什么区别？",
+    "ground_truth": "method_sto 是进行 SDFT 计算使用的方法：1 代表消耗内存较少但稍慢的方法，2 代表更快但需要更大内存的方法，默认是 2。用户可以根据服务器的内存条件和对计算速度的需求在两者之间取舍。",
+    "question_type": "comparison",
+    "source_hint": "5.1.3：method_sto是进行 SDFT计算使用的方法：1代表消耗内存较少但稍慢的方法，2代表更快但需要更大内存的方法，默认是2"
+  },
+  {
+    "question": "显式溶剂模型和隐式溶剂模型有什么区别，各适合什么场景？",
+    "ground_truth": "显式溶剂方法将溶剂作为单独的\"显式\"溶剂分子处理，而隐式溶剂化模型（Implicit solvation model）将溶剂视为连续介质，溶质以及溶剂自由度的平均值隐含在溶剂浴的性质中。与显式方法相比，隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统，在有限系统和周期系统中都得到了广泛应用。",
+    "question_type": "comparison",
+    "source_hint": "5.5.1介绍：与\"显式\"方法相比，这种隐式溶剂化模型可以以低得多的计算成本提供定性正确的结果，特别适用于大型复杂系统"
+  },
+  {
+    "question": "Mulliken、Hirshfeld 和 Bader 等布居分析方法各自存在什么问题？",
+    "ground_truth": "文档指出各种布居分析方法各自存在或致命或物理上定义不明的问题：Mulliken 电荷具有非常显著的基组相关效应；Hirshfeld 电荷经常对过渡元素计算出携带负电；Bader 对于电荷分布极其不均匀的体系会得出异常结果。尽管如此，这些方法仍然有足够普遍的受众群体。",
+    "question_type": "comparison",
+    "source_hint": "6.5.1前言：如Mullken 电荷具有非常显著的基组相关效应，Hirshfeld电荷经常对过渡元素计算出携带负电，Bader对于电荷分布极其不均匀的体系会得出异常结果等"
+  },
+  {
+    "question": "在超算平台上基于 GCC 编译 ABACUS 和基于 Intel oneAPI 编译 ABACUS 有什么区别？",
+    "ground_truth": "GCC（the GNU Compiler Collection）同时包含 C/C++ 编译器和 Fortran 编译器，但不包含 MPI Library，因此还需要额外的 MPI 库（Open MPI 或者 MPICH），且如果超算环境没有提供 BLAS、LAPACK、FFTW3、ScaLAPACK、ELPA 和 CEREAL 的 modules，这些数学库都需要用户一个个手动编译安装。而 Intel oneAPI 同时包含 C/C++ 编译器、Fortran 编译器和 Intel MPI Library，还包含 Intel oneAPI Math Kernel Library（MKL），里面有 ABACUS 依赖的 BLAS、LAPACK、FFTW3 和 ScaLAPACK 共 4 个软件库，因此使用 Intel oneAPI 将会简单很多；但若编译同时支持两种基组的 ABACUS，仍需手动编译安装 ELPA 和 CEREAL。",
+    "question_type": "comparison",
+    "source_hint": "2.9.2 基于Intel oneAPI编译ABACUS／基于GCC 编译ABACUS：不得不说，使用InteloneAPI将会简单很多"
+  },
+  {
+    "question": "ABACUS 中 SDFT 和 MDFT 有什么区别，如何通过输入参数区分？",
+    "ground_truth": "MDFT 即混合随机波函数密度泛函理论（mixed stochastic-deterministic DFT），是在 SDFT 计算中混入一部分低能 Kohn-Sham 轨道，从而加速结果收敛。在输入参数上，如果 nbands 设置为 0 且 nbands_sto（随机轨道数目）不为 0，则会进行 SDFT 计算；如果 nbands>0 且 nbands_sto>0，则会进行混合 KS 电子轨道和随机轨道的 MDFT 计算。两者都通过 esolver_type 设为 sdft 来启用。",
+    "question_type": "comparison",
+    "source_hint": "5.1.3：如果nbands 设置为O，且nbands_sto…不为O，则会进行SDFT计算；如果nbands>0，且nbands_sto>0，则会进行混合KS 电子轨道和随机轨道（stochastic orbitals）的MDFT计算"
+  }
+]

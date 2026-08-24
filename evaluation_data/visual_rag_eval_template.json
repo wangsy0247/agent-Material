@@ -1,0 +1,20 @@
+{
+  "schema_version": "visual-rag-dataset-v1",
+  "notes": "模板不包含真实论文问题。复制到本地后补充，经人工核验再把 gold_status 改为 verified。",
+  "cases": [
+    {
+      "question_id": "replace-me",
+      "question": "请填写图表问题",
+      "gold_artifact_ids": [
+        "replace-with-active-artifact-id"
+      ],
+      "required_answer_terms": [
+        [
+          "可接受答案术语 A",
+          "同义表达 A"
+        ]
+      ],
+      "gold_status": "needs_review"
+    }
+  ]
+}

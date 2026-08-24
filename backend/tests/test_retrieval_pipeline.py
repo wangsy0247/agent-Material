@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -136,34 +137,54 @@ class FakeMultiRetriever:
         vector_results=None,
         bm25_results=None,
         parents=None,
+        visual_results=None,
+        visual_error=None,
         vector_error=None,
         bm25_available=True,
     ):
         # vector_results / bm25_results: dict[query] -> list[Document]
         self._vector_results = vector_results if vector_results is not None else {}
-        self._bm25_retriever = (
-            FakeBM25(bm25_results) if bm25_available else None
-        )
+        self._bm25_retriever = FakeBM25(bm25_results) if bm25_available else None
         self._parents = parents or {}  # parent_id -> Document
+        self._visual_results = visual_results if visual_results is not None else {}
+        self._visual_error = visual_error
         self._vector_error = vector_error
         self.search_calls = []  # {"query", "k", "hyde_embedding", "thread"}
         self.fetch_calls = []
+        self.visual_calls = []
 
-    def search_children(self, query, k=None, hyde_embedding=None):
+    def search_children(
+        self,
+        query,
+        k=None,
+        hyde_embedding=None,
+        *,
+        enable_vector=True,
+        enable_bm25=True,
+    ):
         self.search_calls.append(
             {
                 "query": query,
                 "k": k,
                 "hyde_embedding": hyde_embedding,
+                "enable_vector": enable_vector,
+                "enable_bm25": enable_bm25,
                 "thread": threading.current_thread().name,
             }
         )
-        if self._vector_error is not None:
+        if enable_vector and self._vector_error is not None:
             raise self._vector_error
         bm25_docs = (
-            self._bm25_retriever.invoke(query) if self._bm25_retriever else []
+            self._bm25_retriever.invoke(query) if enable_bm25 and self._bm25_retriever else []
         )
-        return list(self._vector_results.get(query, [])), bm25_docs
+        vector_docs = list(self._vector_results.get(query, [])) if enable_vector else []
+        return vector_docs, bm25_docs
+
+    def search_visual(self, query, k=None):
+        self.visual_calls.append({"query": query, "k": k})
+        if self._visual_error is not None:
+            raise self._visual_error
+        return list(self._visual_results.get(query, []))
 
     def _fetch_parents(self, parent_ids, parent_scopes=None):
         """模拟真实实现：按输入顺序返回命中父块 + missing 列表。"""
@@ -189,11 +210,7 @@ class FakeReranker:
             raise self._error
         scored = []
         for doc in documents:
-            score = (
-                self._scores.get(doc.page_content, 0.5)
-                if self._scores is not None
-                else 0.5
-            )
+            score = self._scores.get(doc.page_content, 0.5) if self._scores is not None else 0.5
             doc.metadata["rerank_score"] = score
             scored.append((doc, score))
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -234,9 +251,7 @@ class TestPlanQueries:
         )
         pipeline = make_pipeline(FakeMultiRetriever(), rewriter=rewriter)
         ctx = make_ctx()
-        pipeline.plan_queries(
-            ctx, enable_rewrite=True, strategy="step_back+expand"
-        )
+        pipeline.plan_queries(ctx, enable_rewrite=True, strategy="step_back+expand")
         queries = ctx.generated_queries
         # 确定顺序：original → step_back → expand；总数 ≤ 3
         assert len(queries) == 3
@@ -253,9 +268,7 @@ class TestPlanQueries:
 
     def test_rewrite_dedup(self):
         # expand 返回的第一个变体与 step_back 结果相同 → 去重
-        rewriter = FakeRewriter(
-            step_back_query="重复查询", expand_variants=["重复查询", "新查询"]
-        )
+        rewriter = FakeRewriter(step_back_query="重复查询", expand_variants=["重复查询", "新查询"])
         pipeline = make_pipeline(FakeMultiRetriever(), rewriter=rewriter)
         ctx = make_ctx()
         pipeline.plan_queries(ctx, enable_rewrite=True, strategy="step_back+expand")
@@ -282,9 +295,7 @@ class TestPlanQueries:
         config = make_config(
             query_rewriting={"enable_hyde": True},
         )
-        pipeline = make_pipeline(
-            FakeMultiRetriever(), rewriter=FakeRewriter(), config=config
-        )
+        pipeline = make_pipeline(FakeMultiRetriever(), rewriter=FakeRewriter(), config=config)
         ctx = make_ctx()
         pipeline.plan_queries(ctx, enable_rewrite=False, strategy="")
         assert ctx.hyde_embedding == [float(len("假设文档内容")), 1.0, 0.5]
@@ -297,9 +308,7 @@ class TestPlanQueries:
         monkeypatch.setattr(models, "embedding_model", embedder)
         config = make_config(query_rewriting={"enable_hyde": True})
         rewriter = FakeRewriter(hyde_doc="")  # 空假设文档 → 失败
-        pipeline = make_pipeline(
-            FakeMultiRetriever(), rewriter=rewriter, config=config
-        )
+        pipeline = make_pipeline(FakeMultiRetriever(), rewriter=rewriter, config=config)
         ctx = make_ctx()
         pipeline.plan_queries(ctx, enable_rewrite=False, strategy="")
         assert ctx.hyde_embedding is None
@@ -312,6 +321,88 @@ class TestPlanQueries:
 
 
 class TestRetrieveBranches:
+    def test_text_query_does_not_call_visual_channel_even_when_feature_enabled(self):
+        query = "什么是密度泛函理论"
+        retriever = FakeMultiRetriever(
+            vector_results={query: [make_doc("DFT 文本", chunk_id="c-dft")]},
+            visual_results={query: [make_doc("不应调用", artifact_id="fig-x")]},
+        )
+        config = make_config(
+            structured_index={"multimodal_embedding": {"enabled": True}},
+            feature_flags={"enable_visual_search": True},
+        )
+        pipeline = make_pipeline(retriever, config=config)
+        ctx = RequestContext(original_query=query)
+        pipeline.plan_queries(ctx, enable_rewrite=False)
+        pipeline.retrieve_branches(ctx)
+
+        assert ctx.retrieval_plan["route_type"] == "text_only"
+        assert retriever.visual_calls == []
+
+    def test_panel_route_filters_visual_candidates_to_requested_panel(self):
+        query = "图3(b)展示了什么"
+        panel_a = make_doc(
+            "panel a",
+            artifact_id="fig-3",
+            visual_entity_id="fig-3:panel:a",
+            panel_id="a",
+            visual_asset_uri="rag-asset://doc/v/a.png",
+        )
+        panel_b = make_doc(
+            "panel b",
+            artifact_id="fig-3",
+            visual_entity_id="fig-3:panel:b",
+            panel_id="b",
+            visual_asset_uri="rag-asset://doc/v/b.png",
+        )
+        retriever = FakeMultiRetriever(visual_results={query: [panel_a, panel_b]})
+        config = make_config(
+            structured_index={"multimodal_embedding": {"enabled": True}},
+            feature_flags={"enable_visual_search": True},
+        )
+        pipeline = make_pipeline(retriever, config=config)
+        ctx = RequestContext(original_query=query)
+        pipeline.plan_queries(ctx, enable_rewrite=False)
+        pipeline.retrieve_branches(ctx)
+
+        assert ctx.retrieval_plan["panel_id"] == "b"
+        assert len(ctx.retrieved_children[0]) == 1
+        assert ctx.retrieved_children[0][0].metadata["panel_id"] == "b"
+
+    @pytest.mark.parametrize(
+        ("flags", "expected_vector", "expected_bm25", "expected_id"),
+        [
+            (
+                {"enable_vector_search": True, "enable_bm25_search": False},
+                True,
+                False,
+                "c-v",
+            ),
+            (
+                {"enable_vector_search": False, "enable_bm25_search": True},
+                False,
+                True,
+                "c-b",
+            ),
+        ],
+    )
+    def test_single_route_flags_skip_disabled_branch(
+        self, flags, expected_vector, expected_bm25, expected_id
+    ):
+        query = "Ga2O3 的热导率是多少"
+        retriever = FakeMultiRetriever(
+            vector_results={query: [make_doc("向量", chunk_id="c-v")]},
+            bm25_results={query: [make_doc("关键词", chunk_id="c-b")]},
+        )
+        pipeline = make_pipeline(retriever, config=make_config(feature_flags=flags))
+        ctx = make_ctx()
+        pipeline.plan_queries(ctx, enable_rewrite=False)
+        pipeline.retrieve_branches(ctx)
+
+        assert retriever.search_calls[0]["enable_vector"] is expected_vector
+        assert retriever.search_calls[0]["enable_bm25"] is expected_bm25
+        assert [doc.metadata["chunk_id"] for doc in ctx.retrieved_children[0]] == [expected_id]
+
     def test_branch_rrf_merges_vector_and_bm25(self):
         shared = make_doc("共享文档", chunk_id="c-shared")
         v_only = make_doc("向量独有", chunk_id="c-v")
@@ -332,6 +423,76 @@ class TestRetrieveBranches:
         assert branch[0].metadata["chunk_id"] == "c-shared"
         assert len(branch) == 3
         assert all("rrf_score" in d.metadata for d in branch)
+
+    def test_three_way_rrf_merges_visual_panel_into_same_artifact(self):
+        query = "图3(b)展示了什么趋势"
+        text_figure = make_doc(
+            "图3的图注",
+            chunk_id="c-fig3",
+            artifact_id="fig-3",
+            content_type="figure",
+        )
+        visual_panel = make_doc(
+            "图3 panel b",
+            artifact_id="fig-3",
+            content_type="figure",
+            visual_entity_id="fig-3:panel:b",
+            panel_id="b",
+            visual_asset_uri="rag-asset://doc/v/panel-b.png",
+            evidence_bbox=[500, 0, 1000, 800],
+            visual_similarity=0.93,
+        )
+        retriever = FakeMultiRetriever(
+            vector_results={query: [text_figure]},
+            bm25_results={query: [text_figure]},
+            visual_results={query: [visual_panel]},
+        )
+        config = make_config(
+            structured_index={
+                "multimodal_embedding": {
+                    "enabled": True,
+                    "weight": 0.4,
+                    "query_scope": "original_only",
+                }
+            },
+            feature_flags={"enable_visual_search": True},
+        )
+        pipeline = make_pipeline(retriever, config=config)
+        ctx = RequestContext(original_query=query)
+        pipeline.plan_queries(ctx, enable_rewrite=False)
+        pipeline.retrieve_branches(ctx)
+
+        assert len(ctx.retrieved_children[0]) == 1
+        result = ctx.retrieved_children[0][0]
+        assert result.metadata["artifact_id"] == "fig-3"
+        assert set(result.metadata["retrieval_channels"]) == {
+            "text_vector",
+            "bm25",
+            "visual",
+        }
+        assert result.metadata["matched_panel_id"] == "b"
+        assert result.metadata["matched_visual_asset_uri"].endswith("panel-b.png")
+
+    def test_visual_failure_falls_back_to_text_hybrid(self):
+        query = "图3中的曲线"
+        retriever = FakeMultiRetriever(
+            vector_results={query: [make_doc("文本候选", chunk_id="c1")]},
+            visual_error=RuntimeError("visual timeout"),
+        )
+        config = make_config(
+            structured_index={"multimodal_embedding": {"enabled": True}},
+            feature_flags={"enable_visual_search": True},
+        )
+        pipeline = make_pipeline(retriever, config=config)
+        ctx = RequestContext(original_query=query)
+        pipeline.plan_queries(ctx, enable_rewrite=False)
+        pipeline.retrieve_branches(ctx)
+
+        assert [doc.metadata["chunk_id"] for doc in ctx.retrieved_children[0]] == ["c1"]
+        assert any(
+            event["component"] == "visual_search" and event["fallback"] == "text_hybrid"
+            for event in ctx.degradation_events
+        )
 
     def test_bm25_unavailable_vector_only_with_degradation(self):
         query = "Ga2O3 的热导率是多少"
@@ -377,9 +538,7 @@ class TestRetrieveBranches:
         pipeline.plan_queries(ctx, enable_rewrite=False)
         pipeline.retrieve_branches(ctx)
         assert [d.metadata["chunk_id"] for d in ctx.retrieved_children[0]] == ["c-b"]
-        assert any(
-            e["component"] == "vector_search" for e in ctx.degradation_events
-        )
+        assert any(e["component"] == "vector_search" for e in ctx.degradation_events)
 
     def test_vector_and_bm25_both_unavailable_raises(self):
         retriever = FakeMultiRetriever(
@@ -426,9 +585,7 @@ class TestFuse:
         assert keys.index("c-first") < keys.index("c-second")
 
     def test_fuse_top_n_truncation(self):
-        branches = [
-            [make_doc(f"doc{i}", chunk_id=f"c{i}") for i in range(5)]
-        ]
+        branches = [[make_doc(f"doc{i}", chunk_id=f"c{i}") for i in range(5)]]
         ctx = self._ctx_with_branches(
             branches=branches,
             queries=[{"query": "q", "weight": 1.0, "type": "original"}],
@@ -514,6 +671,20 @@ class TestGlobalRerank:
 
 
 class TestResolveParents:
+    def test_parent_backtrack_flag_off_keeps_children(self):
+        children = [make_doc("子块", chunk_id="c1", parent_id="p1")]
+        retriever = FakeMultiRetriever(parents={"p1": make_doc("父块", parent_id="p1")})
+        pipeline = make_pipeline(
+            retriever,
+            config=make_config(feature_flags={"parent_backtrack": False}),
+        )
+        ctx = make_ctx()
+        ctx.reranked_children = children
+        pipeline.resolve_parents(ctx)
+
+        assert ctx.resolved_parents == children
+        assert retriever.fetch_calls == []
+
     def test_ordered_resolve_with_missing_fallback(self):
         children = [
             make_doc("子块1", chunk_id="c1", parent_id="p1", rrf_score=0.9),
@@ -541,9 +712,7 @@ class TestResolveParents:
         # missing 回退子块并标记 parent_fallback
         assert resolved[2].page_content == "子块3"
         assert resolved[2].metadata["parent_fallback"] is True
-        assert any(
-            e["component"] == "parent_fetch" for e in ctx.degradation_events
-        )
+        assert any(e["component"] == "parent_fetch" for e in ctx.degradation_events)
 
     def test_no_parent_id_returns_children(self):
         children = [make_doc("无父块", chunk_id="c1")]
@@ -556,12 +725,18 @@ class TestResolveParents:
     def test_same_parent_id_in_different_scopes_does_not_cross_read(self):
         children = [
             make_doc(
-                "子块-A", chunk_id="ca", parent_id="legacy-p",
-                document_id="doc-a", version_id="v1",
+                "子块-A",
+                chunk_id="ca",
+                parent_id="legacy-p",
+                document_id="doc-a",
+                version_id="v1",
             ),
             make_doc(
-                "子块-B", chunk_id="cb", parent_id="legacy-p",
-                document_id="doc-b", version_id="v2",
+                "子块-B",
+                chunk_id="cb",
+                parent_id="legacy-p",
+                document_id="doc-b",
+                version_id="v2",
             ),
         ]
 
@@ -570,8 +745,10 @@ class TestResolveParents:
                 self.fetch_calls.append((list(parent_ids), list(parent_scopes)))
                 docs = [
                     make_doc(
-                        f"父块-{doc_id}", parent_id=pid,
-                        document_id=doc_id, version_id=version_id,
+                        f"父块-{doc_id}",
+                        parent_id=pid,
+                        document_id=doc_id,
+                        version_id=version_id,
                     )
                     for pid, (doc_id, version_id) in zip(parent_ids, parent_scopes)
                 ]
@@ -583,9 +760,7 @@ class TestResolveParents:
         ctx.reranked_children = children
         pipeline.resolve_parents(ctx)
 
-        assert [d.page_content for d in ctx.resolved_parents] == [
-            "父块-doc-a", "父块-doc-b"
-        ]
+        assert [d.page_content for d in ctx.resolved_parents] == ["父块-doc-a", "父块-doc-b"]
         assert retriever.fetch_calls[0][1] == [("doc-a", "v1"), ("doc-b", "v2")]
 
 
@@ -635,9 +810,7 @@ class TestBuildContext:
         )
         pipeline = make_pipeline(FakeMultiRetriever())
         ctx = make_ctx()
-        ctx.reranked_children = [
-            make_doc("子1", parent_id="p1", rerank_score=0.87)
-        ]
+        ctx.reranked_children = [make_doc("子1", parent_id="p1", rerank_score=0.87)]
         ctx.resolved_parents = [doc]
         pipeline.build_context(ctx)
 
@@ -654,6 +827,54 @@ class TestBuildContext:
         assert src["score"] == 0.87
         assert "页码：3-5" in ctx.final_context
         assert "[参考资料1] 来源：ga2o3.pdf" in ctx.final_context
+
+    def test_visual_source_fields_and_score_survive_parent_resolution(self):
+        child = make_doc(
+            "视觉增强子块",
+            parent_id="p-figure",
+            chunk_id="c-figure",
+            document_id="doc-1",
+            version_id="v1",
+            rerank_score=0.93,
+        )
+
+        class FigureRetriever:
+            def _fetch_parents(self, parent_ids, parent_scopes):
+                return [
+                    make_doc(
+                        "[图表] FIG. 3\n[视觉解析]\n关键读数：300 K",
+                        parent_id="p-figure",
+                        document_id="doc-1",
+                        version_id="v1",
+                        source="data/ga2o3.pdf",
+                        content_type="figure",
+                        artifact_id="artifact-3",
+                        caption="FIG. 3",
+                        asset_uri="rag-asset://doc-1/v1/figure.png",
+                        visual_status="completed",
+                        visual_summary="三个晶向的热导率曲线",
+                        visual_model="fake-vl",
+                        visual_confidence=0.94,
+                        visual_prompt_version="visual-chart-v1",
+                    )
+                ], []
+
+        pipeline = make_pipeline(FigureRetriever())
+        ctx = make_ctx()
+        ctx.reranked_children = [child]
+        pipeline.resolve_parents(ctx)
+        pipeline.build_context(ctx)
+
+        parent = ctx.context_docs[0]
+        source = ctx.sources[0]
+        assert parent.metadata["rerank_score"] == pytest.approx(0.93)
+        assert parent.metadata["matched_chunk_id"] == "c-figure"
+        assert source["score"] == pytest.approx(0.93)
+        assert source["visual_status"] == "completed"
+        assert source["visual_summary"] == "三个晶向的热导率曲线"
+        assert source["evidence_locator"]["artifact_id"] == "artifact-3"
+        assert source["evidence_locator"]["asset_uri"].startswith("rag-asset://")
+        assert ctx.visual_sources(limit=1, require_completed=True) == [source]
 
     def test_page_unknown_omits_page_line(self):
         doc = self._parent("正文", page_unknown=True, page_start=None)
@@ -702,8 +923,7 @@ class TestConcurrencyIsolation:
                 errors.append(f"线程{i} 异常: {e}")
 
         threads = [
-            threading.Thread(target=worker, args=(i,), name=f"t{i}")
-            for i in range(n_threads)
+            threading.Thread(target=worker, args=(i,), name=f"t{i}") for i in range(n_threads)
         ]
         for t in threads:
             t.start()
@@ -757,9 +977,7 @@ def _make_service(monkeypatch, classification, retriever, reranker=None, config=
     # 避免真实 VectorStore / prompt 加载（WRK-001 统一单例后经 get_vector_store 获取）
     monkeypatch.setattr(rag_service_module, "get_vector_store", lambda: object())
     monkeypatch.setattr(rag_service_module, "get_prompts", lambda path: "{input}\n{context}")
-    monkeypatch.setattr(
-        rag_service_module, "prompt_config", {"rag_prompt_path": "x"}
-    )
+    monkeypatch.setattr(rag_service_module, "prompt_config", {"rag_prompt_path": "x"})
 
     service = rag_service_module.RagService()
 
@@ -966,8 +1184,6 @@ class TestRagQuerySSE:
 
         service = FakeService()
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: service)
-        # 强制走新路径（不依赖真实 yaml 开关状态）
-        monkeypatch.setattr(rag_router, "_single_retrieval_enabled", lambda: True)
         app.dependency_overrides[get_current_user] = lambda: UserInfo(
             user_id="test-u", username="tester", created_at=time.time()
         )
@@ -1058,23 +1274,24 @@ class TestRagSearchNewFields:
             rerank_score=0.77,
         )
 
-        class FakeCtx:
-            route_decision = "rag"
-            resolved_parents = [doc]
-            reranked_children = []
-            degradation_events = [
-                {"component": "bm25", "reason": "不可用", "fallback": "vector_only"}
-            ]
-
-            def summary(self):
-                return {}
-
         class FakeService:
-            def prepare(self, query, enable_rewrite=False, rewrite_strategy=""):
-                return FakeCtx()
+            def search(self, query, enable_rewrite=False, rewrite_strategy=""):
+                from agent_material.rag_engine.rag_service import RagService
+
+                item = RagService._serialize_search_document(doc, 1)
+                return SimpleNamespace(
+                    results=(item,),
+                    count=1,
+                    degradation_events=(
+                        {
+                            "component": "bm25",
+                            "reason": "不可用",
+                            "fallback": "vector_only",
+                        },
+                    ),
+                )
 
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: FakeService())
-        monkeypatch.setattr(rag_router, "_single_retrieval_enabled", lambda: True)
         app.dependency_overrides[get_current_user] = lambda: UserInfo(
             user_id="test-u", username="tester", created_at=time.time()
         )

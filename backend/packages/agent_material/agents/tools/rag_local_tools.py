@@ -50,14 +50,6 @@ def _get_vector_store():
     return _VectorStore
 
 
-def _serialize_docs(docs) -> list[dict]:
-    """将 LangChain Document 列表序列化为可 JSON 的 dict 列表。"""
-    return [
-        {"page_content": d.page_content, "metadata": d.metadata}
-        for d in docs
-    ]
-
-
 def _mask_conn_str(conn_str: str) -> str:
     """隐藏连接字符串中的密码。"""
     try:
@@ -80,10 +72,10 @@ def rag_search(
     enable_rewrite: bool = False,
     rewrite_strategy: str = "",
 ) -> str:
-    """根据查询内容从向量数据库中检索最相关的文档片段。
+    """通过统一 RAG 检索管道返回最相关的文档片段。
 
-    使用混合检索（向量相似度 + BM25 关键词 + CrossEncoder 重排序）。
-    多粒度模式下返回父chunk以提供更丰富的上下文。
+    与 REST ``/rag/search``、RAG 问答共用 ``RagService.search/prepare``，
+    包含混合检索、RRF、全局重排、父块回溯、上下文预算与降级记录。
     可选启用查询改写（enable_rewrite=True），支持组合策略（如 step_back+expand）。
     单策略: expand/hyde/step_back/decompose，用 + 组合。
     返回文档片段的文本内容、来源文件和元数据。
@@ -91,25 +83,19 @@ def rag_search(
     Args:
         query: 查询文本
         enable_rewrite: 是否启用查询改写
-        rewrite_strategy: 改写策略，空字符串使用默认策略
+        rewrite_strategy: 改写策略；默认空字符串表示不改写，启用时应显式指定
     """
     try:
         service = _get_rag_service()
-        if enable_rewrite:
-            docs = service._retrieve_with_strategy(query, rewrite_strategy)
-        else:
-            docs = service.retriever_docx(query)
-
-        if not docs:
-            return json.dumps(
-                {"results": [], "message": "未检索到相关文档"}, ensure_ascii=False
-            )
-
-        return json.dumps(
-            {"results": _serialize_docs(docs), "count": len(docs)},
-            ensure_ascii=False,
-            indent=2,
+        result = service.search(
+            query,
+            enable_rewrite=enable_rewrite,
+            rewrite_strategy=rewrite_strategy,
         )
+        payload = result.as_dict()
+        if result.count == 0:
+            payload["message"] = "未检索到相关文档"
+        return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     except Exception as e:
         logger.error(f"[rag_search] 失败: {e}", exc_info=True)
         return json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -134,7 +120,7 @@ def rag_query(
     Args:
         query: 用户问题
         enable_rewrite: 是否启用查询改写
-        rewrite_strategy: 改写策略，空字符串使用默认策略
+        rewrite_strategy: 改写策略；默认空字符串表示不改写，启用时应显式指定
     """
     try:
         service = _get_rag_service()

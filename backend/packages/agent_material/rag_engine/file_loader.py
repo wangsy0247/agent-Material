@@ -121,7 +121,9 @@ def pptx_loader(path: str) -> list:
         return []
 
 
-def mineru_pdf_loader(path: str) -> list[Document]:
+def mineru_pdf_loader(
+    path: str, *, version_context: dict | None = None
+) -> list[Document]:
     """使用 MinerU 加载 PDF → 清洗 Markdown → 返回结构化 Document。
 
     流程: MinerU API → Markdown → MarkdownCleaner → list[Document]
@@ -178,12 +180,22 @@ def mineru_pdf_loader(path: str) -> list[Document]:
         from agent_material.rag_engine.mineru_loader import mineru_pdf_loader as _mineru_load
         from agent_material.rag_engine.cleaner.markdown_cleaner import MarkdownCleaner
 
-        docs = _mineru_load(path)
+        docs = (
+            _mineru_load(path, version_context=version_context)
+            if version_context is not None
+            else _mineru_load(path)
+        )
         if not docs:
             return _native_text_fallback("MinerU 解析失败或质量门禁未通过")
 
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            is_artifact_document,
+        )
+
         cleaner = MarkdownCleaner()
-        cleaned = cleaner.clean(docs)
+        artifacts = [doc for doc in docs if is_artifact_document(doc)]
+        cleaned = cleaner.clean([doc for doc in docs if not is_artifact_document(doc)])
+        cleaned.extend(artifacts)
         if cleaned:
             logger.info(f"[MinerU] 加载+清洗成功: {path} | {len(cleaned)} 篇文档")
             return cleaned

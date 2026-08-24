@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import tempfile
 import threading
 import uuid
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import get_current_admin, get_current_user
@@ -36,6 +37,15 @@ _MAX_UPLOAD_FILES = 10
 _MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 _UPLOAD_CHUNK_SIZE = 1024 * 1024
 _upload_commit_lock = asyncio.Lock()
+_ARTIFACT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_PREVIEW_MEDIA_TYPES = {
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
 
 def _internal_error(message: str, error: Exception) -> HTTPException:
@@ -46,20 +56,6 @@ def _internal_error(message: str, error: Exception) -> HTTPException:
         status_code=500,
         detail=f"{message}，错误编号: {error_id}",
     )
-
-
-def _single_retrieval_enabled() -> bool:
-    """single_retrieval_sse 开关：开启时 /rag/query 与 /rag/search 走单次检索新路径。"""
-    try:
-        from agent_material.utils import config_handler
-
-        return bool(
-            config_handler.vector_store_config.get("feature_flags", {}).get(
-                "single_retrieval_sse", False
-            )
-        )
-    except Exception:
-        return False
 
 
 def _feature_flag(name: str, default: bool = False) -> bool:
@@ -122,10 +118,22 @@ def _get_rag_service():
 
 class RAGSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000, description="检索查询")
+    enable_rewrite: bool = Field(default=False, description="是否启用查询改写")
+    rewrite_strategy: str = Field(
+        default="",
+        max_length=100,
+        description="查询改写策略；默认空值表示不改写，启用时应显式指定策略",
+    )
 
 
 class RAGQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000, description="用户问题")
+    enable_rewrite: bool = Field(default=False, description="是否启用查询改写")
+    rewrite_strategy: str = Field(
+        default="",
+        max_length=100,
+        description="查询改写策略；默认空值表示不改写，启用时应显式指定策略",
+    )
 
 
 class RAGAddDocumentsRequest(BaseModel):
@@ -191,6 +199,48 @@ async def rag_stats(current_user: UserInfo = Depends(get_current_user)):
         raise _internal_error("获取统计信息失败", e)
 
 
+@router.get("/artifacts/{artifact_id}/asset", summary="预览已激活的图表资源")
+async def rag_artifact_asset(
+    artifact_id: str,
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """通过不可猜测的图表 ID 返回资源，不接受客户端提供的文件路径或 URI。"""
+    if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+        raise HTTPException(status_code=404, detail="图表资源不存在")
+    try:
+        artifact = _get_vector_store().get_active_artifact(artifact_id)
+        if (
+            not artifact
+            or artifact.get("artifact_type") != "figure"
+            or not artifact.get("asset_uri")
+        ):
+            raise HTTPException(status_code=404, detail="图表资源不存在")
+
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            ArtifactStore,
+        )
+
+        path = ArtifactStore().resolve(str(artifact["asset_uri"]))
+        media_type = _PREVIEW_MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None or not path.is_file():
+            raise HTTPException(status_code=404, detail="图表资源不存在")
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=404, detail="图表资源不存在") from None
+    except Exception as e:
+        raise _internal_error("读取图表资源失败", e)
+
+
 @router.post("/search", summary="检索相关文档", response_model=BaseResponse)
 async def rag_search(
     request: RAGSearchRequest,
@@ -198,76 +248,30 @@ async def rag_search(
 ):
     """根据查询内容从向量数据库检索最相关的文档片段。
 
-    single_retrieval_sse 开关开启时走 service.prepare 的请求级检索管道
-    （不生成回答），返回 resolved_parents（父块级，与 /rag/query 的生成上下文
-    同源；无父块时回退 reranked_children 子块），并附带溯源字段与降级事件。
+    始终调用 ``RagService.search`` 统一入口，不生成回答。返回内容与
+    ``/rag/query`` 实际进入 Prompt 的冻结文档同源，并附带溯源字段与降级事件。
     """
     try:
         service = _get_rag_service()
-
-        # ── 新路径：请求级检索管道（单次检索，含全局 Rerank 与父块回溯）──
-        if _single_retrieval_enabled():
-            ctx = await asyncio.to_thread(service.prepare, request.query)
-            docs = ctx.resolved_parents or ctx.reranked_children
-            if not docs:
-                return BaseResponse(code=200, message="未检索到相关文档", data=[])
-
-            results = []
-            for i, doc in enumerate(docs, start=1):
-                m = doc.metadata or {}
-                source = m.get("source", "未知来源")
-                results.append(
-                    {
-                        "index": i,
-                        "rank": i,
-                        "chunk_id": m.get("chunk_id"),
-                        "parent_id": m.get("parent_id"),
-                        "document_id": m.get("document_id"),
-                        "version_id": m.get("version_id"),
-                        "source": source,
-                        "source_filename": m.get("source_filename")
-                        or (os.path.basename(source) if isinstance(source, str) else None),
-                        "page_start": m.get("page_start"),
-                        "page_end": m.get("page_end"),
-                        "page_unknown": bool(m.get("page_unknown", False)),
-                        "heading_path": m.get("heading_path"),
-                        "rerank_score": m.get("rerank_score"),
-                        "score": m.get(
-                            "rerank_score", m.get("rrf_score", m.get("score", 0.0))
-                        ),
-                        "snippet": doc.page_content[:300] + "..."
-                        if len(doc.page_content) > 300
-                        else doc.page_content,
-                        "metadata": m,
-                    }
-                )
-            resp = BaseResponse(
-                code=200, message="success", data=results, total=len(results)
-            )
-            if ctx.degradation_events:
-                resp.degradation_events = ctx.degradation_events
-            logger.info("rag_search_summary %s", ctx.summary())
-            return resp
-
-        # ── 旧路径（回滚兼容）──
-        docs = service.retriever_docx(request.query)
-        if not docs:
+        result = await asyncio.to_thread(
+            service.search,
+            request.query,
+            request.enable_rewrite,
+            request.rewrite_strategy,
+        )
+        if not result.results:
             return BaseResponse(code=200, message="未检索到相关文档", data=[])
-
-        results = []
-        for i, doc in enumerate(docs, start=1):
-            source = doc.metadata.get("source", "未知来源")
-            score = doc.metadata.get("score", 0.0)
-            results.append(
-                {
-                    "index": i,
-                    "source": source,
-                    "score": score,
-                    "snippet": doc.page_content,
-                    "metadata": doc.metadata,
-                }
-            )
-        return BaseResponse(code=200, message="success", data=results, total=len(results))
+        return BaseResponse(
+            code=200,
+            message="success",
+            data=list(result.results),
+            total=result.count,
+            degradation_events=(
+                list(result.degradation_events)
+                if result.degradation_events
+                else None
+            ),
+        )
     except Exception as e:
         raise _internal_error("检索失败", e)
 
@@ -313,34 +317,19 @@ async def rag_query(
         try:
             # RagService 首次初始化是重量级同步操作，放线程避免阻塞 event loop
             service = await asyncio.to_thread(_get_rag_service)
-            use_new = _single_retrieval_enabled()
-
             # 1. 阶段事件：开始检索
             yield next_sse("status", {"phase": "retrieving"})
-
-            if use_new:
-                # 新路径（ONL-002）：全程只调一次 service.prepare，
-                # sources 与 LLM 上下文来自同一份冻结上下文
-                ctx = await asyncio.to_thread(service.prepare, request.query)
-                # chat/irrelevant 无检索结果；rag 空结果发空 sources 数组
-                no_context = ctx.route_decision == "rag" and not ctx.final_context
-                sources = ctx.sources
-            else:
-                # 旧路径（回滚兼容）：先检索一次构造 sources
-                docs = await asyncio.to_thread(service.retriever_docx, request.query)
-                no_context = not docs
-                sources = []
-                for i, doc in enumerate(docs, start=1):
-                    source = doc.metadata.get("source", "未知来源")
-                    score = doc.metadata.get("score", 0.0)
-                    sources.append(
-                        {
-                            "index": i,
-                            "source": source,
-                            "score": score,
-                            "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
-                        }
-                    )
+            # 所有 REST/Agent 问答入口都只调用一次 prepare；配置回滚逻辑封装在
+            # RagService.prepare 内部，路由层不再直接依赖旧 retriever 方法。
+            ctx = await asyncio.to_thread(
+                service.prepare,
+                request.query,
+                request.enable_rewrite,
+                request.rewrite_strategy,
+            )
+            # chat/irrelevant 无检索结果但仍需交给 stream_answer 生成直答/拒答。
+            no_context = ctx.route_decision == "rag" and not ctx.final_context
+            sources = ctx.sources
 
             # 2. 发送 start 事件
             yield next_sse("start", {"query": request.query})
@@ -369,11 +358,8 @@ async def rag_query(
             def _consume_stream():
                 stream = None
                 try:
-                    if use_new:
-                        # 不再检索，仅消费冻结上下文
-                        stream = service.stream_answer(ctx)
-                    else:
-                        stream = service.get_summary_stream(request.query)
+                    # 不再检索，仅消费冻结上下文。
+                    stream = service.stream_answer(ctx)
                     for chunk in stream:
                         if cancel_event.is_set():
                             logger.info("[RAG] 检测到取消标志，终止后台 LLM 流式生成")

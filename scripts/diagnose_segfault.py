@@ -17,7 +17,6 @@ print()
 # 逐步导入，精确定位
 modules = [
     ("os, sys", "import os; import sys"),
-    ("agent_material.utils.langsmith_setup", "from agent_material.utils import langsmith_setup"),
     ("agent_material.models.model_factory", "from agent_material.models import model_factory"),
     ("agent_material.memory.manager", "from agent_material.memory import manager"),
     ("agent_material.agents.tools.agent_tools", "from agent_material.agents.tools import agent_tools"),

@@ -1,0 +1,58 @@
+{
+  "kb_id": "agent_eval",
+  "collection_prefix": "agent_eval",
+  "clean": true,
+  "collections": [
+    {
+      "collection": "agent_eval_small",
+      "total_rows": 2154,
+      "active_rows": 2154,
+      "missing_required_rows": 0,
+      "active_documents": 1,
+      "active_versions": 1,
+      "required_metadata": [
+        "document_id",
+        "version_id",
+        "parent_id",
+        "is_active",
+        "chunk_id"
+      ]
+    },
+    {
+      "collection": "agent_eval_large",
+      "total_rows": 976,
+      "active_rows": 976,
+      "missing_required_rows": 0,
+      "active_documents": 1,
+      "active_versions": 1,
+      "required_metadata": [
+        "document_id",
+        "version_id",
+        "parent_id",
+        "is_active"
+      ]
+    }
+  ],
+  "active_sources": [
+    {
+      "collection": "agent_eval_large",
+      "source": "abacus.pdf",
+      "rows": 976
+    },
+    {
+      "collection": "agent_eval_small",
+      "source": "abacus.pdf",
+      "rows": 2154
+    }
+  ],
+  "kb_state": {
+    "kb_id": "agent_eval",
+    "active_revision": 1,
+    "bm25_revision": 1,
+    "updated_at": "2026-08-20T05:52:52.075191+00:00"
+  },
+  "task_counts": {},
+  "version_counts": {
+    "active": 1
+  }
+}

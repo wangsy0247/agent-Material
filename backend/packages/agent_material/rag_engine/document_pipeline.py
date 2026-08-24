@@ -62,7 +62,9 @@ class DocumentLoader:
         }
 
     @classmethod
-    def load(cls, file_path: str) -> list[Document]:
+    def load(
+        cls, file_path: str, *, version_context: dict | None = None
+    ) -> list[Document]:
         cls._init_loaders()
         ext = os.path.splitext(file_path)[1].lower()
         loader = cls._LOADERS.get(ext)
@@ -71,7 +73,10 @@ class DocumentLoader:
                 f"不支持的文件类型: {ext}。"
                 f"支持的类型: {list(cls._LOADERS.keys())}"
             )
-        docs = loader(file_path)
+        if ext == ".pdf":
+            docs = loader(file_path, version_context=version_context)
+        else:
+            docs = loader(file_path)
         logger.info(f"[Loader] {file_path} 加载完成 | {len(docs)} 页/块")
         return docs
 
@@ -182,25 +187,47 @@ class ProcessingPipeline:
             切分后的 Document 列表
         """
         # 阶段 1：加载（MinerU 已内建清洗）
-        docs = self.loader.load(file_path)
+        docs = self.loader.load(file_path, version_context=version_context)
         if not docs:
             logger.warning(f"文件加载为空: {file_path}")
             return []
 
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            is_artifact_document,
+        )
+
+        # 图表实体是一图/一表一个检索单元，不能进入 Markdown 清洗和普通切分器。
+        artifact_docs = [doc for doc in docs if is_artifact_document(doc)]
+        text_docs = [doc for doc in docs if not is_artifact_document(doc)]
+
+        # P1 视觉增强是离线、显式 opt-in 的步骤。失败时默认保留 P0 文本图表
+        # 对象继续入库；配置 failure_policy=fail_version 时抛错关闭新版本。
+        from agent_material.rag_engine.indexing.visual_enrichment import (
+            enrich_artifact_documents,
+        )
+        from agent_material.rag_engine.indexing.visual_preprocessing import (
+            preprocess_artifact_documents,
+        )
+
+        artifact_docs = preprocess_artifact_documents(artifact_docs)
+        artifact_docs = enrich_artifact_documents(artifact_docs)
+
         # 阶段 2：数据清洗 & 格式恢复（Markdown 来源的二次清洗）
-        docs = self._clean_documents(docs, file_path)
+        text_docs = self._clean_documents(text_docs, file_path)
 
         # 可选：保存切分前的内容（调试/检查用）
         if save_pre_split_dir:
-            self._save_pre_split(docs, file_path, save_pre_split_dir)
+            self._save_pre_split(text_docs + artifact_docs, file_path, save_pre_split_dir)
 
         # 阶段 3：按扩展名选择切分器并切分
         splitter = self._get_splitter(file_path)
-        chunks = splitter.split_documents(docs)
+        chunks = splitter.split_documents(text_docs)
 
         # 阶段 4：metadata 增强
         if enhance_metadata:
             chunks = self._enhance_metadata(chunks)
+
+        chunks.extend(self._prepare_artifact_chunks(artifact_docs))
 
         # 阶段 5：版本上下文 → 确定性 ID 与溯源元数据（放在增强之后，避免被覆盖）
         if version_context:
@@ -210,6 +237,25 @@ class ProcessingPipeline:
             f"[Pipeline] {file_path} → {splitter.__class__.__name__} | 产出 {len(chunks)} chunks"
         )
         return chunks
+
+    @staticmethod
+    def _prepare_artifact_chunks(artifacts: list[Document]) -> list[Document]:
+        """适配现有父子索引契约，同时保持图表内容不被切碎。"""
+        prepared: list[Document] = []
+        for artifact in artifacts:
+            meta = artifact.metadata.copy()
+            placeholder = (
+                f"artifact:{meta.get('content_type')}:"
+                f"{meta.get('artifact_ordinal', 0)}"
+            )
+            meta["parent_id"] = placeholder
+            meta["parent_doc"] = artifact.page_content
+            parent_meta = meta.copy()
+            parent_meta.pop("parent_doc", None)
+            parent_meta["parent_id"] = placeholder
+            meta["parent_metadata"] = parent_meta
+            prepared.append(Document(page_content=artifact.page_content, metadata=meta))
+        return prepared
 
     @staticmethod
     def _apply_version_context(
@@ -229,6 +275,7 @@ class ProcessingPipeline:
         from datetime import datetime, timezone
 
         from agent_material.rag_engine.versioning import (
+            compute_artifact_id,
             compute_chunk_id,
             compute_parent_id,
         )
@@ -279,11 +326,24 @@ class ProcessingPipeline:
             meta["is_active"] = False  # staging 状态，激活前不参与在线检索
             meta["indexed_at"] = indexed_at
 
+            if meta.get("content_type") in {"figure", "table"}:
+                meta["artifact_id"] = compute_artifact_id(
+                    document_id,
+                    version_id,
+                    str(meta["content_type"]),
+                    int(meta.get("artifact_ordinal", 0)),
+                    str(meta.get("artifact_content_hash", "")),
+                )
+
             parent_meta = meta.get("parent_metadata")
             if isinstance(parent_meta, dict):
                 parent_meta["parent_id"] = parent_id
                 parent_meta["document_id"] = document_id
                 parent_meta["version_id"] = version_id
+                parent_meta["is_active"] = False
+                parent_meta["indexed_at"] = indexed_at
+                if meta.get("artifact_id"):
+                    parent_meta["artifact_id"] = meta["artifact_id"]
 
         logger.info(
             f"[Pipeline] 版本元数据写入完成 | document_id={document_id[:8]}... "

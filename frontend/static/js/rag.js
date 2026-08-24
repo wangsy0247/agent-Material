@@ -14,6 +14,7 @@ const state = {
     abortController: null,
     selectedDocs: new Set(),
     allDocs: [],
+    artifactObjectUrls: new Set(),
 };
 
 // DOM 缓存
@@ -74,6 +75,23 @@ async function apiFetch(path, options = {}) {
     return res.json();
 }
 
+async function apiFetchBlob(path) {
+    await authCtx.ensureTokenValid();
+    const headers = {};
+    if (state.token) headers.Authorization = `Bearer ${state.token}`;
+    const res = await fetch(`${API_BASE}${path}`, { headers });
+    if (res.status === 401 && state.refreshToken) {
+        await authCtx.refresh();
+        return apiFetchBlob(path);
+    }
+    if (!res.ok) {
+        const error = new Error(await res.text());
+        error.status = res.status;
+        throw error;
+    }
+    return res.blob();
+}
+
 // ============================================
 // 工具函数
 // ============================================
@@ -88,6 +106,48 @@ function setError(el, text) {
 
 function setSuccess(el, text) {
     el.innerHTML = `<div class="rag-success">✅ ${AppCommon.escapeHtml(text)}</div>`;
+}
+
+function releaseArtifactPreviews() {
+    state.artifactObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+    state.artifactObjectUrls.clear();
+}
+
+function resultCard(item, compact = false) {
+    const isFigure = item.content_type === 'figure' && item.artifact_id;
+    const preview = isFigure ? `
+        <div class="rag-artifact-preview" data-artifact-preview="${AppCommon.escapeHtml(String(item.artifact_id))}">
+            <div class="rag-artifact-loading">图表预览加载中...</div>
+        </div>` : '';
+    return `
+        <div class="rag-result-item${compact ? ' rag-result-item-compact' : ''}">
+            <div class="rag-result-header">
+                <span class="rag-result-source">#${AppCommon.escapeHtml(String(item.index))} ${AppCommon.escapeHtml(item.source)}</span>
+                <span class="rag-result-score">相似度 ${((item.score || 0) * 100).toFixed(1)}%</span>
+            </div>
+            ${preview}
+            <div class="rag-result-snippet">${AppCommon.escapeHtml(item.snippet || item.caption || '')}</div>
+        </div>`;
+}
+
+async function loadArtifactPreviews(root) {
+    const previews = root.querySelectorAll('[data-artifact-preview]');
+    await Promise.all(Array.from(previews).map(async (preview) => {
+        const artifactId = preview.dataset.artifactPreview;
+        try {
+            const blob = await apiFetchBlob(`/rag/artifacts/${encodeURIComponent(artifactId)}/asset`);
+            const objectUrl = URL.createObjectURL(blob);
+            state.artifactObjectUrls.add(objectUrl);
+            const image = document.createElement('img');
+            image.className = 'rag-artifact-image';
+            image.alt = '检索命中的图表证据';
+            image.loading = 'lazy';
+            image.src = objectUrl;
+            preview.replaceChildren(image);
+        } catch {
+            preview.remove();
+        }
+    }));
 }
 
 // ============================================
@@ -184,6 +244,7 @@ async function doSearch() {
     const status = $('searchStatus');
     const results = $('searchResults');
     setLoading(status, '检索中...');
+    releaseArtifactPreviews();
     results.innerHTML = '';
     try {
         const res = await apiFetch('/rag/search', {
@@ -196,15 +257,8 @@ async function doSearch() {
             results.innerHTML = '<div class="rag-empty">未检索到相关文档</div>';
             return;
         }
-        results.innerHTML = data.map((item) => `
-            <div class="rag-result-item">
-                <div class="rag-result-header">
-                    <span class="rag-result-source">#${AppCommon.escapeHtml(String(item.index))} ${AppCommon.escapeHtml(item.source)}</span>
-                    <span class="rag-result-score">相似度 ${((item.score || 0) * 100).toFixed(1)}%</span>
-                </div>
-                <div class="rag-result-snippet">${AppCommon.escapeHtml(item.snippet)}</div>
-            </div>
-        `).join('');
+        results.innerHTML = data.map((item) => resultCard(item)).join('');
+        await loadArtifactPreviews(results);
     } catch (e) {
         status.innerHTML = '';
         setError(results, AppCommon.formatError(e));
@@ -226,6 +280,7 @@ async function doQuery() {
     state.abortController = new AbortController();
     setLoading(status, '检索并生成中...');
 
+    releaseArtifactPreviews();
     resultEl.innerHTML = `
         <div class="rag-answer" id="queryAnswer"></div>
         <div class="rag-sources-inline" id="querySources" style="display:none;">
@@ -310,15 +365,8 @@ function createQueryEventHandler(answerEl, sourcesWrap, sourcesList, statusEl) {
                 const sources = Array.isArray(event.content) ? event.content : [];
                 if (sources.length) {
                     sourcesWrap.style.display = 'block';
-                    sourcesList.innerHTML = sources.map((s) => `
-                        <div class="rag-result-item" style="margin-bottom:6px;padding:10px;">
-                            <div class="rag-result-header">
-                                <span class="rag-result-source">#${AppCommon.escapeHtml(String(s.index))} ${AppCommon.escapeHtml(s.source)}</span>
-                                <span class="rag-result-score">相似度 ${((s.score || 0) * 100).toFixed(1)}%</span>
-                            </div>
-                            <div class="rag-result-snippet">${AppCommon.escapeHtml(s.snippet)}</div>
-                        </div>
-                    `).join('');
+                    sourcesList.innerHTML = sources.map((s) => resultCard(s, true)).join('');
+                    void loadArtifactPreviews(sourcesList);
                 }
                 break;
             }
@@ -369,6 +417,8 @@ function createQueryEventHandler(answerEl, sourcesWrap, sourcesList, statusEl) {
     }
     return { handler, typewriter };
 }
+
+window.addEventListener('beforeunload', releaseArtifactPreviews);
 
 // ============================================
 // 文档管理

@@ -41,6 +41,7 @@ backend/logs/
 workspace/
 downloads/
 postgresql/
+.rag_assets/
 
 # ============================================
 # 本地文档镜像与测试数据（大文件，不入库）
@@ -53,7 +54,6 @@ docs/**
 md5.text
 specs/
 interview_prep/
-evaluation_data/
 data/
 
 # ============================================

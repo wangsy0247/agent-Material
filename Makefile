@@ -64,4 +64,4 @@ run: ## 启动 API 服务（显式设置 AGENT_API_RELOAD=true 可热重载）
 	RELOAD=""
 	[ "$${AGENT_API_RELOAD:-false}" = "true" ] && RELOAD="--reload"
 	echo "启动服务: http://$$HOST:$$PORT （文档: http://$$HOST:$$PORT/docs）"
-	exec uv run uvicorn backend.app.gateway.app:app --host "$$HOST" --port "$$PORT" $$RELOAD
+	exec python -m uvicorn backend.app.gateway.app:app --host "$$HOST" --port "$$PORT" $$RELOAD

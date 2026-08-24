@@ -15,6 +15,7 @@ mock 策略：
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -66,6 +67,7 @@ class FakeVectorStore:
         self.enqueue_fail_sources = set()
         self._next_task_id = 1000
         self.retried_tasks = []
+        self.active_artifacts = {}
 
     def get_document_count(self):
         return self._document_count
@@ -123,6 +125,9 @@ class FakeVectorStore:
         self.retried_tasks.append(task_id)
         return {"task_id": task_id, "status": "pending", "retries": 0}
 
+    def get_active_artifact(self, artifact_id):
+        return self.active_artifacts.get(artifact_id)
+
 
 class FakeRagService:
     """仅实现 rag.py 端点用到的 RagService 接口。"""
@@ -136,12 +141,36 @@ class FakeRagService:
         ]
         self._stream_chunks = stream_chunks if stream_chunks is not None else ["你好", "世界"]
         self.retriever_queries = []
+        self.search_calls = []
 
     # ── 新路径（single_retrieval_sse 开启）──
 
     def prepare(self, query, enable_rewrite=False, rewrite_strategy=""):
         self.retriever_queries.append(query)
         return FakeRequestContext(query, self._docs)
+
+    def search(self, query, enable_rewrite=False, rewrite_strategy=""):
+        self.search_calls.append((query, enable_rewrite, rewrite_strategy))
+        ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
+        results = []
+        for index, doc in enumerate(ctx.context_docs, start=1):
+            metadata = dict(doc.metadata)
+            results.append(
+                {
+                    "index": index,
+                    "rank": index,
+                    "source": metadata.get("source", "未知来源"),
+                    "score": metadata.get("score", 0.0),
+                    "snippet": doc.page_content,
+                    "page_content": doc.page_content,
+                    "metadata": metadata,
+                }
+            )
+        return SimpleNamespace(
+            results=tuple(results),
+            count=len(results),
+            degradation_events=tuple(ctx.degradation_events),
+        )
 
     def stream_answer(self, ctx):
         yield from self._stream_chunks
@@ -267,6 +296,11 @@ class TestRagAuth:
     def test_sources_unauthenticated_401(self, client):
         assert client.get("/api/v1/rag/sources").status_code == 401
 
+    def test_artifact_asset_unauthenticated_401(self, client):
+        artifact_id = "a" * 32
+        response = client.get(f"/api/v1/rag/artifacts/{artifact_id}/asset")
+        assert response.status_code == 401
+
     def test_delete_by_source_unauthenticated_401(self, client):
         resp = client.post("/api/v1/rag/delete-by-source", json={"source": "a.pdf"})
         assert resp.status_code == 401
@@ -341,6 +375,69 @@ class TestRagStats:
         assert "获取统计信息失败" in resp.json()["detail"]
 
 
+class TestRagArtifactAsset:
+    def test_active_figure_asset_is_served_without_path_leakage(
+        self, authed_client, fake_store, tmp_path, monkeypatch
+    ):
+        from agent_material.rag_engine.indexing import structured_artifacts
+
+        artifact_id = "a" * 32
+        target = tmp_path / "doc" / "v1" / "figure.png"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"\x89PNG\r\n\x1a\npreview")
+        fake_store.active_artifacts[artifact_id] = {
+            "artifact_id": artifact_id,
+            "artifact_type": "figure",
+            "asset_uri": "rag-asset://doc/v1/figure.png",
+            "status": "active",
+        }
+        test_config = {"structured_index": {"artifact_root": str(tmp_path)}}
+        monkeypatch.setattr(config_handler, "vector_store_config", test_config)
+        monkeypatch.setattr(structured_artifacts, "vector_store_config", test_config)
+
+        response = authed_client.get(
+            f"/api/v1/rag/artifacts/{artifact_id}/asset"
+        )
+
+        assert response.status_code == 200
+        assert response.content == target.read_bytes()
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert str(tmp_path) not in str(response.headers)
+
+    @pytest.mark.parametrize("artifact_id", ["not-an-id", "b" * 32])
+    def test_invalid_or_inactive_asset_is_not_found(
+        self, authed_client, fake_store, artifact_id
+    ):
+        response = authed_client.get(
+            f"/api/v1/rag/artifacts/{artifact_id}/asset"
+        )
+        assert response.status_code == 404
+
+    def test_asset_uri_cannot_escape_artifact_root(
+        self, authed_client, fake_store, tmp_path, monkeypatch
+    ):
+        from agent_material.rag_engine.indexing import structured_artifacts
+
+        artifact_id = "c" * 32
+        fake_store.active_artifacts[artifact_id] = {
+            "artifact_id": artifact_id,
+            "artifact_type": "figure",
+            "asset_uri": "rag-asset://../secret.png",
+            "status": "active",
+        }
+        test_config = {"structured_index": {"artifact_root": str(tmp_path)}}
+        monkeypatch.setattr(config_handler, "vector_store_config", test_config)
+        monkeypatch.setattr(structured_artifacts, "vector_store_config", test_config)
+
+        response = authed_client.get(
+            f"/api/v1/rag/artifacts/{artifact_id}/asset"
+        )
+
+        assert response.status_code == 404
+        assert str(tmp_path) not in response.text
+
+
 # ------------------------------------------------------------------
 # POST /search
 # ------------------------------------------------------------------
@@ -362,6 +459,20 @@ class TestRagSearch:
         assert item["snippet"] == "β-Ga2O3 的热导率研究片段"
         assert item["metadata"]["source"] == "data/ga2o3.pdf"
         assert fake_service.retriever_queries == ["热导率"]
+
+    def test_search_forwards_rewrite_options(self, authed_client, fake_service):
+        resp = authed_client.post(
+            "/api/v1/rag/search",
+            json={
+                "query": "热导率",
+                "enable_rewrite": True,
+                "rewrite_strategy": "step_back+expand",
+            },
+        )
+        assert resp.status_code == 200
+        assert fake_service.search_calls == [
+            ("热导率", True, "step_back+expand")
+        ]
 
     def test_search_empty_results(self, authed_client, monkeypatch):
         service = FakeRagService(docs=[])

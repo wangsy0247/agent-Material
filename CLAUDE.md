@@ -150,7 +150,7 @@ Three-layer system in `observability/`:
 2. OpenTelemetry tracing (auto-instruments FastAPI, manual spans for graph nodes and MCP calls)
 3. Prometheus metrics at `/metrics` (request counters, latency histograms, agent iteration counts)
 
-LangSmith and Langfuse integrations are available via environment variables (see `.env.example`).
+Langfuse integration is available via environment variables (see `.env.example`); OpenTelemetry export remains opt-in.
 
 ## Additional Context
 

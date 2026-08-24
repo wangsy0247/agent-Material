@@ -18,10 +18,28 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from langchain_core.documents import Document
 
 from agent_material.utils.logger import logger
+
+
+def _extract_result_markdown(result: Any) -> str | None:
+    if isinstance(result, str):
+        return result
+    return getattr(result, "markdown", None)
+
+
+def _call_mineru_extract(client: Any, pdf_path: str, *, ocr_required: bool) -> Any:
+    """结构化索引使用标准 extract；旧客户端/关闭开关时保留 Flash 路径。"""
+    from agent_material.rag_engine.indexing.structured_artifacts import (
+        structured_index_enabled,
+    )
+
+    if structured_index_enabled() and hasattr(client, "extract"):
+        return client.extract(pdf_path, ocr=ocr_required, table=True)
+    return client.flash_extract(pdf_path)
 
 # MinerU Flash 模式限制
 FLASH_MAX_SIZE_MB = 10
@@ -305,7 +323,8 @@ def _split_all_chunks(
 def _parse_one(
     tmp_path: str, start: int, end: int, idx: int, total: int,
     max_retries: int = BATCH_MAX_RETRIES,
-) -> tuple[int, int, int, str | None]:
+    ocr_required: bool = False,
+) -> tuple[int, int, int, Any | None]:
     """单个切片的 flash_extract 调用，含指数退避重试。
 
     Returns:
@@ -319,7 +338,9 @@ def _parse_one(
     for attempt in range(max_retries + 1):
         try:
             client = MinerU()
-            result = client.flash_extract(tmp_path)
+            result = _call_mineru_extract(
+                client, tmp_path, ocr_required=ocr_required
+            )
         except Exception as exc:
             if attempt < max_retries:
                 wait = 2 ** attempt
@@ -333,7 +354,7 @@ def _parse_one(
 
         if result.state == "done" and result.markdown is not None:
             logger.info(f"[MinerU] {prefix} ✅ {len(result.markdown)} 字符")
-            return (idx, start, end, result.markdown)
+            return (idx, start, end, result)
 
         if attempt < max_retries:
             wait = 2 ** attempt
@@ -352,7 +373,8 @@ def _parse_one(
 def _batch_extract(
     chunks: list[tuple[str, int, int]],
     max_workers: int = BATCH_MAX_WORKERS,
-) -> list[tuple[int, int, str | None]]:
+    ocr_required: bool = False,
+) -> list[tuple[int, int, Any | None]]:
     """使用线程池并发调用 MinerU Flash 解析所有切片。
 
     Returns:
@@ -363,12 +385,13 @@ def _batch_extract(
         f"[MinerU] 并发批处理: {total} 个切片, 最大并发 {max_workers}"
     )
 
-    results: list[tuple[int, int, int, str | None]] = []
+    results: list[tuple[int, int, int, Any | None]] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
                 _parse_one, path, start, end, i, total,
+                ocr_required=ocr_required,
             ): i
             for i, (path, start, end) in enumerate(chunks, start=1)
         }
@@ -386,7 +409,7 @@ def _batch_extract(
 
 
 def _merge_and_cleanup(
-    parsed: list[tuple[int, int, str | None]],
+    parsed: list[tuple[int, int, Any | None]],
     chunks: list[tuple[str, int, int]],
 ) -> tuple[str, int, int]:
     """合并解析结果为完整 Markdown，清理临时文件。
@@ -398,10 +421,11 @@ def _merge_and_cleanup(
     ok = 0
     fail = 0
 
-    for start, end, md in parsed:
-        if md is not None:
+    for start, end, result in parsed:
+        markdown = _extract_result_markdown(result)
+        if markdown is not None:
             header = f"<!-- part p{start}-p{end} -->\n\n"
-            parts.append(header + md)
+            parts.append(header + markdown)
             ok += 1
         else:
             # 失败分片绝不写入占位文本；上层质量门禁会拒绝整份版本。
@@ -430,7 +454,9 @@ def _merge_and_cleanup(
 # ════════════════════════════════════════════════════════════════════════════════
 
 
-def mineru_pdf_loader(file_path: str) -> list[Document]:
+def mineru_pdf_loader(
+    file_path: str, *, version_context: dict | None = None
+) -> list[Document]:
     """使用 MinerU 加载 PDF 为 Markdown 格式，支持文本、表格和图片。
 
     小文件（≤20 页）：直接 API 调用。
@@ -467,7 +493,14 @@ def mineru_pdf_loader(file_path: str) -> list[Document]:
         from mineru import MinerU
 
         client = MinerU()
-        return _extract_single(abs_path, client, 1, total_pages, profile=profile)
+        return _extract_single(
+            abs_path,
+            client,
+            1,
+            total_pages,
+            profile=profile,
+            version_context=version_context,
+        )
 
     # ── 大文件：全量切分 → 并发批处理 → 按页合并 ──
     logger.info(
@@ -485,7 +518,11 @@ def mineru_pdf_loader(file_path: str) -> list[Document]:
 
     # Phase 2: 并发批处理
     logger.info(f"[MinerU] Phase 2/3: 并发解析 {len(chunks)} 个切片 (max_workers={BATCH_MAX_WORKERS})")
-    parsed = _batch_extract(chunks, max_workers=BATCH_MAX_WORKERS)
+    parsed = _batch_extract(
+        chunks,
+        max_workers=BATCH_MAX_WORKERS,
+        ocr_required=profile.ocr_required,
+    )
 
     # Phase 3: 合并 + 清理
     logger.info("[MinerU] Phase 3/3: 合并结果 & 清理临时文件")
@@ -516,12 +553,39 @@ def mineru_pdf_loader(file_path: str) -> list[Document]:
         f"[MinerU] 解析完成: {source_name} | "
         f"{len(full_md)} 字符 | {ok}/{ok + fail} 段成功"
     )
-    return [Document(page_content=full_md, metadata=metadata)]
+    artifact_docs: list[Document] = []
+    ordinal_offset = 0
+    if version_context:
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            build_artifact_documents,
+        )
+
+        for start, _, result in parsed:
+            if result is None or isinstance(result, str):
+                continue
+            batch_artifacts = build_artifact_documents(
+                result,
+                source=abs_path,
+                version_context=version_context,
+                page_offset=start - 1,
+                ordinal_offset=ordinal_offset,
+            )
+            ordinal_offset += len(batch_artifacts)
+            artifact_docs.extend(batch_artifacts)
+        for artifact in artifact_docs:
+            artifact.metadata = {
+                **metadata,
+                **artifact.metadata,
+                "content_format": "structured_artifact",
+            }
+
+    return [Document(page_content=full_md, metadata=metadata), *artifact_docs]
 
 
 def _extract_single(
     pdf_path: str, client, start_page: int, end_page: int,
     profile: PdfProfile | None = None,
+    version_context: dict | None = None,
 ) -> list[Document]:
     """调用 MinerU API 解析单个 PDF 文件（小文件或已切分的片段）。
 
@@ -534,8 +598,11 @@ def _extract_single(
     Returns:
         Document 列表
     """
+    profile = profile or inspect_pdf(pdf_path)
     try:
-        result = client.flash_extract(pdf_path)
+        result = _call_mineru_extract(
+            client, pdf_path, ocr_required=profile.ocr_required
+        )
     except Exception as e:
         logger.error(f"[MinerU] API 调用异常: {e}")
         return []
@@ -569,21 +636,40 @@ def _extract_single(
 
     md_content = header + md_content
 
-    profile = profile or inspect_pdf(pdf_path)
-    return [Document(
+    metadata = {
+        "source": pdf_path,
+        "file_type": "pdf",
+        "loader": "mineru",
+        "start_page": start_page,
+        "end_page": end_page,
+        "parts": 1,
+        "parts_ok": 1,
+        "parts_failed": 0,
+        "content_format": "markdown",
+        "ocr_route_selected": profile.ocr_required,
+        **profile.to_metadata(),
+        **quality,
+    }
+    main_document = Document(
         page_content=md_content,
-        metadata={
-            "source": pdf_path,
-            "file_type": "pdf",
-            "loader": "mineru",
-            "start_page": start_page,
-            "end_page": end_page,
-            "parts": 1,
-            "parts_ok": 1,
-            "parts_failed": 0,
-            "content_format": "markdown",
-            "ocr_route_selected": profile.ocr_required,
-            **profile.to_metadata(),
-            **quality,
-        },
-    )]
+        metadata=metadata,
+    )
+    artifact_docs: list[Document] = []
+    if version_context:
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            build_artifact_documents,
+        )
+
+        artifact_docs = build_artifact_documents(
+            result,
+            source=pdf_path,
+            version_context=version_context,
+            page_offset=start_page - 1,
+        )
+        for artifact in artifact_docs:
+            artifact.metadata = {
+                **metadata,
+                **artifact.metadata,
+                "content_format": "structured_artifact",
+            }
+    return [main_document, *artifact_docs]

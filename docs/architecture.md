@@ -14,11 +14,14 @@ flowchart LR
     A --> M["MCP tools"]
     M --> MP["Materials Project API"]
     R --> V["PGVector"]
+    R --> X["Visual PGVector collection"]
     R --> B["In-process BM25 snapshot"]
     G --> S["SQLite auth/session state"]
     W["RAG indexing worker"] --> P["PDF quality gate / MinerU"]
     W --> V
+    W --> X
     W --> C["PostgreSQL control plane"]
+    P --> F["Local content-addressed figure assets"]
     C --> B
 ```
 
@@ -32,6 +35,11 @@ flowchart LR
   generation. A worker that loses its lease must not commit activation.
 - The parent and child records used by retrieval must share document and
   version identity.
+- MinerU figure/table objects have deterministic `artifact_id` values. Their
+  PostgreSQL records and vector representations participate in the same
+  staging/active/retired transaction as the containing document version.
+- Binary figure assets are stored outside PGVector under content-addressed
+  local paths. Metadata exposes only `rag-asset://` logical URIs.
 - A failed parse, embedding batch, validation, or activation leaves the prior
   active version available.
 - BM25 publishes a fully built immutable snapshot only after its captured
@@ -49,6 +57,57 @@ flowchart LR
   reranked order.
 - The citation list and generation prompt are derived from one frozen request
   context so they cannot silently diverge.
+- Figure/table candidates are deduplicated by `artifact_id`; returned sources
+  preserve the object type, caption, page/bounding box, and logical asset URI.
+- P2 visual queries use a deterministic, model-free route planner. Plain text
+  questions do not call the image embedding provider; figure, panel, trend,
+  comparison, and numeric-chart questions may enable the visual channel.
+- Text-vector, BM25, and image-vector rankings are fused with weighted RRF.
+  Main-image and panel duplicates of one artifact contribute only once per
+  channel, while the best matched panel location is retained as evidence.
+- REST search, Agent tools, and answer generation expose the same versioned
+  `evidence_locator`: document/version identity, page, artifact/panel, bounding
+  box, logical asset URI, retrieval channels, and numeric fact-gate state.
+
+P1 adds an opt-in visual description stage for figures. The structured JSON and
+its deterministic text representation are stored with the same document
+version and reused by the existing hybrid retriever. When separately enabled,
+online generation sends only the frozen top visual evidence to a visual model;
+timeouts or model errors fall back to the frozen text RAG context. Both visual
+features are disabled by default.
+
+P2 adds a separate PGVector collection for high-resolution figure and explicit
+panel embeddings. Text queries and image assets are embedded by the same
+multimodal model and dimension. Visual vectors share the document lifecycle:
+they are written as staging records, validated by exact expected count, and
+activated/retired in the same control-plane transaction as text vectors. The
+provider call receives image bytes as a data URI; neither the payload nor stored
+metadata contains a host path. The feature remains default-off and requires
+explicit external-processing consent, credentials, reindexing, and evaluation.
+
+P2 intentionally does not perform automatic chart digitization or unrestricted
+automatic panel detection. Those features have a higher silent-error risk and
+remain outside the stable-delivery scope.
+
+Before visual description, low-resolution MinerU figures are re-rendered from
+the original PDF using the page number and MinerU's normalized bounding box.
+Rendering starts at 300 DPI and may increase to a bounded 450 DPI to meet the
+configured readability target. Derived images remain content-addressed assets.
+Panel crops require explicit pixel boxes by default; whitespace-based automatic
+splitting is available only as an opt-in mode because axes and legends can look
+like panel gutters.
+
+Visual JSON validity is separate from factual validity. A conservative fact
+gate always stores the raw model result for auditing, but excludes unverified
+multi-series trends and numeric key values from trusted retrieval text. Model
+confidence and model self-verification are not trusted. Exact values are
+released only when legend mapping and numeric facts are confirmed by a human,
+gold evaluation, or a trusted parser. Numeric questions over blocked evidence
+return a controlled response without another visual-model call.
+
+Authenticated clients can preview an active figure through its opaque
+`artifact_id`. The gateway resolves the logical URI server-side, rejects path
+traversal and unsafe media types, and never returns a host filesystem path.
 
 ## Authorization boundary
 

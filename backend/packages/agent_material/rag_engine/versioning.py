@@ -110,3 +110,22 @@ def compute_chunk_id(
     content_hash = hashlib.sha256(content.encode()).hexdigest()
     raw = f"{document_id}:{version_id}:{parent_id}:{position}:{content_hash}"
     return hashlib.sha256(raw.encode()).hexdigest()[:_ID_LEN]
+
+
+def compute_artifact_id(
+    document_id: str,
+    version_id: str,
+    artifact_type: str,
+    ordinal: int,
+    content_hash: str,
+) -> str:
+    """生成稳定的图表实体 ID。
+
+    ID 不依赖普通文本切分位置，因此调整父子 chunk 参数不会让同一文档版本中的
+    figure/table 身份漂移。
+    """
+    raw = (
+        f"{document_id}:{version_id}:artifact:{artifact_type}:"
+        f"{ordinal}:{content_hash}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:_ID_LEN]

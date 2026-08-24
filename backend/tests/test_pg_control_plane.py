@@ -35,6 +35,7 @@ CONN_STR = normalize_conn_str(get_vector_store_config()["connection_string"])
 PREFIX = "test_rag_"
 SMALL = "test_ctrl_small"
 LARGE = "test_ctrl_large"
+VISUAL = "test_ctrl_visual"
 
 TASKS = t("rag_ingest_tasks", PREFIX)
 VERSIONS = t("rag_document_versions", PREFIX)
@@ -499,6 +500,121 @@ class TestVersionRepository:
         assert fs["active_version_id"] == "v2"
         assert fs["status"] == "active"
         assert kb_repo.get(kb)["active_revision"] == 2
+
+    def test_artifact_rows_follow_version_activation(self, pg, collections):
+        small, large = collections
+        repo = VersionRepository(pg, PREFIX)
+        doc, kb, source = "doc-artifact", "kb-artifact", "/data/artifact.pdf"
+        repo.ensure_document(doc, kb, source, "artifact.pdf")
+
+        def artifact(version: str, ordinal: int = 0) -> dict:
+            return {
+                "artifact_id": f"artifact-{version}-{ordinal}",
+                "artifact_type": "figure",
+                "ordinal": ordinal,
+                "page_start": 1,
+                "page_end": 1,
+                "bbox": [10, 20, 300, 220],
+                "caption": f"图 {version}",
+                "nearby_context": "实验结果",
+                "searchable_text": f"[图表] 图 {version} 实验结果",
+                "structured_content": "",
+                "asset_uri": f"rag-asset://{doc}/{version}/figure.png",
+                "content_hash": f"hash-{version}",
+                "parser": "mineru",
+                "visual_description": {
+                    "schema_version": "visual-chart-v1",
+                    "chart_type": "line_chart",
+                },
+                "visual_summary": "三条曲线随温度升高而下降",
+                "visual_model": "fake-vl",
+                "visual_status": "completed",
+                "visual_confidence": 0.9,
+                "visual_prompt_version": "visual-chart-v1",
+                "visual_content_hash": f"visual-{version}",
+            }
+
+        _insert_chunks(pg, small, doc, "v1", 1, False)
+        _insert_chunks(pg, large, doc, "v1", 1, False)
+        repo.register_staging(doc, "v1", "hash-v1")
+        assert repo.replace_staging_artifacts(doc, "v1", [artifact("v1")]) == 1
+        assert repo.validate_artifacts(doc, "v1", 1)[0] is True
+        repo.mark_validated(doc, "v1", 1, 1, artifact_count=1)
+        t1 = _claim_task(pg, "artifact-v1")
+        repo.activate_version(
+            doc, "v1", source, "hash-v1", 1000.0, 100, small, large,
+            task_id=t1["task_id"], worker_id="w-test",
+            lease_generation=t1["lease_generation"],
+        )
+        active_artifact = repo.list_artifacts(doc, "v1")[0]
+        assert active_artifact["status"] == "active"
+        assert active_artifact["visual_status"] == "completed"
+        assert active_artifact["visual_description"]["chart_type"] == "line_chart"
+
+        _insert_chunks(pg, small, doc, "v2", 1, False)
+        _insert_chunks(pg, large, doc, "v2", 1, False)
+        repo.register_staging(doc, "v2", "hash-v2")
+        repo.replace_staging_artifacts(doc, "v2", [artifact("v2")])
+        repo.mark_validated(doc, "v2", 1, 1, artifact_count=1)
+        t2 = _claim_task(pg, "artifact-v2")
+        assert repo.activate_version(
+            doc, "v2", source, "hash-v2", 2000.0, 200, small, large,
+            task_id=t2["task_id"], worker_id="w-test",
+            lease_generation=t2["lease_generation"],
+        ) == "v1"
+
+        assert repo.list_artifacts(doc, "v1", active_only=False)[0]["status"] == "retired"
+        assert repo.list_artifacts(doc, "v2")[0]["status"] == "active"
+
+    def test_visual_vectors_activate_and_retire_in_same_version_transaction(
+        self, pg, collections
+    ):
+        small, large = collections
+        with psycopg.connect(pg) as conn:
+            conn.execute(
+                "INSERT INTO langchain_pg_collection (uuid, name, cmetadata) "
+                "VALUES (%s, %s, '{}')",
+                (str(uuid.uuid4()), VISUAL),
+            )
+            conn.commit()
+
+        repo = VersionRepository(pg, PREFIX)
+        doc, kb, source = "doc-visual", "kb-visual", "/data/visual.pdf"
+        repo.ensure_document(doc, kb, source, "visual.pdf")
+        _insert_chunks(pg, small, doc, "v1", 1, False)
+        _insert_chunks(pg, large, doc, "v1", 1, False)
+        _insert_chunks(pg, VISUAL, doc, "v1", 1, False)
+        repo.register_staging(doc, "v1", "hash-v1")
+        repo.mark_validated(doc, "v1", 1, 1, visual_count=1)
+
+        activate_task = _claim_task(pg, "visual-v1")
+        repo.activate_version(
+            doc,
+            "v1",
+            source,
+            "hash-v1",
+            1000.0,
+            100,
+            small,
+            large,
+            VISUAL,
+            task_id=activate_task["task_id"],
+            worker_id="w-test",
+            lease_generation=activate_task["lease_generation"],
+        )
+        assert _active_flags(pg, VISUAL, doc, "v1") == [True]
+
+        delete_task = _claim_task(pg, "visual-delete")
+        assert repo.delete_document(
+            doc,
+            small,
+            large,
+            VISUAL,
+            task_id=delete_task["task_id"],
+            worker_id="w-test",
+            lease_generation=delete_task["lease_generation"],
+        ) == "deleted"
+        assert _active_flags(pg, VISUAL, doc, "v1") == [False]
 
     def test_activate_rollback_when_target_not_validated(self, pg, collections):
         small, large = collections
