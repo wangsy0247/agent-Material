@@ -32,12 +32,10 @@ class BaseModelFactory(ABC):
 class ChatModelFactory(BaseModelFactory):
     def generator(self) -> Optional[BaseChatModel | Embeddings]:
         return ChatOpenAI(
-            model_name=agent_config["chat_model_name"],
+            model=agent_config["chat_model_name"],
             max_tokens=agent_config["max_tokens"],
             streaming=True,
-            model_kwargs={
-                "extra_body": {"enable_thinking": True}
-            }
+            extra_body={"enable_thinking": True},
         )
 
 

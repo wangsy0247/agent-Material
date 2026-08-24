@@ -15,26 +15,23 @@
 #         LANGFUSE_HOST="https://cloud.langfuse.com"
 # =============================================================
 
-version: "3.3"
-
 services:
   # ── PostgreSQL + pgvector: 向量数据库 ─────────────────────
   # 注意：本机 5432 被其它项目（multiagent-studio）的容器占用，
   # 故映射到 5433；连接配置见 config/vector_store_config.yaml
   # 与 .env 的 POSTGRES_CHECKPOINTER_URL。
   pgvector:
-    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/pgvector/pgvector:pg16
-    container_name: agent_material_pgvector
+    image: pgvector/pgvector:pg16
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=langgraph
+      POSTGRES_USER: ${POSTGRES_USER:-agent_material}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_material_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-langgraph}
     volumes:
       - pg16_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d langgraph"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agent_material} -d ${POSTGRES_DB:-langgraph}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -42,4 +39,3 @@ services:
 
 volumes:
   pg16_data:
-    external: true

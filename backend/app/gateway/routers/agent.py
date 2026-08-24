@@ -219,7 +219,7 @@ async def agent_chat(
             agent_invocation_total.labels(mode="invoke", status="error").inc()
             http_request_total.labels(method="POST", endpoint=endpoint, status_code=500).inc()
             logger.error("agent_chat_failed", extra={"error": str(e)}, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Agent 执行失败")
         finally:
             http_request_duration.labels(method="POST", endpoint=endpoint).observe(time.time() - t_req)
             http_request_in_flight.labels(method="POST").dec()

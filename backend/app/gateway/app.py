@@ -39,8 +39,8 @@ load_dotenv()
 PROJECT_ROOT = get_project_path()
 
 # 从环境变量读取端口（WSL 下可自由切换避免冲突）
-API_PORT = int(os.environ.get("AGENT_API_PORT"))
-API_HOST = os.environ.get("AGENT_API_HOST")
+API_PORT = int(os.environ.get("AGENT_API_PORT", "8000"))
+API_HOST = os.environ.get("AGENT_API_HOST", "127.0.0.1")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -101,6 +101,11 @@ async def lifespan(app: FastAPI):
     # ===== Startup =====
     logger.info("=" * 50, extra={"event": "startup_begin"})
 
+    # 认证配置属于启动硬依赖：禁止带默认 JWT 密钥运行。
+    from .auth.auth import validate_auth_configuration
+
+    validate_auth_configuration()
+
     # ── 可观测性初始化 ──
     try:
         from agent_material.observability import init_all
@@ -131,12 +136,36 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ MCP 连接失败: {e} | Agent 将仅使用本地工具")
 
-    # 注意：RAG 组件通过 rag_local_tools 进程内懒加载，无需预热。
+    # ── RAG 运行时初始化（WRK-001）──
+    # 初始化进程内统一 VectorStore 单例（REST/RagService/Agent Tool 共享），
+    # 并启动 PG Worker：启动后立即领取 pending/租约过期任务，不依赖新写请求。
+    # 失败只记日志降级（RAG 不可用不应拖垮整个网关）。
+    try:
+        from agent_material.rag_engine.vector_store import get_vector_store
+
+        rag_store = get_vector_store()
+        rag_store.start_worker()
+        logger.info("✅ RAG 运行时初始化完成，PG Worker 已启动（自动恢复待处理任务）")
+    except Exception as e:
+        logger.warning(f"⚠️ RAG 运行时初始化失败（RAG 功能降级，不影响网关其余功能）: {e}")
+
     logger.info("=" * 50)
     yield
 
     # ===== Shutdown =====
     logger.info("🛑 服务关闭中...")
+
+    # ── 停止 RAG 后台 Worker（WRK-001）──
+    # 停止领取新任务，等待当前任务到安全点退出；peek 避免未初始化时触发构造。
+    try:
+        from agent_material.rag_engine.vector_store import peek_vector_store
+
+        store = peek_vector_store()
+        if store is not None:
+            store.stop_worker(timeout=10.0)
+            logger.info("✅ RAG Worker 已停止")
+    except Exception as e:
+        logger.warning(f"⚠️ RAG Worker 停止失败: {e}")
     if _mcp_health_task is not None and not _mcp_health_task.done():
         _mcp_health_task.cancel()
         try:
@@ -190,14 +219,20 @@ app = _FastAPIClass(
 
 # ==================== 中间件配置 ====================
 
-# CORS：允许前端跨域调用
-# 生产环境通过 AGENT_CORS_ORIGINS 环境变量收紧为具体域名（逗号分隔）；
-# 缺省 ["*"] 保持开发便利（注意 "*" 与 allow_credentials=True 组合时浏览器不允许带凭据）
-_cors_origins = [o.strip() for o in os.environ.get("AGENT_CORS_ORIGINS", "*").split(",") if o.strip()] or ["*"]
+# CORS 默认仅允许本机页面。部署到其他域名时必须显式提供白名单。
+_default_cors_origins = "http://localhost:8000,http://127.0.0.1:8000"
+_cors_origins = [
+    origin.strip()
+    for origin in os.environ.get(
+        "AGENT_CORS_ORIGINS", _default_cors_origins
+    ).split(",")
+    if origin.strip()
+]
+_cors_allow_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

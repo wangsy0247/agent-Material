@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from jose import jwt as jose_jwt
+import jwt
 
 # backend/ 与 backend/packages 加入路径（pyproject 仅配置了 packages）
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,7 +47,7 @@ def _expired_token(token_type: str = "access") -> str:
         "type": token_type,
         "exp": time.time() - 3600,
     }
-    return jose_jwt.encode(payload, auth_mod.SECRET_KEY, algorithm=auth_mod.ALGORITHM)
+    return jwt.encode(payload, auth_mod.SECRET_KEY, algorithm=auth_mod.ALGORITHM)
 
 
 # ---------- 纯逻辑：密码与 JWT ----------
@@ -65,6 +65,16 @@ class TestPasswordHashing:
 
 
 class TestJwtTokens:
+    def test_weak_or_placeholder_secret_rejected(self, monkeypatch):
+        monkeypatch.setattr(auth_mod, "SECRET_KEY", "change-me-in-production")
+        with pytest.raises(RuntimeError, match="AUTH_SECRET_KEY"):
+            auth_mod.validate_auth_configuration()
+
+    def test_strong_secret_accepted(self, monkeypatch):
+        secret = "a" * 48
+        monkeypatch.setattr(auth_mod, "SECRET_KEY", secret)
+        assert auth_mod.validate_auth_configuration() == secret
+
     def test_access_token_decodes_user_id(self):
         token = auth_mod.create_access_token("uid-1", "alice")
         data = auth_mod.decode_token(token)
@@ -83,10 +93,10 @@ class TestJwtTokens:
         assert auth_mod.decode_token(_expired_token()) is None
 
     def test_tampered_signature_rejected(self):
-        token = jose_jwt.encode(
+        token = jwt.encode(
             {"sub": "uid-3", "username": "eve", "type": "access",
              "exp": time.time() + 600},
-            "attacker-controlled-key",
+            "attacker-controlled-key-that-is-long-enough",
             algorithm=auth_mod.ALGORITHM,
         )
         assert auth_mod.decode_token(token) is None
@@ -95,7 +105,7 @@ class TestJwtTokens:
         assert auth_mod.decode_token("not-a-jwt") is None
 
     def test_missing_type_claim_rejected(self):
-        token = jose_jwt.encode(
+        token = jwt.encode(
             {"sub": "uid-4", "username": "noType", "exp": time.time() + 600},
             auth_mod.SECRET_KEY,
             algorithm=auth_mod.ALGORITHM,

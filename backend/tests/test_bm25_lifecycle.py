@@ -1,10 +1,16 @@
-"""BM25 生命周期与在线链路收口测试（Spec V2 9 / 10.2 / 12.3 / 15）。
+"""BM25 生命周期与在线链路收口测试（Spec V3 11 / 12.3 / 15）。
 
 覆盖：
-- 9.1 冷启动：只加载 active 子块 + 记录本地 bm25_revision
-- 9.2 revision 检测刷新：落后触发 refresh_documents、本地/远端 revision 推进、节流
-- 9.3/10.2 RRF 前 active 二次校验：退役候选剔除、校验 SQL 失败降级 vector-only
-- 9.3 刷新失败：保留旧 BM25 实例 + 旧语料退役内容被二次校验过滤（1+3 组合）
+- BM25-001 唯一构建状态机：冷启动=热刷新同一 rebuild 流程（T-BM25-01），
+  先捕获 revision 再加载（T-BM25-02）
+- BM25-002/INV-006 严格 active-only：缺 is_active 不进语料（T-BM25-05）
+- BM25-003 加载失败显式化：SQL/连接/collection/契约失败抛 BM25LoadError，
+  旧实例保留、revision 不推进（T-BM25-03）；合法空知识库成功构建并记
+  revision（T-BM25-04）
+- BM25-004 多进程语义：两个实例各自按 local revision 刷新（T-BM25-09）
+- BM25-005 RRF 前 active 校验：缺 chunk_id 候选丢弃（T-BM25-06）、
+  退役候选剔除、校验 SQL 失败降级 vector-only（T-BM25-07）
+- 9.3 刷新失败：保留旧 BM25 实例 + 旧语料退役内容被二次校验过滤（T-BM25-08）
 - 12.3 SSE 取消：_consume_stream 因取消标志退出、底层 stream 被关闭、cancelled 帧保留
 - 15 可运维性：/rag/kb-state、/rag/consistency-check 端点与一致性检测 SQL
 
@@ -32,7 +38,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # vector_store 必须先于 psycopg 导入——在 test_auth（jose/cryptography）
 # 之后若以 psycopg → vector_store 顺序导入会稳定 segfault（收集期 139），
 # 反向顺序则正常。请勿调整下列两组的先后关系。
-from agent_material.rag_engine.vector_store import VectorStore  # noqa: E402
+from agent_material.rag_engine.vector_store import (  # noqa: E402
+    BM25LoadError,
+    VectorStore,
+)
 
 import psycopg  # noqa: E402
 from psycopg.types.json import Jsonb  # noqa: E402
@@ -51,14 +60,13 @@ from agent_material.rag_engine.indexing import multi_gran_retriever as mgr_modul
 from agent_material.rag_engine.indexing.multi_gran_retriever import (  # noqa: E402
     MultiGranularityRetriever,
 )
-from agent_material.utils.config_handler import vector_store_config  # noqa: E402
+from agent_material.utils.config_handler import (  # noqa: E402
+    get_vector_store_config,
+    vector_store_config,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
-CONN_STR = normalize_conn_str(
-    yaml.safe_load((ROOT / "config" / "vector_store_config.yaml").read_text())[
-        "connection_string"
-    ]
-)
+CONN_STR = normalize_conn_str(get_vector_store_config()["connection_string"])
 PREFIX = "test_rag_"
 SMALL = "test_bm25_small"
 LARGE = "test_bm25_large"
@@ -145,9 +153,6 @@ def kb_id(monkeypatch) -> str:
     """pg 控制面 + 每个用例独立的 kb_id（经 character_name 注入），
     避免共享 test_rag_rag_kb_state 行导致 revision 跨用例累积。"""
     kid = f"test_kb_{uuid.uuid4().hex[:8]}"
-    monkeypatch.setattr(
-        VectorStore, "_pg_control_plane_enabled", staticmethod(lambda: True)
-    )
     monkeypatch.setitem(vector_store_config, "character_name", kid)
     return kid
 
@@ -176,32 +181,96 @@ def _make_retriever(monkeypatch, docs=None) -> MultiGranularityRetriever:
 
 class TestColdStart:
     def test_cold_start_loads_active_only(self, collections):
-        """冷启动无条件只加载 active 子块（staging/retired 不进 BM25）。"""
+        """冷启动无条件只加载显式 active 子块（staging/retired/缺 is_active 不进 BM25）。"""
         _insert_chunk(
             CONN_STR, SMALL, "active 子块内容",
-            {"chunk_id": "c-active", "is_active": True},
+            {
+                "chunk_id": "c-active",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
         )
         _insert_chunk(
             CONN_STR, SMALL, "staging 子块内容",
-            {"chunk_id": "c-staging", "is_active": False},
+            {
+                "chunk_id": "c-staging",
+                "document_id": "d-1",
+                "version_id": "v-2",
+                "parent_id": "p-2",
+                "is_active": False,
+            },
         )
         store = VectorStore()
-        docs = store._load_documents_from_collection(SMALL, active_only=True)
+        docs = store._load_documents_from_collection(
+            SMALL, active_only=True, require_parent_id=True
+        )
         chunk_ids = {d.metadata.get("chunk_id") for d in docs}
         assert "c-active" in chunk_ids
         assert "c-staging" not in chunk_ids
 
-    def test_cold_start_records_revision(self, pg, kb_id, monkeypatch):
-        """加载后把当前 active_revision 记为本地 bm25_revision 并回写。"""
+    def test_cold_start_records_revision(self, pg, collections, kb_id, monkeypatch):
+        """T-BM25-01：冷启动 active_revision=N，走统一 rebuild 状态机，
+        构建成功后 local_bm25_revision=N 且回写远端观测值。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "active 子块内容",
+            {
+                "chunk_id": "c-1",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
+        )
         kb = KbStateRepository(pg, PREFIX)
         kb.increment_active_revision(kb_id)
         kb.increment_active_revision(kb_id)
 
         store = _make_store(monkeypatch, kb)
-        store._init_bm25_revision()
+        store._multi_gran_enabled = True
+        monkeypatch.setattr(
+            store, "_get_multi_index",
+            lambda: SimpleNamespace(
+                small_name=SMALL, large_name=LARGE,
+                small_store=None, large_store=None,
+            ),
+        )
 
+        store._init_multi_retriever()  # 冷启动 = refresh_bm25 同一状态机
+
+        assert store._multi_retriever is not None
+        assert len(store._multi_retriever.all_documents) == 1
         assert store._local_bm25_revision == 2
         assert kb.get(kb_id)["bm25_revision"] == 2
+
+    def test_cold_start_load_failure_keeps_revision_zero(
+        self, pg, collections, kb_id, monkeypatch
+    ):
+        """冷启动加载失败：挂空语料兜底实例（vector-only），revision 不推进，
+        等待节流窗口重试（BM25-003）。"""
+        kb = KbStateRepository(pg, PREFIX)
+        kb.increment_active_revision(kb_id)
+        store = _make_store(monkeypatch, kb)
+        store._multi_gran_enabled = True
+        monkeypatch.setattr(
+            store, "_get_multi_index",
+            lambda: SimpleNamespace(
+                small_name=SMALL, large_name=LARGE,
+                small_store=None, large_store=None,
+            ),
+        )
+
+        def _boom(*a, **kw):
+            raise BM25LoadError("模拟连接失败")
+
+        monkeypatch.setattr(store, "_load_documents_from_collection", _boom)
+        store._init_multi_retriever()
+
+        assert store._multi_retriever is not None  # 兜底实例已挂
+        assert store._multi_retriever.all_documents == []  # vector-only
+        assert store._local_bm25_revision == 0  # 未推进
+        assert kb.get(kb_id)["bm25_revision"] == 0
 
 
 # ------------------------------------------------------------------
@@ -217,11 +286,23 @@ class TestRevisionRefresh:
             pytest.skip("rank-bm25 未安装")
         _insert_chunk(
             CONN_STR, SMALL, "氧化镓热导率研究",
-            {"chunk_id": "c-1", "is_active": True},
+            {
+                "chunk_id": "c-1",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
         )
         _insert_chunk(
             CONN_STR, SMALL, "金刚石热导率研究",
-            {"chunk_id": "c-2", "is_active": True},
+            {
+                "chunk_id": "c-2",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
         )
         kb = KbStateRepository(pg, PREFIX)
 
@@ -306,6 +387,242 @@ class TestRevisionRefresh:
 
 
 # ------------------------------------------------------------------
+# T-BM25-02 捕获 revision 后发生激活：local 记捕获值，下轮追平
+# ------------------------------------------------------------------
+
+
+class TestCaptureThenActivate:
+    def test_local_records_captured_not_latest(
+        self, pg, collections, kb_id, monkeypatch
+    ):
+        """构建窗口内发生新激活：local 仍记捕获值（不误标新 revision），
+        下一轮节流检测自动追平（BM25-001 / INV-007）。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "active 子块",
+            {
+                "chunk_id": "c-1",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
+        )
+        kb = KbStateRepository(pg, PREFIX)
+        kb.increment_active_revision(kb_id)  # active_revision = 1
+
+        store = _make_store(monkeypatch, kb, interval=0.0)
+        store._multi_gran_enabled = True
+        monkeypatch.setattr(
+            store, "_get_multi_index",
+            lambda: SimpleNamespace(small_name=SMALL, large_name=LARGE),
+        )
+        store._multi_retriever = _make_retriever(monkeypatch)
+
+        # 首次加载中途模拟一次新激活（active_revision 1 → 2），仅触发一次
+        orig_load = store._load_documents_from_collection
+        activated = {"done": False}
+
+        def load_then_activate(*a, **kw):
+            docs = orig_load(*a, **kw)
+            if not activated["done"]:
+                activated["done"] = True
+                kb.increment_active_revision(kb_id)
+            return docs
+
+        monkeypatch.setattr(
+            store, "_load_documents_from_collection", load_then_activate
+        )
+
+        assert store.refresh_bm25() is True
+        assert store._local_bm25_revision == 1  # 记捕获值，而非加载后的最新值 2
+        assert kb.get(kb_id)["bm25_revision"] == 1
+
+        # 下一轮节流检测：active_revision=2 > local=1 → 再刷新追平
+        store.maybe_refresh_bm25()
+        assert store._local_bm25_revision == 2
+
+
+# ------------------------------------------------------------------
+# T-BM25-03/04/05 加载失败显式化与合法空知识库（BM25-002/003）
+# ------------------------------------------------------------------
+
+
+class TestLoadFailureSemantics:
+    def test_load_failure_keeps_old_instance_and_revision(
+        self, pg, collections, kb_id, monkeypatch
+    ):
+        """T-BM25-03：SQL 加载失败（≠构建失败）→ 返回 False，旧实例保留，
+        local/远端 revision 均不推进，下个节流窗口重试。"""
+        kb = KbStateRepository(pg, PREFIX)
+        kb.increment_active_revision(kb_id)  # active_revision = 1
+        store = _make_store(monkeypatch, kb, interval=0.0)
+        store._multi_gran_enabled = True
+        monkeypatch.setattr(
+            store, "_get_multi_index",
+            lambda: SimpleNamespace(small_name=SMALL, large_name=LARGE),
+        )
+        old_retr = _make_retriever(
+            monkeypatch,
+            docs=[Document(page_content="旧语料", metadata={"chunk_id": "c-old"})],
+        )
+        store._multi_retriever = old_retr
+
+        # 开关式加载故障注入：开启时抛错，关闭后走真实加载
+        orig_load = store._load_documents_from_collection
+        fail = {"on": True}
+
+        def gated_load(*a, **kw):
+            if fail["on"]:
+                raise BM25LoadError("模拟 SQL 执行失败")
+            return orig_load(*a, **kw)
+
+        monkeypatch.setattr(store, "_load_documents_from_collection", gated_load)
+        assert store.refresh_bm25() is False
+
+        assert store._multi_retriever is old_retr  # 旧实例保留
+        assert store._local_bm25_revision == 0  # revision 不推进
+        assert kb.get(kb_id)["bm25_revision"] == 0
+
+        # 恢复加载后下个窗口自动重试成功
+        fail["on"] = False
+        store.maybe_refresh_bm25()
+        assert store._local_bm25_revision == 1
+
+    def test_load_nonexistent_collection_raises(self, pg):
+        """BM25-003：collection 不存在是加载失败，抛 BM25LoadError 而非返回 []。"""
+        store = VectorStore()
+        with pytest.raises(BM25LoadError, match="collection 不存在"):
+            store._load_documents_from_collection(
+                "test_bm25_no_such_collection", active_only=True
+            )
+
+    def test_empty_kb_builds_empty_bm25_and_records_revision(
+        self, pg, collections, kb_id, monkeypatch
+    ):
+        """T-BM25-04：合法空知识库（成功 SQL + 0 行）→ 成功构建空 BM25
+        （vector-only 降级）并推进 revision。"""
+        kb = KbStateRepository(pg, PREFIX)
+        kb.increment_active_revision(kb_id)  # active_revision = 1，语料为空
+        store = _make_store(monkeypatch, kb, interval=0.0)
+        store._multi_gran_enabled = True
+        monkeypatch.setattr(
+            store, "_get_multi_index",
+            lambda: SimpleNamespace(small_name=SMALL, large_name=LARGE),
+        )
+        retr = _make_retriever(monkeypatch)  # 空语料
+        store._multi_retriever = retr
+
+        assert store.refresh_bm25() is True
+        assert store._local_bm25_revision == 1  # 空语料也推进 revision
+        assert kb.get(kb_id)["bm25_revision"] == 1
+        assert retr.all_documents == []
+        assert retr._bm25_retriever is None  # vector-only
+
+    def test_missing_is_active_not_loaded(self, collections):
+        """T-BM25-05：metadata 缺 is_active 的行不进入 BM25 语料（INV-006，
+        缺失不再视为 active）。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "缺 is_active 的完整行",
+            {
+                "chunk_id": "c-no-active-flag",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+            },
+        )
+        _insert_chunk(
+            CONN_STR, SMALL, "显式 active 行",
+            {
+                "chunk_id": "c-active",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
+        )
+        store = VectorStore()
+        docs = store._load_documents_from_collection(
+            SMALL, active_only=True, require_parent_id=True
+        )
+        chunk_ids = {d.metadata["chunk_id"] for d in docs}
+        assert chunk_ids == {"c-active"}
+
+    def test_contract_violation_raises(self, collections):
+        """T-BM25-05：active 行 metadata 契约不全（缺 chunk_id）→ 加载失败
+        抛 BM25LoadError（metadata 契约校验失败属加载失败，BM25-003）。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "缺 chunk_id 的 active 行",
+            {"document_id": "d-1", "version_id": "v-1", "is_active": True},
+        )
+        store = VectorStore()
+        with pytest.raises(BM25LoadError, match="契约不全"):
+            store._load_documents_from_collection(SMALL, active_only=True)
+
+    def test_child_missing_parent_id_raises(self, collections):
+        """T-BM25-05：多粒度子块缺 parent_id → metadata 契约失败抛错。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "缺 parent_id 的 active 子块",
+            {
+                "chunk_id": "c-1",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "is_active": True,
+            },
+        )
+        store = VectorStore()
+        with pytest.raises(BM25LoadError, match="parent_id"):
+            store._load_documents_from_collection(
+                SMALL, active_only=True, require_parent_id=True
+            )
+
+
+# ------------------------------------------------------------------
+# T-BM25-09 多查询进程：各自按 local revision 独立刷新（BM25-004）
+# ------------------------------------------------------------------
+
+
+class TestMultiProcessSemantics:
+    def test_two_instances_refresh_independently(
+        self, pg, collections, kb_id, monkeypatch
+    ):
+        """两个查询进程（两个 VectorStore 实例）各自维护 local_bm25_revision：
+        一个刷新不带动另一个，正确性只依赖 active_revision > local。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "active 子块",
+            {
+                "chunk_id": "c-1",
+                "document_id": "d-1",
+                "version_id": "v-1",
+                "parent_id": "p-1",
+                "is_active": True,
+            },
+        )
+        kb = KbStateRepository(pg, PREFIX)
+        kb.increment_active_revision(kb_id)  # active_revision = 1
+
+        stores = []
+        for _ in range(2):
+            store = _make_store(monkeypatch, kb, interval=0.0)
+            store._multi_gran_enabled = True
+            monkeypatch.setattr(
+                store, "_get_multi_index",
+                lambda: SimpleNamespace(small_name=SMALL, large_name=LARGE),
+            )
+            store._multi_retriever = _make_retriever(monkeypatch)
+            stores.append(store)
+        store_a, store_b = stores
+
+        # A 检测刷新 → 仅 A 推进
+        store_a.maybe_refresh_bm25()
+        assert store_a._local_bm25_revision == 1
+        assert store_b._local_bm25_revision == 0  # B 不受影响
+
+        # B 下次检测自行追平
+        store_b.maybe_refresh_bm25()
+        assert store_b._local_bm25_revision == 1
+
+
+# ------------------------------------------------------------------
 # 9.3 / 10.2 RRF 前 active 二次校验
 # ------------------------------------------------------------------
 
@@ -315,26 +632,75 @@ class TestActiveRecheck:
         """BM25 语料含已退役 chunk → 二次校验剔除（真实 PG 单条批量 SQL）。"""
         _insert_chunk(
             CONN_STR, SMALL, "现役内容",
-            {"chunk_id": "c-active", "is_active": True},
+            {
+                "chunk_id": "c-active", "document_id": "d-1",
+                "version_id": "v-1", "is_active": True,
+            },
         )
         _insert_chunk(
             CONN_STR, SMALL, "已退役内容",
-            {"chunk_id": "c-retired", "is_active": False},
+            {
+                "chunk_id": "c-retired", "document_id": "d-1",
+                "version_id": "v-0", "is_active": False,
+            },
         )
         # filter_active_bm25 由 config 推导 small collection 名（test_bm25 + _small）
         monkeypatch.setitem(vector_store_config, "character_name", "test_bm25")
         retr = MultiGranularityRetriever(small_store=None, large_store=None)
 
         docs = [
-            Document(page_content="现役内容", metadata={"chunk_id": "c-active"}),
-            Document(page_content="已退役内容", metadata={"chunk_id": "c-retired"}),
+            Document(
+                page_content="现役内容",
+                metadata={"chunk_id": "c-active", "document_id": "d-1", "version_id": "v-1"},
+            ),
+            Document(
+                page_content="已退役内容",
+                metadata={"chunk_id": "c-retired", "document_id": "d-1", "version_id": "v-0"},
+            ),
             Document(page_content="无 chunk_id 旧数据", metadata={}),
         ]
         kept = retr.filter_active_bm25(docs)
         contents = [d.page_content for d in kept]
         assert "现役内容" in contents
         assert "已退役内容" not in contents
-        assert "无 chunk_id 旧数据" in contents  # 无法校验的候选保留（兼容）
+        # T-BM25-06：缺 chunk_id 的候选 RRF 前直接丢弃（BM25-005，不再兼容保留）
+        assert "无 chunk_id 旧数据" not in contents
+
+    def test_filter_all_missing_chunk_id_returns_empty(self, collections, monkeypatch):
+        """T-BM25-06：全部候选缺 chunk_id → 全部丢弃，不打 SQL。"""
+        monkeypatch.setitem(vector_store_config, "character_name", "test_bm25")
+        retr = MultiGranularityRetriever(small_store=None, large_store=None)
+        docs = [Document(page_content="无 chunk_id", metadata={})]
+        assert retr.filter_active_bm25(docs) == []
+
+    def test_filter_uses_chunk_document_version_identity(self, collections, monkeypatch):
+        """相同 legacy chunk_id 不能让另一文档的 retired 候选复活。"""
+        _insert_chunk(
+            CONN_STR, SMALL, "A 的现役块",
+            {
+                "chunk_id": "legacy-shared", "document_id": "doc-a",
+                "version_id": "v1", "is_active": True,
+            },
+        )
+        monkeypatch.setitem(vector_store_config, "character_name", "test_bm25")
+        retr = MultiGranularityRetriever(small_store=None, large_store=None)
+        docs = [
+            Document(
+                page_content="A 的现役块",
+                metadata={
+                    "chunk_id": "legacy-shared", "document_id": "doc-a",
+                    "version_id": "v1",
+                },
+            ),
+            Document(
+                page_content="B 的退役块",
+                metadata={
+                    "chunk_id": "legacy-shared", "document_id": "doc-b",
+                    "version_id": "v0",
+                },
+            ),
+        ]
+        assert [d.page_content for d in retr.filter_active_bm25(docs)] == ["A 的现役块"]
 
     # ── pipeline 级（fake checker，不打 PG）──
 
@@ -362,12 +728,12 @@ class TestActiveRecheck:
             ]
 
     @staticmethod
-    def _make_pipeline(retriever, pg_flag=True):
+    def _make_pipeline(retriever):
         cfg = {
             "k": 5,
             "vector_weight": 0.5,
             "bm25_weight": 0.5,
-            "feature_flags": {"pg_control_plane": pg_flag},
+            "feature_flags": {},
         }
         return RetrievalPipeline(retriever_getter=lambda: retriever, config=cfg)
 
@@ -413,21 +779,6 @@ class TestActiveRecheck:
             e["component"] == "bm25_active_check" and e["fallback"] == "vector_only"
             for e in ctx.degradation_events
         )
-
-    def test_pipeline_recheck_skipped_when_pg_off(self):
-        """pg_control_plane 关闭（SQLite 回滚路径）跳过二次校验。"""
-        v = Document(page_content="向量路结果", metadata={"chunk_id": "v-1"})
-        b = Document(page_content="BM25 候选", metadata={"chunk_id": "b-1"})
-        retr = self._FakeRetriever([v], [b], check_error=RuntimeError("不应被调用"))
-        pipeline = self._make_pipeline(retr, pg_flag=False)
-        ctx = self._make_ctx()
-
-        pipeline.retrieve_branches(ctx)
-
-        assert retr.check_calls == 0
-        contents = [d.page_content for d in ctx.retrieved_children[0]]
-        assert "BM25 候选" in contents
-
 
 # ------------------------------------------------------------------
 # 9.3 刷新失败保留旧实例 + 旧语料退役内容被过滤（冷启动 + 二次校验组合）
@@ -516,17 +867,13 @@ class _SlowFakeService:
 
 
 class TestSseCancel:
-    @pytest.mark.parametrize("use_new", [True, False])
-    def test_cancel_stops_consume_thread(self, monkeypatch, use_new):
+    def test_cancel_stops_consume_thread(self, monkeypatch):
         """取消后 _consume_stream 因取消标志退出：生成提前终止、
         底层 stream 被关闭、cancelled 帧语义保留。"""
         from app.gateway.routers import rag as rag_router
 
         service = _SlowFakeService()
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: service)
-        monkeypatch.setattr(
-            rag_router, "_single_retrieval_enabled", lambda: use_new
-        )
 
         async def main():
             frames: list[str] = []
@@ -562,7 +909,6 @@ class TestSseCancel:
 
         service = _SlowFakeService(total=3, delay=0.01)
         monkeypatch.setattr(rag_router, "_get_rag_service", lambda: service)
-        monkeypatch.setattr(rag_router, "_single_retrieval_enabled", lambda: True)
 
         async def main():
             frames: list[str] = []
@@ -598,24 +944,23 @@ class TestKbStateConsistency:
         assert state["local_bm25_revision"] == 0
         assert state["bm25_lagging"] is True
 
-    def test_kb_state_none_when_sqlite_mode(self, monkeypatch):
-        monkeypatch.setattr(
-            VectorStore, "_pg_control_plane_enabled", staticmethod(lambda: False)
-        )
-        store = VectorStore()
-        assert store.get_kb_state() is None
-
     def test_consistency_check_clean(self, collections, monkeypatch):
         """干净测试库两项检测均应为 0。"""
         monkeypatch.setitem(vector_store_config, "character_name", "test_bm25")
         _insert_chunk(
             CONN_STR, LARGE, "父块内容",
-            {"parent_id": "p-1", "chunk_id": "p-1", "is_active": True},
+            {
+                "source": "manual://clean", "parent_id": "p-1",
+                "chunk_type": "parent",
+                "document_id": "d-1", "version_id": "v-1", "is_active": True,
+            },
         )
         _insert_chunk(
             CONN_STR, SMALL, "子块内容",
             {
                 "chunk_id": "c-1",
+                "chunk_type": "child",
+                "source": "manual://clean",
                 "parent_id": "p-1",
                 "document_id": "d-1",
                 "version_id": "v-1",
@@ -677,7 +1022,7 @@ class TestKbStateEndpoints:
         from app.gateway.auth.schemas import UserInfo
 
         app.dependency_overrides[get_current_user] = lambda: UserInfo(
-            user_id="test-u", username="tester", created_at=time.time()
+            user_id="test-u", username="tester", created_at=time.time(), is_admin=True
         )
         try:
             yield client
@@ -714,15 +1059,6 @@ class TestKbStateEndpoints:
         assert body["code"] == 200
         assert body["data"]["active_revision"] == 7
         assert body["data"]["bm25_revision"] == 7
-
-    def test_kb_state_sqlite_mode(self, authed_client, monkeypatch):
-        store = SimpleNamespace(get_kb_state=lambda: None)
-        self._patch_store(monkeypatch, store)
-        resp = authed_client.get("/api/v1/rag/kb-state")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["data"] is None
-        assert "SQLite" in body["message"]
 
     def test_consistency_check_success(self, authed_client, monkeypatch):
         store = SimpleNamespace(

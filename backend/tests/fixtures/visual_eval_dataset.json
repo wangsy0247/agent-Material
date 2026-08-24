@@ -1,0 +1,12 @@
+{
+  "schema_version": "visual-rag-dataset-v1",
+  "cases": [
+    {
+      "question_id": "synthetic-1",
+      "question": "合成图表的主要趋势是什么？",
+      "gold_artifact_ids": ["synthetic-figure-a"],
+      "required_answer_terms": [["上升", "增加"]],
+      "gold_status": "verified"
+    }
+  ]
+}

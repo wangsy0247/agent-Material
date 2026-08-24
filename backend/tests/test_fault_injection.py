@@ -50,18 +50,14 @@ from agent_material.rag_engine.db.pg.schema import normalize_conn_str
 from agent_material.rag_engine.db.worker import BackgroundWorker
 
 ROOT = Path(__file__).resolve().parents[2]
-CONN_STR = normalize_conn_str(
-    yaml.safe_load((ROOT / "config" / "vector_store_config.yaml").read_text())[
-        "connection_string"
-    ]
-)
+from agent_material.utils.config_handler import get_vector_store_config
+
+CONN_STR = normalize_conn_str(get_vector_store_config()["connection_string"])
 PREFIX = "test_fi_rag_"
 KB = "test_fi"
 SMALL = "test_fi_small"
 LARGE = "test_fi_large"
 
-VERSIONS = t("rag_document_versions", PREFIX)
-TASKS = t("rag_ingest_tasks", PREFIX)
 FILES = t("rag_file_states", PREFIX)
 
 
@@ -378,6 +374,14 @@ def _ingest_via_queue(env, max_retries=1) -> int:
     )
 
 
+def _retry_and_process(env, tid: int) -> None:
+    """显式重置 failed 任务并重新处理（WRK-006：retry_failed 是唯一预算重置入口）。"""
+    assert env.tasks.retry_failed(tid) is True
+    claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
+    assert claimed is not None and claimed["task_id"] == tid
+    env.worker._process_pg(claimed)
+
+
 def _active_flags(conn_str, collection, document_id, version_id) -> list[bool]:
     with psycopg.connect(conn_str) as conn:
         rows = conn.execute(
@@ -426,10 +430,10 @@ class TestChildInsertFailure:
         assert env.versions.get_active(document_id) is None
         assert env.files.get(source) is None
 
-        # 修复后重试：staging 残留被清理后重建，最终只有一个 active version
+        # 修复后显式重试（WRK-006）：staging 残留被清理后重建，最终只有一个 active version
         env.index.fail_children = False
-        tid2 = _ingest_via_queue(env)
-        assert env.tasks.get(tid2)["status"] == "completed"
+        _retry_and_process(env, tid)
+        assert env.tasks.get(tid)["status"] == "completed"
 
         v = _single_active_version(env, document_id)
         assert v["version_id"] == version_id
@@ -462,10 +466,10 @@ class TestCrashBeforeValidate:
         assert env.versions.get_active(document_id) is None
         assert env.files.get(str(env.file)) is None
 
-        # 重试后成功，最终只有一个 active version
+        # 显式重试后成功，最终只有一个 active version
         monkeypatch.undo()
-        tid2 = _ingest_via_queue(env)
-        assert env.tasks.get(tid2)["status"] == "completed"
+        _retry_and_process(env, tid)
+        assert env.tasks.get(tid)["status"] == "completed"
         v = _single_active_version(env, document_id)
         assert v["version_id"] == version_id
         assert _active_flags(env.pg, SMALL, document_id, version_id) == [True] * 3
@@ -504,21 +508,23 @@ class TestActivateTransactionFailure:
         assert env.kb.get(KB)["active_revision"] == rev_before
         assert env.files.get(str(env.file))["active_version_id"] == v1
 
-        # 修复后重试成功：v2 激活、v1 退役，只有一个 active version
+        # 修复后显式重试成功：v2 激活、v1 退役，只有一个 active version
         monkeypatch.undo()
-        tid2 = _ingest_via_queue(env)
-        assert env.tasks.get(tid2)["status"] == "completed"
+        _retry_and_process(env, tid)
+        assert env.tasks.get(tid)["status"] == "completed"
         v = _single_active_version(env, document_id)
         assert v["version_id"] == v2
         assert env.versions.get(document_id, v1)["status"] == "retired"
         assert env.kb.get(KB)["active_revision"] == rev_before + 1
 
 
-# ── 14.1 激活成功、Worker 返回前崩溃（租约过期回收 + 幂等跳过）──
+# ── 14.1 激活提交即任务完成（ACT-004 / T-ACT-05）──────────────
 
 
 class TestCrashAfterActivateBeforeReturn:
-    def test_lease_expired_reclaim_idempotent_skip(self, env):
+    def test_activate_commit_completes_task_no_double_execution(self, env):
+        """T-ACT-05：任务 completed 与激活在同一事务提交——崩溃后不存在
+        "已激活但任务未完成"的中间态；陈旧重试幂等退出、不二次增 revision。"""
         document_id, version_id = _doc_ver(env)
         tid = env.tasks.enqueue(
             "ingest_file",
@@ -528,30 +534,21 @@ class TestCrashAfterActivateBeforeReturn:
         )
         claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
 
-        # 模拟"激活成功、Worker 返回前崩溃"：直接跑处理器但不 complete/fail，
-        # 任务停在 processing
+        # 直接跑处理器（绕过 _process_pg 的外层 complete）：
+        # 激活事务内已完成任务（ACT-004）
+        env.worker._lease_generation = claimed["lease_generation"]
         env.worker._handle_ingest_pg(claimed)
         assert env.versions.get_active(document_id)["version_id"] == version_id
-        assert env.tasks.get(tid)["status"] == "processing"
-
-        # 用 SQL 把租约改到过去，模拟 Worker 崩溃后租约过期
-        with psycopg.connect(env.pg) as conn:
-            conn.execute(
-                f"UPDATE {TASKS} SET lease_expires_at = now() - interval '1 second' "
-                "WHERE task_id = %s",
-                (tid,),
-            )
-            conn.commit()
-
-        # 另一 Worker 回收并重跑：幂等跳过（pipeline/store 不再执行）
-        env.worker._worker_id = "worker-2"
-        reclaimed = env.tasks.claim("worker-2", lease_seconds=60)
-        assert reclaimed is not None and reclaimed["task_id"] == tid
-        env.worker._process_pg(reclaimed)
-
         assert env.tasks.get(tid)["status"] == "completed"
+        rev_after = env.kb.get(KB)["active_revision"]
+
+        # 模拟崩溃后的陈旧重试（重复跑同一处理器）：幂等跳过，
+        # pipeline/store 不重跑，revision 不二次增加
+        env.worker._handle_ingest_pg(claimed)
+        env.worker._lease_generation = None
         assert env.pipeline.calls == 1  # pipeline 未重跑
         assert env.index.insert_calls == 1  # store 未重跑
+        assert env.kb.get(KB)["active_revision"] == rev_after
 
         # 无重复数据，仍只有一个 active version
         assert env.index._count(SMALL, document_id, version_id) == 3
@@ -581,10 +578,10 @@ class TestFileStateWriteFailure:
         assert _active_flags(env.pg, SMALL, document_id, version_id) == [False] * 3
         assert _active_flags(env.pg, LARGE, document_id, version_id) == [False, False]
 
-        # 修复后重试成功，file_state 落库
+        # 修复后显式重试成功，file_state 落库
         monkeypatch.undo()
-        tid2 = _ingest_via_queue(env)
-        assert env.tasks.get(tid2)["status"] == "completed"
+        _retry_and_process(env, tid)
+        assert env.tasks.get(tid)["status"] == "completed"
         fs = env.files.get(source)
         assert fs is not None and fs["status"] == "active"
         assert fs["active_version_id"] == version_id
@@ -608,7 +605,7 @@ class TestConcurrentClaim:
             task_ids.append(tid)
 
         barrier = threading.Barrier(2)
-        claimed_by: dict[str, list[int]] = {"worker-A": [], "worker-B": []}
+        claimed_by: dict[str, list[tuple[int, int]]] = {"worker-A": [], "worker-B": []}
 
         def claim_loop(worker_id: str):
             barrier.wait()
@@ -616,7 +613,7 @@ class TestConcurrentClaim:
                 task = env.tasks.claim(worker_id, lease_seconds=60)
                 if task is None:
                     break
-                claimed_by[worker_id].append(task["task_id"])
+                claimed_by[worker_id].append((task["task_id"], task["lease_generation"]))
 
         threads = [
             threading.Thread(target=claim_loop, args=(wid,))
@@ -628,14 +625,16 @@ class TestConcurrentClaim:
             th.join(timeout=30)
 
         # 每个任务只被一个 Worker 领取
-        all_claimed = claimed_by["worker-A"] + claimed_by["worker-B"]
+        all_claimed = [tid for ids in claimed_by.values() for tid, _ in ids]
         assert sorted(all_claimed) == sorted(task_ids)
-        assert set(claimed_by["worker-A"]).isdisjoint(claimed_by["worker-B"])
+        assert {t for t, _ in claimed_by["worker-A"]}.isdisjoint(
+            t for t, _ in claimed_by["worker-B"]
+        )
 
         # 收尾：清掉 processing 任务
         for wid, ids in claimed_by.items():
-            for tid in ids:
-                env.tasks.complete(tid, wid)
+            for tid, gen in ids:
+                env.tasks.complete(tid, wid, lease_generation=gen)
 
 
 # ── 14.2 同一文件重复入队 ────────────────────────────────────
@@ -657,7 +656,11 @@ class TestDedupEnqueue:
         )
         # 收尾：清掉 pending 任务
         claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
-        env.tasks.complete(claimed["task_id"], env.worker._worker_id)
+        env.tasks.complete(
+            claimed["task_id"],
+            env.worker._worker_id,
+            lease_generation=claimed["lease_generation"],
+        )
 
 
 # ── 14.2 超最大重试 ──────────────────────────────────────────
@@ -665,6 +668,8 @@ class TestDedupEnqueue:
 
 class TestMaxRetries:
     def test_exceeds_max_retries_failed_not_claimable(self, env):
+        """T-WRK-07：达 max_retries 进 failed 后不再自动领取，
+        同内容新任务不得重置预算，只能显式 retry_failed 恢复。"""
         env.pipeline.empty = True  # pipeline 产出空 chunks，稳定失败
         document_id, version_id = _doc_ver(env)
 
@@ -689,6 +694,28 @@ class TestMaxRetries:
 
         # failed 任务不再被 claim
         assert env.tasks.claim(env.worker._worker_id, lease_seconds=60) is None
+
+        # WRK-006：同内容（同 dedup_key）新入队被拒绝，不得无限重置失败预算
+        assert env.tasks.enqueue(
+            "ingest_file",
+            {"file_path": str(env.file)},
+            f"ingest:{document_id}:{version_id}",
+            max_retries=2,
+        ) is None
+        assert env.tasks.claim(env.worker._worker_id, lease_seconds=60) is None
+
+        # 显式重试入口：重置后才可再领取；失败现场保留
+        assert env.tasks.retry_failed(tid) is True
+        row = env.tasks.get(tid)
+        assert row["status"] == "pending" and row["retries"] == 0
+        assert row["current_stage"] == "pipeline"
+        claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
+        assert claimed is not None and claimed["task_id"] == tid
+        # 收尾：清掉 processing 任务
+        env.tasks.complete(
+            tid, env.worker._worker_id,
+            lease_generation=claimed["lease_generation"],
+        )
 
 
 # ── 14.1 删除事务中途失败 ────────────────────────────────────
@@ -717,12 +744,10 @@ class TestDeleteTransactionFailure:
         assert _active_flags(env.pg, SMALL, document_id, version_id) == [True] * 3
         assert env.kb.get(KB)["active_revision"] == rev_before
 
-        # 修复后重试删除成功
+        # 修复后显式重试删除成功
         monkeypatch.undo()
-        tid2 = _enqueue_and_process(
-            env, "delete_document", {"source": source}, f"delete:{document_id}"
-        )
-        assert env.tasks.get(tid2)["status"] == "completed"
+        _retry_and_process(env, tid)
+        assert env.tasks.get(tid)["status"] == "completed"
         assert env.files.get(source)["status"] == "deleted"
         assert env.versions.get(document_id, version_id)["status"] == "retired"
 

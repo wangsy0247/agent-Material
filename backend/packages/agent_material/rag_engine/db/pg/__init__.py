@@ -8,8 +8,10 @@ PostgreSQL 是唯一持久化真相源，统一承载：
 """
 
 from agent_material.rag_engine.db.pg.repositories import (
+    FencingRejectedError,
     FileStateRepository,
     KbStateRepository,
+    RowcountMismatchError,
     TaskRepository,
     VersionRepository,
 )
@@ -22,8 +24,10 @@ from agent_material.rag_engine.db.pg.schema import (
 
 __all__ = [
     "BASE_TABLES",
+    "FencingRejectedError",
     "FileStateRepository",
     "KbStateRepository",
+    "RowcountMismatchError",
     "TaskRepository",
     "VersionRepository",
     "drop_schema",

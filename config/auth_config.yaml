@@ -2,9 +2,9 @@
 # 认证模块配置 (Authentication Configuration)
 # ============================================
 
-# JWT 密钥（生产环境必须修改！）
-# 可通过环境变量 AUTH_SECRET_KEY 覆盖
-secret_key: "your-super-secret-jwt-key-change-this-in-production"
+# JWT 密钥不写入仓库，必须通过环境变量 AUTH_SECRET_KEY 提供。
+# 服务启动时会拒绝空值、已知占位符和少于 32 字符的弱密钥。
+secret_key: null
 
 # Token 过期时间（分钟）
 access_token_expire_minutes: 60
@@ -20,8 +20,5 @@ algorithm: "HS256"
 # false: 所有请求必须携带有效 Token
 allow_anonymous: false
 
-# 默认管理员账号（首次启动时自动创建，留空则跳过）
-default_admin:
-  username: "admin"
-  password: "admin123"  # 生产环境必须修改
-  email: "admin@example.com"
+# 不自动创建默认管理员。首次部署请运行 scripts/create_admin.py，
+# 交互式设置管理员密码。

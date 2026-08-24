@@ -1,1 +1,1 @@
-"""数据库层 — SQLite 任务队列、文件追踪"""
+"""RAG PostgreSQL 控制面与后台 Worker。"""

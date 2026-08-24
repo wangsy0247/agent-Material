@@ -77,4 +77,4 @@ def get_memory_manager() -> "MemoryManager":
 
 
 # ---- 认证依赖 ----
-from .auth import get_current_user
+from .auth import get_current_admin, get_current_user

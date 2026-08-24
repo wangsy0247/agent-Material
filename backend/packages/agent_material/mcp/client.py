@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Any
 
 from agent_material.config.extensions_config import ExtensionsConfig, McpServerConfig
@@ -26,7 +27,11 @@ def build_server_params(server_name: str, config: McpServerConfig) -> dict[str, 
     if transport_type == "stdio":
         if not config.command:
             raise ValueError(f"MCP server '{server_name}' with stdio transport requires 'command' field")
-        params["command"] = config.command
+        # ``{python}`` keeps stdio servers inside the interpreter/environment
+        # that launched Agent Material. A bare ``python`` is not portable: it
+        # is commonly absent in minimal Linux images and can point at a
+        # different environment on developer machines.
+        params["command"] = sys.executable if config.command == "{python}" else config.command
         params["args"] = config.args
         if config.env:
             params["env"] = config.env

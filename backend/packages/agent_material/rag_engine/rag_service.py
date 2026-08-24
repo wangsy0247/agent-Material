@@ -1,12 +1,14 @@
 import os
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from agent_material.rag_engine.vector_store import VectorStore
+from agent_material.rag_engine.evidence_locator import build_evidence_locator
+from agent_material.rag_engine.vector_store import get_vector_store
 from agent_material.rag_engine.request_context import RequestContext
 from agent_material.utils.prompt_loader import get_prompts
 from agent_material.rag_engine.models import chat_model
@@ -23,11 +25,52 @@ from agent_material.observability.metrics import (
 
 #: 无关问题固定拒答文案
 IRRELEVANT_REPLY = (
-    "当前问题与材料科学知识库领域无关，暂时无法回答。"
-    "请提出材料科学、计算材料学或相关领域的问题。"
+    "当前问题与材料科学知识库领域无关，暂时无法回答。请提出材料科学、计算材料学或相关领域的问题。"
 )
 #: 无检索上下文时的固定回复
 NO_CONTEXT_REPLY = "根据现有资料无法回答该问题。"
+
+
+@dataclass(frozen=True)
+class RagSearchResult:
+    """统一检索入口的结构化结果。
+
+    ``documents`` 与 ``results`` 只包含最终进入冻结上下文的文档，因此 REST
+    搜索、Agent 搜索和问答 Prompt 使用同一份证据集合。``as_dict`` 不暴露
+    LangChain ``Document`` 对象，可直接用于工具 JSON 序列化。
+    """
+
+    request_id: str
+    original_query: str
+    route_decision: str
+    question_type: str | None
+    documents: tuple[Document, ...]
+    results: tuple[dict[str, Any], ...]
+    sources: tuple[dict[str, Any], ...]
+    generated_queries: tuple[dict[str, Any], ...]
+    degradation_events: tuple[dict[str, Any], ...]
+    stage_durations: dict[str, float]
+    context_truncated: bool
+
+    @property
+    def count(self) -> int:
+        return len(self.results)
+
+    def as_dict(self) -> dict[str, Any]:
+        """返回不含 ``Document`` 的 JSON 友好结构。"""
+        return {
+            "request_id": self.request_id,
+            "query": self.original_query,
+            "route_decision": self.route_decision,
+            "question_type": self.question_type,
+            "results": list(self.results),
+            "count": self.count,
+            "sources": list(self.sources),
+            "generated_queries": list(self.generated_queries),
+            "degradation_events": list(self.degradation_events),
+            "stage_durations": dict(self.stage_durations),
+            "context_truncated": self.context_truncated,
+        }
 
 
 def _get_run_config(
@@ -47,6 +90,7 @@ def _get_run_config(
     # 注入 LangFuse Callback Handler（若已初始化）
     try:
         from agent_material.utils.langfuse_setup import get_langfuse_handler
+
         handler = get_langfuse_handler()
         if handler:
             callbacks = config.setdefault("callbacks", [])
@@ -65,7 +109,8 @@ class RagService:
     """
 
     def __init__(self):
-        self.vector_store = VectorStore()
+        # 进程内统一单例（WRK-001）：与 REST 路由 / Agent Tool 共享同一实例
+        self.vector_store = get_vector_store()
         prompt_path = prompt_config.get(
             "rag_prompt_path", "backend/packages/agent_material/prompts/rag/rag_prompt.txt"
         )
@@ -80,11 +125,13 @@ class RagService:
         self._rewriter = None
         self._chat_prompt = None
         self._pipeline = None  # 请求级检索管道（single_retrieval_sse 路径）
+        self._multimodal_generator = None
 
         # ── 配置 ──
         self._routing_config = vector_store_config.get("query_routing", {})
         self._rewrite_config = vector_store_config.get("query_rewriting", {})
-        self._default_strategy = self._rewrite_config.get("default_strategy", "step_back+expand")
+        # 稳定交付优先：配置缺失时也保持不改写，禁止隐式回退到高延迟策略。
+        self._default_strategy = self._rewrite_config.get("default_strategy", "")
         self._enable_hyde = self._rewrite_config.get("enable_hyde", False)
 
     # ── 延迟初始化 ────────────────────────────────────────────
@@ -110,6 +157,10 @@ class RagService:
             self._rewriter = QueryRewriter()
         return self._rewriter
 
+    def _rewrite_enabled(self, requested: bool) -> bool:
+        """配置总开关与请求开关必须同时开启。"""
+        return bool(requested and self._rewrite_config.get("enabled", False))
+
     def _get_chat_prompt(self) -> PromptTemplate:
         if self._chat_prompt is None:
             path = prompt_config.get(
@@ -132,12 +183,75 @@ class RagService:
             )
         return self._pipeline
 
+    def _get_multimodal_generator(self):
+        if self._multimodal_generator is None:
+            from agent_material.rag_engine.multimodal_answer import (
+                MultimodalAnswerGenerator,
+            )
+
+            self._multimodal_generator = MultimodalAnswerGenerator()
+        return self._multimodal_generator
+
+    def _try_multimodal_answer(self, ctx: RequestContext) -> str | None:
+        """视觉证据存在且显式启用时生成；任何失败都回退文本 RAG。"""
+        from agent_material.rag_engine.multimodal_answer import (
+            multimodal_answer_config,
+            multimodal_answer_enabled,
+        )
+
+        if not multimodal_answer_enabled():
+            return None
+        max_images = int(multimodal_answer_config().get("max_images", 2))
+        started = time.time()
+        try:
+            evidence = ctx.visual_sources(limit=max_images)
+            if not evidence:
+                return None
+            from agent_material.rag_engine.indexing.visual_fact_gate import (
+                NUMERIC_GUARDRAIL_REPLY,
+                should_block_numeric_answer,
+            )
+
+            if should_block_numeric_answer(ctx.original_query, evidence):
+                ctx.answer_mode = "numeric_guardrail"
+                ctx.add_degradation(
+                    "numeric_fact_gate",
+                    "unverified_visual_numeric_evidence",
+                    "controlled_refusal",
+                )
+                return NUMERIC_GUARDRAIL_REPLY
+            answer = self._get_multimodal_generator().generate(
+                query=ctx.original_query,
+                context=ctx.final_context,
+                visual_sources=evidence,
+                run_config=_get_run_config(
+                    run_name="rag_multimodal_answer",
+                    query=ctx.original_query,
+                    tags=["rag", "multimodal"],
+                    extra_metadata={"visual_evidence_count": len(evidence)},
+                ),
+            )
+            ctx.record_duration("multimodal_answer", started)
+            ctx.answer_mode = "multimodal"
+            return answer
+        except Exception as exc:
+            ctx.record_duration("multimodal_answer", started)
+            ctx.answer_mode = "text_rag_fallback"
+            ctx.add_degradation(
+                "multimodal_answer",
+                type(exc).__name__,
+                "text_rag",
+            )
+            self._logger.warning(
+                "multimodal_answer_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+
     @staticmethod
     def _single_retrieval_enabled() -> bool:
         """single_retrieval_sse 开关：关闭时走旧路径（回滚兼容）。"""
-        return vector_store_config.get("feature_flags", {}).get(
-            "single_retrieval_sse", False
-        )
+        return vector_store_config.get("feature_flags", {}).get("single_retrieval_sse", False)
 
     # ── 检索器 ────────────────────────────────────────────────
 
@@ -213,9 +327,7 @@ class RagService:
 
         return resolved
 
-    def _retrieve_with_strategy(
-        self, query: str, strategy: str
-    ) -> list[Document]:
+    def _retrieve_with_strategy(self, query: str, strategy: str) -> list[Document]:
         """根据改写策略执行检索，支持组合策略（用 + 连接多个策略）。
 
         单策略示例: "expand", "hyde", "step_back", "decompose"
@@ -255,9 +367,7 @@ class RagService:
             self._logger.warning(f"未知改写策略: {strategy}，回退到原始查询")
             return self.retriever_docx(query)
 
-    def _retrieve_combined(
-        self, query: str, strategies: list[str]
-    ) -> list[Document]:
+    def _retrieve_combined(self, query: str, strategies: list[str]) -> list[Document]:
         """流水线组合多种改写策略，最终多路检索融合。
 
         流水线模型：
@@ -309,8 +419,7 @@ class RagService:
                 unique_queries.append(q)
 
         self._logger.info(
-            f"[Combined] pipeline={'+'.join(strategies)} | "
-            f"{len(unique_queries)} unique queries"
+            f"[Combined] pipeline={'+'.join(strategies)} | {len(unique_queries)} unique queries"
         )
 
         # 阶段 4：多路检索
@@ -343,9 +452,7 @@ class RagService:
         return strategy in ("expand", "hyde", "step_back", "decompose")
 
     @staticmethod
-    def _pipeline_expand(
-        queries: list[str], rewriter
-    ) -> list[str]:
+    def _pipeline_expand(queries: list[str], rewriter) -> list[str]:
         """流水线阶段：查询扩展 — 对每个查询生成同义变体。"""
         expanded: list[str] = []
         for q in queries:
@@ -354,9 +461,7 @@ class RagService:
         return expanded
 
     @staticmethod
-    def _pipeline_stepback(
-        queries: list[str], rewriter
-    ) -> list[str]:
+    def _pipeline_stepback(queries: list[str], rewriter) -> list[str]:
         """流水线阶段：退一步 — 对每个查询生成抽象版本。"""
         result: list[str] = []
         for q in queries:
@@ -367,9 +472,7 @@ class RagService:
         return result
 
     @staticmethod
-    def _pipeline_decompose(
-        queries: list[str], rewriter
-    ) -> list[str]:
+    def _pipeline_decompose(queries: list[str], rewriter) -> list[str]:
         """流水线阶段：分解 — 对每个查询拆分子问题。"""
         decomposed: list[str] = []
         for q in queries:
@@ -377,9 +480,7 @@ class RagService:
             decomposed.extend(subs)
         return decomposed
 
-    def _pipeline_hyde(
-        self, query: str, rewriter
-    ) -> list[float] | None:
+    def _pipeline_hyde(self, query: str, rewriter) -> list[float] | None:
         """流水线阶段：HyDE — 为第一个查询生成假设文档 embedding。"""
         try:
             hyde_doc = rewriter.hyde(query)
@@ -414,9 +515,7 @@ class RagService:
                 all_results.append(docs[:merge_top_k])
 
         merged = self._merge_and_dedup_docs(all_results)
-        self._logger.info(
-            f"[Expand] {len(variants)} variants → {len(merged)} unique docs"
-        )
+        self._logger.info(f"[Expand] {len(variants)} variants → {len(merged)} unique docs")
         return merged[:final_top_k]
 
     def _retrieve_with_hyde(self, query: str) -> list[Document]:
@@ -453,9 +552,7 @@ class RagService:
         finally:
             self.vector_store.set_hyde_embedding(None)  # 清除覆盖
 
-        self._logger.info(
-            f"[HyDE] hyde_doc={len(hyde_doc)} chars → {len(docs)} final docs"
-        )
+        self._logger.info(f"[HyDE] hyde_doc={len(hyde_doc)} chars → {len(docs)} final docs")
         return docs
 
     def _retrieve_with_stepback(self, query: str) -> list[Document]:
@@ -474,9 +571,7 @@ class RagService:
                 all_results.append(docs[:merge_top_k])
 
         merged = self._merge_and_dedup_docs(all_results)
-        self._logger.info(
-            f"[StepBack] 2 queries → {len(merged)} unique docs"
-        )
+        self._logger.info(f"[StepBack] 2 queries → {len(merged)} unique docs")
         return merged[:final_top_k]
 
     def _retrieve_with_decomposition(self, query: str) -> list[Document]:
@@ -495,9 +590,7 @@ class RagService:
                 all_results.append(docs[:merge_top_k])
 
         merged = self._merge_and_dedup_docs(all_results)
-        self._logger.info(
-            f"[Decompose] {len(sub_queries)} sub-queries → {len(merged)} unique docs"
-        )
+        self._logger.info(f"[Decompose] {len(sub_queries)} sub-queries → {len(merged)} unique docs")
         return merged[:final_top_k]
 
     # ── 请求级 prepare / stream_answer（ONL-001/002/003）───────
@@ -514,6 +607,9 @@ class RagService:
         chat/irrelevant 高置信时标记 route_decision 后直接返回（不检索）。
         """
         ctx = RequestContext(original_query=query)
+        rewrite_enabled = self._rewrite_enabled(enable_rewrite)
+        if enable_rewrite and not rewrite_enabled:
+            self._logger.info("查询改写请求被配置总开关拒绝，使用原始 query")
         routing_enabled = self._routing_config.get("enabled", True)
         model_name = chat_model.model_name if chat_model else "unknown"
 
@@ -553,11 +649,11 @@ class RagService:
         if self._single_retrieval_enabled():
             # 新路径：请求级检索管道（plan→branches→fuse→rerank→parents→freeze）
             ctx.rewrite_strategy = (
-                self._resolve_strategy(rewrite_strategy) if enable_rewrite else ""
+                self._resolve_strategy(rewrite_strategy) if rewrite_enabled else ""
             )
             pipeline = self._get_pipeline()
             pipeline.plan_queries(
-                ctx, enable_rewrite=enable_rewrite, strategy=ctx.rewrite_strategy
+                ctx, enable_rewrite=rewrite_enabled, strategy=ctx.rewrite_strategy
             )
             pipeline.retrieve_branches(ctx)
             pipeline.fuse(ctx)
@@ -566,7 +662,7 @@ class RagService:
             pipeline.build_context(ctx)
         else:
             # 旧路径（回滚兼容）：现有 _retrieve_with_strategy / retriever_docx
-            if enable_rewrite:
+            if rewrite_enabled:
                 strategy = self._resolve_strategy(rewrite_strategy)
                 ctx.rewrite_strategy = strategy
                 context_docx = self._retrieve_with_strategy(query, strategy)
@@ -577,33 +673,127 @@ class RagService:
         retrieval_duration.labels(stage="total").observe(time.time() - t_retrieve)
         return ctx
 
+    def search(
+        self,
+        query: str,
+        enable_rewrite: bool = False,
+        rewrite_strategy: str = "",
+    ) -> RagSearchResult:
+        """执行统一检索管道并返回结构化结果，不调用回答生成模型。
+
+        这是 REST ``/rag/search``、Agent ``rag_search`` 与离线评测的唯一
+        公共检索入口。实际新/旧管道选择只在 :meth:`prepare` 内处理，调用方
+        不再直接依赖 ``retriever_docx`` 或 ``_retrieve_with_strategy``。
+        """
+        ctx = self.prepare(
+            query,
+            enable_rewrite=enable_rewrite,
+            rewrite_strategy=rewrite_strategy,
+        )
+        # build_context/freeze_legacy_context 都会写 context_docs。使用这份列表
+        # 可确保搜索结果与问答 Prompt/sources 同源，并自动遵守上下文预算。
+        docs = tuple(ctx.context_docs)
+        items = tuple(
+            self._serialize_search_document(doc, index) for index, doc in enumerate(docs, start=1)
+        )
+        result = RagSearchResult(
+            request_id=ctx.request_id,
+            original_query=ctx.original_query,
+            route_decision=ctx.route_decision,
+            question_type=getattr(ctx.route_result, "question_type", None),
+            documents=docs,
+            results=items,
+            sources=tuple(dict(source) for source in ctx.sources),
+            generated_queries=tuple(dict(entry) for entry in ctx.generated_queries),
+            degradation_events=tuple(dict(event) for event in ctx.degradation_events),
+            stage_durations=dict(ctx.stage_durations),
+            context_truncated=ctx.context_truncated,
+        )
+        self._logger.info("search_summary", extra=ctx.summary())
+        return result
+
+    @staticmethod
+    def _serialize_search_document(doc: Document, index: int) -> dict[str, Any]:
+        """生成 REST 与 Agent Tool 共用的检索结果字段。"""
+        metadata = dict(doc.metadata or {})
+        source = metadata.get("source", "未知来源")
+        source_filename = metadata.get("source_filename") or (
+            os.path.basename(source) if isinstance(source, str) else None
+        )
+        score = metadata.get("rerank_score", metadata.get("rrf_score", metadata.get("score", 0.0)))
+        content = doc.page_content
+        return {
+            "index": index,
+            "rank": index,
+            "chunk_id": metadata.get("chunk_id"),
+            "parent_id": metadata.get("parent_id"),
+            "document_id": metadata.get("document_id"),
+            "version_id": metadata.get("version_id"),
+            "source": source,
+            "source_filename": source_filename,
+            "page_start": metadata.get("page_start"),
+            "page_end": metadata.get("page_end"),
+            "page_unknown": bool(metadata.get("page_unknown", False)),
+            "heading_path": metadata.get("heading_path"),
+            "rerank_score": metadata.get("rerank_score"),
+            "score": score,
+            "content_type": metadata.get("content_type", "text"),
+            "artifact_id": metadata.get("artifact_id"),
+            "caption": metadata.get("caption"),
+            "asset_uri": metadata.get("asset_uri"),
+            "visual_asset_uri": metadata.get("visual_asset_uri"),
+            "panel_assets": metadata.get("panel_assets") or [],
+            "bbox": metadata.get("bbox"),
+            "bbox_coordinate_space": metadata.get("bbox_coordinate_space"),
+            "retrieval_channels": metadata.get("retrieval_channels") or [],
+            "visual_similarity": metadata.get("visual_similarity"),
+            "matched_panel_id": metadata.get("matched_panel_id"),
+            "matched_visual_entity_id": metadata.get("matched_visual_entity_id"),
+            "matched_visual_asset_uri": metadata.get("matched_visual_asset_uri"),
+            "matched_evidence_bbox": metadata.get("matched_evidence_bbox"),
+            "matched_evidence_bbox_coordinate_space": metadata.get(
+                "matched_evidence_bbox_coordinate_space"
+            ),
+            "visual_status": metadata.get("visual_status", "not_requested"),
+            "visual_summary": metadata.get("visual_summary"),
+            "visual_model": metadata.get("visual_model"),
+            "visual_confidence": metadata.get("visual_confidence"),
+            "visual_prompt_version": metadata.get("visual_prompt_version"),
+            "readability_status": metadata.get("readability_status", "unknown"),
+            "legend_mapping_status": metadata.get("legend_mapping_status", "not_applicable"),
+            "numeric_fact_status": metadata.get("numeric_fact_status", "not_applicable"),
+            "evidence_locator": build_evidence_locator(metadata),
+            "page_content": content,
+            "snippet": content[:300] + "..." if len(content) > 300 else content,
+            "metadata": metadata,
+        }
+
     def _freeze_legacy_context(self, ctx: RequestContext, context_docx: list[Document]):
         """旧路径结果冻结：保持原有上下文拼接格式与 sources 结构。"""
         context = ""
         sources: list[dict] = []
         for i, doc in enumerate(context_docx, start=1):
             source = doc.metadata.get("source", "未知来源")
-            source_name = (
-                os.path.basename(source) if isinstance(source, str) else "未知来源"
-            )
+            source_name = os.path.basename(source) if isinstance(source, str) else "未知来源"
             context += f"[参考资料{i}] 来源：{source_name}\n{doc.page_content}\n\n"
             content = doc.page_content
-            sources.append(
-                {
-                    "index": i,
-                    "source": source,
-                    "source_filename": source_name,
-                    "page_start": doc.metadata.get("page_start"),
-                    "page_end": doc.metadata.get("page_end"),
-                    "page_unknown": bool(doc.metadata.get("page_unknown", False)),
-                    "heading_path": doc.metadata.get("heading_path"),
-                    "parent_id": doc.metadata.get("parent_id") or None,
-                    "score": doc.metadata.get(
-                        "rerank_score", doc.metadata.get("score", 0.0)
-                    ),
-                    "snippet": content[:300] + "..." if len(content) > 300 else content,
-                }
-            )
+            source_record = {
+                "index": i,
+                "source": source,
+                "source_filename": source_name,
+                "page_start": doc.metadata.get("page_start"),
+                "page_end": doc.metadata.get("page_end"),
+                "page_unknown": bool(doc.metadata.get("page_unknown", False)),
+                "heading_path": doc.metadata.get("heading_path"),
+                "parent_id": doc.metadata.get("parent_id") or None,
+                "chunk_id": doc.metadata.get("chunk_id"),
+                "document_id": doc.metadata.get("document_id"),
+                "version_id": doc.metadata.get("version_id"),
+                "score": doc.metadata.get("rerank_score", doc.metadata.get("score", 0.0)),
+                "snippet": content[:300] + "..." if len(content) > 300 else content,
+            }
+            source_record["evidence_locator"] = build_evidence_locator(doc.metadata)
+            sources.append(source_record)
         ctx.freeze_context(context, context_docx, sources)
 
     def stream_answer(self, ctx: RequestContext):
@@ -615,10 +805,12 @@ class RagService:
         model_name = chat_model.model_name if chat_model else "unknown"
 
         if ctx.route_decision == "irrelevant":
+            ctx.answer_mode = "irrelevant"
             yield IRRELEVANT_REPLY
             return
 
         if ctx.route_decision == "chat":
+            ctx.answer_mode = "direct"
             chain = self._get_chat_prompt() | self.model | StrOutputParser()
             with llm_call_duration.labels(model=model_name, purpose="direct_answer").time():
                 llm_call_total.labels(model=model_name, purpose="direct_answer").inc()
@@ -635,10 +827,21 @@ class RagService:
 
         # rag 路径
         if not ctx.final_context:
+            ctx.answer_mode = "no_context"
             yield NO_CONTEXT_REPLY
             return
 
+        multimodal_answer = self._try_multimodal_answer(ctx)
+        if multimodal_answer is not None:
+            model_name = getattr(self._get_multimodal_generator(), "model_name", "multimodal")
+            llm_call_total.labels(model=model_name, purpose="multimodal_generate").inc()
+            llm_token_total.labels(model=model_name, type="output").inc(len(multimodal_answer) // 2)
+            yield multimodal_answer
+            return
+
         t_gen = time.time()
+        if not ctx.answer_mode:
+            ctx.answer_mode = "text_rag"
         llm_call_total.labels(model=model_name, purpose="generate").inc()
         output_chars = 0
         for chunk in self._get_chain().stream(
@@ -652,12 +855,9 @@ class RagService:
         ):
             output_chars += len(chunk)
             yield chunk
-        llm_call_duration.labels(model=model_name, purpose="generate").observe(
-            time.time() - t_gen
-        )
-        llm_token_total.labels(model=model_name, type="input").inc(
-            len(ctx.final_context) // 2
-        )
+        llm_call_duration.labels(model=model_name, purpose="generate").observe(time.time() - t_gen)
+        ctx.record_duration("text_answer", t_gen)
+        llm_token_total.labels(model=model_name, type="input").inc(len(ctx.final_context) // 2)
         llm_token_total.labels(model=model_name, type="output").inc(output_chars // 2)
         llm_token_total.labels(model=model_name, type="total").inc(
             len(ctx.final_context) // 2 + output_chars // 2
@@ -682,85 +882,9 @@ class RagService:
         Returns:
             生成的回答文本
         """
-        if self._single_retrieval_enabled():
-            ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
-            self._logger.info("request_summary", extra=ctx.summary())
-            return "".join(self.stream_answer(ctx))
-
-        routing_enabled = self._routing_config.get("enabled", True)
-        model_name = chat_model.model_name if chat_model else "unknown"
-
-        # ── 阶段 1：查询路由（自动）──
-        if routing_enabled:
-            t0 = time.time()
-            try:
-                classification = self._get_router().classify(query)
-                retrieval_duration.labels(stage="route_classify").observe(time.time() - t0)
-                llm_call_total.labels(model=model_name, purpose="classify").inc()
-
-                # 无关问题拦截
-                if (
-                    self._routing_config.get("irrelevant_detection", True)
-                    and classification.is_irrelevant
-                    and classification.confidence
-                    >= self._routing_config.get("confidence_threshold", 0.6)
-                ):
-                    return IRRELEVANT_REPLY
-
-                # 闲聊直接回答
-                if (
-                    self._routing_config.get("chat_detection", True)
-                    and classification.is_chat
-                    and classification.confidence
-                    >= self._routing_config.get("confidence_threshold", 0.6)
-                ):
-                    with llm_call_duration.labels(model=model_name, purpose="direct_answer").time():
-                        llm_call_total.labels(model=model_name, purpose="direct_answer").inc()
-                        return self._direct_answer(query)
-            except Exception as e:
-                self._logger.warning(f"查询路由失败: {e}，回退到正常 RAG 流程")
-
-        # ── 阶段 2：检索（可选改写）──
-        t_retrieve = time.time()
-        if enable_rewrite:
-            strategy = self._resolve_strategy(rewrite_strategy)
-            context_docx = self._retrieve_with_strategy(query, strategy)
-        else:
-            context_docx = self.retriever_docx(query)
-        retrieval_duration.labels(stage="total").observe(time.time() - t_retrieve)
-
-        # ── 阶段 3：生成 ──
-        if not context_docx:
-            return "根据现有资料无法回答该问题。"
-
-        context = ""
-        for i, doc in enumerate(context_docx, start=1):
-            source = doc.metadata.get("source", "未知来源")
-            source_name = (
-                os.path.basename(source) if isinstance(source, str) else "未知来源"
-            )
-            context += f"[参考资料{i}] 来源：{source_name}\n{doc.page_content}\n\n"
-
-        t_gen = time.time()
-        llm_call_total.labels(model=model_name, purpose="generate").inc()
-        result = self._get_chain().invoke(
-            {"input": query, "context": context},
-            config=_get_run_config(
-                run_name="rag_generate",
-                query=query,
-                tags=["rag", "generate"],
-                extra_metadata={"context_doc_count": len(context_docx)},
-            ),
-        )
-        llm_call_duration.labels(model=model_name, purpose="generate").observe(
-            time.time() - t_gen
-        )
-        # 估算 token 消耗（非精确，实际 token 数需从 LLM response 获取）
-        token_est = len(context) // 2 + len(result) // 2
-        llm_token_total.labels(model=model_name, type="input").inc(len(context) // 2)
-        llm_token_total.labels(model=model_name, type="output").inc(len(result) // 2)
-        llm_token_total.labels(model=model_name, type="total").inc(token_est)
-        return result
+        ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
+        self._logger.info("request_summary", extra=ctx.summary())
+        return "".join(self.stream_answer(ctx))
 
     def get_summary_stream(
         self,
@@ -769,69 +893,9 @@ class RagService:
         rewrite_strategy: str = "",
     ):
         """流式生成 RAG 回答（自动路由 + 可选改写）。"""
-        if self._single_retrieval_enabled():
-            ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
-            self._logger.info("request_summary", extra=ctx.summary())
-            yield from self.stream_answer(ctx)
-            return
-
-        routing_enabled = self._routing_config.get("enabled", True)
-
-        # ── 阶段 1：查询路由（自动）──
-        if routing_enabled:
-            try:
-                classification = self._get_router().classify(query)
-
-                if (
-                    self._routing_config.get("irrelevant_detection", True)
-                    and classification.is_irrelevant
-                    and classification.confidence
-                    >= self._routing_config.get("confidence_threshold", 0.6)
-                ):
-                    yield IRRELEVANT_REPLY
-                    return
-
-                if (
-                    self._routing_config.get("chat_detection", True)
-                    and classification.is_chat
-                    and classification.confidence
-                    >= self._routing_config.get("confidence_threshold", 0.6)
-                ):
-                    yield self._direct_answer(query)
-                    return
-            except Exception as e:
-                self._logger.warning(f"查询路由失败: {e}，回退到正常 RAG 流程")
-
-        # ── 阶段 2：检索（可选改写）──
-        if enable_rewrite:
-            strategy = self._resolve_strategy(rewrite_strategy)
-            context_docx = self._retrieve_with_strategy(query, strategy)
-        else:
-            context_docx = self.retriever_docx(query)
-
-        # ── 阶段 3：流式生成 ──
-        if not context_docx:
-            yield "根据现有资料无法回答该问题。"
-            return
-
-        context = ""
-        for i, doc in enumerate(context_docx, start=1):
-            source = doc.metadata.get("source", "未知来源")
-            source_name = (
-                os.path.basename(source) if isinstance(source, str) else "未知来源"
-            )
-            context += f"[参考资料{i}] 来源：{source_name}\n{doc.page_content}\n\n"
-
-        for chunk in self._get_chain().stream(
-            {"input": query, "context": context},
-            config=_get_run_config(
-                run_name="rag_generate_stream",
-                query=query,
-                tags=["rag", "stream"],
-                extra_metadata={"context_doc_count": len(context_docx)},
-            ),
-        ):
-            yield chunk
+        ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
+        self._logger.info("request_summary", extra=ctx.summary())
+        yield from self.stream_answer(ctx)
 
 
 if __name__ == "__main__":

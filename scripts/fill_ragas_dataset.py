@@ -27,6 +27,10 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = PROJECT_ROOT / "backend" / "packages"
+sys.path.insert(0, str(PACKAGE_ROOT))
+
 # ── 修复 ragas → langchain_community 的导入问题 ──
 import langchain_community.chat_models  # noqa: E402
 if not hasattr(langchain_community.chat_models, "vertexai"):
@@ -125,11 +129,13 @@ def fill_dataset(
         logger.info(f"[{idx + 1}/{total}] 处理: {question[:80]}...")
 
         try:
-            docs = rag.retriever_docx(question)
-            contexts = [doc.page_content for doc in docs]
+            # 单次 prepare 同时提供冻结检索上下文和后续生成输入，避免评测脚本
+            # 绕过统一管道或为了 contexts/answer 重复检索。
+            ctx = rag.prepare(question)
+            contexts = [doc.page_content for doc in ctx.context_docs]
             logger.info(f"  → 检索到 {len(contexts)} 个 chunk")
 
-            answer = rag.get_summary(question)
+            answer = "".join(rag.stream_answer(ctx))
             logger.info(f"  → 生成回答 {len(answer)} 字符")
 
             records[idx]["contexts"] = contexts

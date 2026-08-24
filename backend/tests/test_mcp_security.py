@@ -20,7 +20,21 @@ from app.gateway.auth.schemas import UserInfo  # noqa: E402
 
 
 def _fake_user() -> UserInfo:
-    return UserInfo(user_id="test-u", username="tester", created_at=time.time())
+    return UserInfo(
+        user_id="test-u",
+        username="tester",
+        created_at=time.time(),
+        is_admin=True,
+    )
+
+
+def _fake_standard_user() -> UserInfo:
+    return UserInfo(
+        user_id="test-standard",
+        username="standard",
+        created_at=time.time(),
+        is_admin=False,
+    )
 
 
 @pytest.fixture()
@@ -32,6 +46,16 @@ def client():
 @pytest.fixture()
 def authed_client():
     app.dependency_overrides[get_current_user] = _fake_user
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture()
+def standard_user_client():
+    app.dependency_overrides[get_current_user] = _fake_standard_user
     try:
         with TestClient(app) as c:
             yield c
@@ -60,6 +84,14 @@ class TestMcpEndpoints:
         resp = authed_client.get("/api/mcp/config")
         assert resp.status_code == 200
         assert "mcp_servers" in resp.json()
+
+    def test_get_config_requires_admin(self, standard_user_client):
+        assert standard_user_client.get("/api/mcp/config").status_code == 403
+
+    def test_put_config_disabled_by_default(self, authed_client):
+        resp = authed_client.put("/api/mcp/config", json={"mcp_servers": {}})
+        assert resp.status_code == 403
+        assert "默认关闭" in resp.json()["detail"]
 
     def test_status_response_shape(self, authed_client):
         resp = authed_client.get("/api/mcp/status")

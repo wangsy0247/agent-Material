@@ -1,0 +1,92 @@
+[
+  {
+    "question": "ABACUS 中的 SDFT 是什么方法？它主要用于模拟什么样的体系？",
+    "ground_truth": "SDFT 即随机波函数密度泛函理论（Stochastic Density Functional Theory），ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质。SDFT 使用随机波函数轨道，可以有效地避开对角化哈密顿矩阵这个问题，应用于高温计算。",
+    "question_type": "terminology",
+    "source_hint": "5.1.1介绍：『本教程旨在介绍 ABACUS 中随机波函数密度泛函理论（Stochastic Density Functional Theory,以下简称 SDFT）计算功能』"
+  },
+  {
+    "question": "温稠密物质（WDM）指的是什么？其温度量级大约是多少？",
+    "ground_truth": "WDM 即温稠密物质（Warm Dense Matter），ABACUS 使用 SDFT 主要聚焦在高温高压物质的模拟，特别是温稠密物质。在进行温稠密物质计算时，温度高达数十到上千 eV。",
+    "question_type": "terminology",
+    "source_hint": "5.1.1介绍：『特别是温稠密物质（Warm Dense Matter,简称WDM)。在进行温稠密物质计算时(温度高达数十到上千eV』"
+  },
+  {
+    "question": "MDFT 是什么方法？它和 SDFT 的关系是什么？",
+    "ground_truth": "MDFT 即混合随机波函数密度泛函理论方法（mixed stochastic-deterministic DFT），即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛。",
+    "question_type": "terminology",
+    "source_hint": "5.1.1介绍：『混合随机波函数密度泛函理论方法使用（mixed stochastic-deterministic DFT，简称 MDFT)，即在 SDFT 计算中，混入一部分的低能 Kohn-Sham 轨道，从而加速结果收敛』"
+  },
+  {
+    "question": "赝势文件名如 Al_ONCV_PBE-1.0.upf 中的 ONCV 代表什么含义？",
+    "ground_truth": "ONCV 来自 ONCVPSP（Optimized Norm-Conserving Vanderbilt PSeudoPotential），是由 D.R.Hamann 等人提出的优化版模守恒赝势，其有更高的精度与效率，ONCVPSP 依赖 Libxc，支持多种交换关联泛函。",
+    "question_type": "terminology",
+    "source_hint": "3.5.3赝势的生成：『ONCVPSP（Optimized Norm-Conserving Vanderbilt PSeudoPotential）是由 D.R.Hamann 等人提出的优化版模守恒赝势，其有更高的精度与效率』"
+  },
+  {
+    "question": "数值原子轨道基组命名中的 DZP 和 TZDP 分别代表什么？",
+    "ground_truth": "数值原子轨道中，对每个被电子占据的角量子数采用 2 条径向轨道称为 DZ 基组；在 DZ 轨道基础上引入 1 条角量子数更高的极化（polar）径向轨道，组成 DZP（Double valence orbitals plus SZ polarization）轨道基组；此外还有基组数量更大的 TZDP（Triple valence orbitals plus DZ polarization）轨道。",
+    "question_type": "terminology",
+    "source_hint": "3.6节：『在DZ轨道的基础上引人1条极化（polar）的径向轨道，即角量子数更高的轨道，来组成 DZP…此外，还有基组数量更大的 TZDP』"
+  },
+  {
+    "question": "什么是 UPF 格式？截至 v3.2.3，ABACUS 的 Kohn-Sham 密度泛函理论计算主要支持什么格式、什么类型的赝势？",
+    "ground_truth": "UPF（unified PP format）是一种类似 XML 格式的文件格式，用于存储赝势及其相关参数，由 Quantum ESPRESSO（QE）团队开发，已成为许多量子计算软件包的标准格式之一。截至 v3.2.3，ABACUS 的 Kohn-Sham 密度泛函理论计算主要支持 UPF 格式的模守恒赝势。",
+    "question_type": "terminology",
+    "source_hint": "3.5.1介绍：『UPF（unified PPformat）是一种类似XML格式的文件格式，用于存储赝势及其相关参数……ABACUS（截至v3.2.3）的Kohn-Sham密度泛函理论计算主要支持UPF格式的模守恒赝势』"
+  },
+  {
+    "question": "Bader charge（Bader 电荷）是如何定义和计算的？",
+    "ground_truth": "Bader charge 是将电子密度进行类似于 Voronoi 剖分，在原子间以电荷密度的梯度为 0 处创建截面，然后将原子周围所有截面包络出的 cell 进行实空间积分，即为 Bader charge。",
+    "question_type": "terminology",
+    "source_hint": "6.5.1前言：『Bader charge 是将电子密度进行类似于 Voronoi tesellation的剖分，在原子间以电荷密度的梯度为0处创建截面，然后将原子周围所有截面包络出的cell进行实空间积分，即为Bader charge』"
+  },
+  {
+    "question": "编译 ABACUS 时 ELPA 库是什么作用？如果 ELPA 难以安装应如何处理？",
+    "ground_truth": "ELPA（Eigenvalue SoLvers for Petaflop-Applications）是一个用于高性能计算的开源库，旨在解决大规模高性能计算中的特征值问题，特别是密集矩阵的特征值问题；ELPA 仅用于 LCAO 基组求解特征值与特征矩阵的过程。如果 ELPA 难以安装，可以在编译 abacus 的时候添加 -DUSE_ELPA=0 绕过，并配置 ks_solver 为 scalapack_gvx，调用 ScaLAPACK 进行求解。",
+    "question_type": "terminology",
+    "source_hint": "2.1.1介绍：『ELPA：ELPA（Eigenvalue SoLvers for Petaflop-Applications）是一个用于高性能计算的开源库』；『可以暂不安装ELPA，在编译abacus 的时候添加-DUSE_ELPA=O 即可绕过』"
+  },
+  {
+    "question": "文档中给出的 eV 与开尔文（K）之间的换算关系是什么？",
+    "ground_truth": "文档中给出的换算关系为 1eV=11604.5K，温稠密物质计算时温度高达数十到上千 eV。",
+    "question_type": "formula_table",
+    "source_hint": "5.1.1介绍：『温度高达数十到上千eV,1eV=11604.5K』"
+  },
+  {
+    "question": "SDFT 计算中 nche_sto 参数是什么含义？推荐的取值判据是什么？",
+    "ground_truth": "nche_sto 是将电子体系的哈密顿量进行切比雪夫展开的阶数，这个数取得越大则切比雪夫展开阶数越多，计算精度越高但效率会降低，阶数与温度大致成反比、与 ecut 成正比。推荐的 nche_sto 大小是使得输出文件 running_scf.log 中的 ChebyshevPrecision 小于 1e-8。",
+    "question_type": "formula_table",
+    "source_hint": "5.1.3节：『nche_sto 是将电子体系的哈密顿量进行切比雪夫展开的阶数…推荐使用的nche_sto的大小是使得输出文件 running_scf.log中的ChebyshevPrecision 小于 1e-8』"
+  },
+  {
+    "question": "用 ABACUS+pymatgen 计算金刚石弹性常数时，输出的体弹性模量、剪切模量、杨氏模量和泊松比分别是多少？单位是什么？",
+    "ground_truth": "金刚石弹性常数计算结果（单位 GPa）为：体弹性模量 Bulk Modulus BV = 419.37 GPa、剪切模量 Shear Modulus GV = 521.42 GPa、杨氏模量 Youngs Modulus EV = 1105.91 GPa、泊松比 Poission Ratio uV = 0.06；精度更高的计算结果存储在 elastic.json 内。",
+    "question_type": "formula_table",
+    "source_hint": "6.6.3金刚石的弹性常数计算：『Bulk  Modulus BV = 419.37 GPa / Shear Modulus GV = 521.42 GPa / Youngs Modulus EV = 1105.91 GPa / Poission Ratio uV = 0.06』"
+  },
+  {
+    "question": "ABACUS 隐式溶剂模型中 eb_k 参数的含义是什么？如何用 imp_sol 计算体系的溶剂化能？",
+    "ground_truth": "eb_k 是溶剂的相对介电常数，水为 80。体系溶剂化能的计算方法是：打开隐式溶剂模型（imp_sol=1）时体系总能量（结构优化之后）与真空情况（imp_sol=0）体系总能量（结构优化之后）之差；输出文件 running_scf.log 中 E_sol_el 表示静电作用引起的能量修正（一般为负值），E_sol_cav 表示空腔作用引起的能量修正（一般为正值）。",
+    "question_type": "formula_table",
+    "source_hint": "5.5.3输入参数：『eb_k：类型是Real，溶剂的相对介电常数，水为80』；5.5.4预期结果：『体系溶剂化能的计算：打开隐式溶剂模型(imp_sol=1)时体系总能量…与真空情况(imp_sol=0)体系总能量…之差』"
+  },
+  {
+    "question": "STRU 文件中晶格常数（LATTICE_CONSTANT）的单位换算规则是什么？",
+    "ground_truth": "ABACUS 的默认长度单位为 Bohr，STRU 中的晶格常数将所有长度放大 1.889726 倍，即把长度单位 Bohr 转化为更为人熟知的埃（Angstrom）。",
+    "question_type": "formula_table",
+    "source_hint": "3.1节 STRU 文件讲解：『ABACUS 的默认长度单位为Bohr，这一晶格常数将所有长度放大1.889726倍，将长度单位Bohr转化为更为人熟知的埃（Angstrom）』"
+  },
+  {
+    "question": "ABACUS+Phonopy 计算声子谱时，输出的 pho.dat 文件各列分别是什么数据？",
+    "ground_truth": "pho.dat 的第一列是声子谱图的横轴（K 点路径），其中高对称 K 点位置见 pho.dat 的第二行，第二列是图的纵轴（声子频率，单位 THz）。",
+    "question_type": "formula_table",
+    "source_hint": "6.7.3流程：『pho.dat的第一列就是上图的横轴（K点路径)，其中高对称K点位置见pho.dat的第二行，第二列就是上图的纵轴(声子频率，单位THz)』"
+  },
+  {
+    "question": "对比 ABACUS 和 VASP 做 SCF 计算时，能量截断值 Ecut 的单位有什么差异？",
+    "ground_truth": "ABACUS 的 Ecut 单位是 Ry，VASP 的单位是 eV，比较时需要注意换算；一般来讲 VASP 用 PAW 方法所需的 Ecut 比 ABACUS 的模守恒赝势要低。",
+    "question_type": "formula_table",
+    "source_hint": "第1章常见问题5(a)：『先检查Ecut是否一样（注意ABACS的单位是Ry，VASP是eV，要换算)，一般来讲VASP用 PAW方法所需的Ecut比ABACUS 的模守恒赝势要低』"
+  }
+]

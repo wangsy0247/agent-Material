@@ -9,7 +9,7 @@ checkpointer:
     db_path: "logs/langgraph_checkpoints.db"
   # postgres 配置（当 type=postgres 时生效，需 PostgreSQL 服务 + langgraph-checkpoint-postgres）
   postgres:
-    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://postgres:postgres@localhost:5433/langgraph}"
+    connection_string: "${POSTGRES_CHECKPOINTER_URL:-postgresql://agent_material:agent_material_dev@localhost:5433/langgraph}"
 
 # ---- Summarization 配置（长对话压缩） ----
 summarization:
@@ -25,13 +25,3 @@ mp_tool_mode: "local"
 # 同时支持精确匹配和前缀化工具的后缀匹配
 sensitive_keywords:
   - "mp_download"
-
-# MCP 配置已迁移至 extensions_config.json（项目根目录）
-# 详见 docs/mcp-setup.md 或 extensions_config.json.example
-# 
-# 环境变量可覆盖全局默认值：
-#   MCP_MAX_RECONNECT=5
-#   MCP_INITIAL_BACKOFF_MS=1000
-#   MCP_MAX_BACKOFF_MS=30000
-#   MCP_HEALTH_INTERVAL=30
-#   MCP_TOOL_TIMEOUT=60

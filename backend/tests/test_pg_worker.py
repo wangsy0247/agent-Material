@@ -40,11 +40,9 @@ from agent_material.rag_engine.db.pg.schema import normalize_conn_str
 from agent_material.rag_engine.db.worker import BackgroundWorker, pg_scan_and_enqueue
 
 ROOT = Path(__file__).resolve().parents[2]
-CONN_STR = normalize_conn_str(
-    yaml.safe_load((ROOT / "config" / "vector_store_config.yaml").read_text())[
-        "connection_string"
-    ]
-)
+from agent_material.utils.config_handler import get_vector_store_config
+
+CONN_STR = normalize_conn_str(get_vector_store_config()["connection_string"])
 PREFIX = "test_rag_"
 KB = "agent_test2"
 SMALL = "agent_test2_small"
@@ -100,6 +98,7 @@ class FakePipeline:
         self.calls = 0
         self.sleep_seconds = sleep_seconds
         self.empty = False
+        self.quality_metadata = {}
         self.last_version_context = None
 
     def process(self, file_path, version_context=None, **kwargs):
@@ -122,6 +121,7 @@ class FakePipeline:
                         "parent_id": pid,
                         "parent_doc": f"父块 {pid} 内容 {data[:16]!r}",
                         "parent_metadata": {"heading_path": [f"章节 {pid}"]},
+                        **self.quality_metadata,
                     },
                 )
             )
@@ -326,6 +326,18 @@ def _ingest_via_queue(env, max_retries=1) -> int:
     )
 
 
+def _retry_and_process(env, tid: int) -> None:
+    """显式重置 failed 任务并重新处理。
+
+    WRK-006：同 dedup_key 的 failed 任务存在时新入队会被拒绝，
+    retry_failed() 是唯一的重试预算重置入口。
+    """
+    assert env.tasks.retry_failed(tid) is True
+    claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
+    assert claimed is not None and claimed["task_id"] == tid
+    env.worker._process_pg(claimed)
+
+
 def _active_flags(conn_str, collection, document_id, version_id) -> list[bool]:
     with psycopg.connect(conn_str) as conn:
         rows = conn.execute(
@@ -416,7 +428,11 @@ class TestPgIngestHappyPath:
         )
         # 收尾：清掉 pending 任务，避免影响其他用例的 claim 断言
         claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
-        env.tasks.complete(claimed["task_id"], env.worker._worker_id)
+        env.tasks.complete(
+            claimed["task_id"],
+            env.worker._worker_id,
+            lease_generation=claimed["lease_generation"],
+        )
 
 
 # ── 失败语义 ────────────────────────────────────────────────
@@ -439,6 +455,29 @@ class TestPgIngestFailures:
         assert v["failure_stage"] == "pipeline"
         assert env.index.insert_calls == 0
         assert env.files.get(str(env.file)) is None
+
+    def test_pdf_quality_gate_fails_before_store(self, env):
+        env.pipeline.quality_metadata = {
+            "source": "scan.pdf",
+            "file_type": "pdf",
+            "pdf_mode": "scanned",
+            "ocr_required": True,
+            "ocr_route_selected": False,
+            "parts_failed": 1,
+            "parse_quality_status": "rejected",
+        }
+        document_id, version_id = _doc_ver(env)
+
+        tid = _ingest_via_queue(env)
+
+        row = env.tasks.get(tid)
+        assert row["status"] == "failed"
+        assert row["current_stage"] == "pipeline"
+        assert "质量门禁" in row["error_message"]
+        assert env.index.insert_calls == 0
+        version = env.versions.get(document_id, version_id)
+        assert version["status"] == "failed"
+        assert version["failure_stage"] == "pipeline"
 
     def test_staging_cleanup_failure_aborts_task(self, env):
         env.index.fail_delete = True
@@ -474,14 +513,15 @@ class TestPgIngestFailures:
         assert _active_flags(env.pg, LARGE, document_id, version_id) == [False, False]
 
     def test_failed_version_retry_recovers(self, env):
-        """validate 失败 → 修复后重试：failed 版本回 staging 并完整恢复。"""
-        env.index.drop_last_child = True
-        _ingest_via_queue(env)
+        """validate 失败 → 修复后显式重试（WRK-006）：failed 版本回 staging 并完整恢复。"""
+        env.index.drop_last_child = True  # 少写一条子块 → 实际 2 != 预期 3
+        tid = _ingest_via_queue(env)
         document_id, version_id = _doc_ver(env)
         assert env.versions.get(document_id, version_id)["status"] == "failed"
 
         env.index.drop_last_child = False
-        _ingest_via_queue(env)
+        _retry_and_process(env, tid)
+        assert env.tasks.get(tid)["status"] == "completed"
         v = env.versions.get(document_id, version_id)
         assert v["status"] == "active"
         assert all(_active_flags(env.pg, SMALL, document_id, version_id))
@@ -591,6 +631,24 @@ class TestPgDelete:
         assert env.tasks.get(tid2)["status"] == "completed"
         assert env.kb.get(KB)["active_revision"] == rev_before + 1
 
+    def test_deleted_document_can_reingest_same_content(self, env):
+        _ingest_via_queue(env)
+        document_id, version_id = _doc_ver(env)
+        source = str(env.file)
+        _enqueue_and_process(
+            env, "delete_document", {"source": source}, f"delete:{document_id}"
+        )
+
+        # 文件恢复且内容未变：同一 retired version 必须重新走 staging→validate→activate。
+        _ingest_via_queue(env)
+        assert env.versions.get(document_id, version_id)["status"] == "active"
+        document = env.versions.get_document(document_id)
+        assert document["status"] == "active"
+        assert document["active_version_id"] == version_id
+        assert env.files.get(source)["status"] == "active"
+        assert all(_active_flags(env.pg, SMALL, document_id, version_id))
+        assert all(_active_flags(env.pg, LARGE, document_id, version_id))
+
     def test_delete_failure_keeps_file_state(self, env, monkeypatch):
         """delete_document 抛错 → 任务 failed，file_state 不得被标记 deleted。"""
         _ingest_via_queue(env)
@@ -686,7 +744,11 @@ class TestPgScan:
         assert env.files.get(str(env.file))["status"] == "active"
         # 收尾：清掉 pending 任务，避免影响其他用例的 claim 断言
         claimed = env.tasks.claim(env.worker._worker_id, lease_seconds=60)
-        env.tasks.complete(claimed["task_id"], env.worker._worker_id)
+        env.tasks.complete(
+            claimed["task_id"],
+            env.worker._worker_id,
+            lease_generation=claimed["lease_generation"],
+        )
 
     def test_scan_detects_content_change_not_mtime_only(self, env):
         _ingest_via_queue(env)
@@ -722,7 +784,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 
 def _fake_user() -> UserInfo:
-    return UserInfo(user_id="test-u", username="tester", created_at=time.time())
+    return UserInfo(
+        user_id="test-u", username="tester", created_at=time.time(), is_admin=True
+    )
 
 
 class FakeStore:
@@ -745,7 +809,12 @@ class FakeStore:
     def get_task_status(self, task_id):
         if task_id == 999:
             return None
-        return {"task_id": task_id, "status": "completed", "current_stage": None}
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "current_stage": None,
+            "lease_generation": 3,
+        }
 
 
 @pytest.fixture(scope="module")
@@ -789,7 +858,6 @@ class TestWriteApiUnification:
         assert fake_store.load_document_calls == 1
 
     def test_add_chunks_default_410(self, authed_client, fake_store, monkeypatch):
-        _set_flags(monkeypatch, enable_add_chunks=False, pg_control_plane=True)
         resp = authed_client.post("/api/v1/rag/add-chunks", json={"chunks": ["x"]})
         assert resp.status_code == 410
         assert "/rag/add-documents" in resp.json()["detail"]
@@ -797,7 +865,6 @@ class TestWriteApiUnification:
     def test_add_documents_enqueues_ingest_text(
         self, authed_client, fake_store, monkeypatch
     ):
-        _set_flags(monkeypatch, pg_control_plane=True)
         resp = authed_client.post(
             "/api/v1/rag/add-documents",
             json={"documents": ["文本一", "文本二"], "sources": ["s1", "s2"]},
@@ -815,6 +882,8 @@ class TestWriteApiUnification:
         body = resp.json()
         assert body["data"]["task_id"] == 101
         assert body["data"]["status"] == "completed"
+        # 阶段 B 补充：任务状态透出 lease_generation（WRK-002 可观测）
+        assert body["data"]["lease_generation"] == 3
 
         resp404 = authed_client.get("/api/v1/rag/tasks/999")
         assert resp404.status_code == 404

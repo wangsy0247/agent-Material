@@ -1,9 +1,9 @@
-"""后台任务消费者 — daemon 线程轮询处理队列任务。
+"""PostgreSQL 后台索引任务消费者。
 
-双控制面（feature_flags.pg_control_plane 切换）：
-- SQLite（回滚路径）：TaskQueue.dequeue + DocumentVersionRegistry（V1 流程）。
-- PostgreSQL（Spec V2）：TaskRepository.claim 原子领取 + 租约心跳，
-  版本激活/逻辑删除走 VersionRepository 单事务。
+TaskRepository.claim 原子领取 + lease_generation
+  fencing（WRK-002/003）+ 租约心跳 + 丢失取消（WRK-004）+ 文档级 advisory
+  lock 串行化（WRK-005）；版本激活/逻辑删除走 VersionRepository 单事务
+  （事务内含所有权校验、行数校验与任务 completed）。
 """
 
 import os
@@ -12,7 +12,10 @@ import threading
 import time
 from collections.abc import Callable
 
-from agent_material.rag_engine.db.task_queue import TaskQueue, TaskType
+from agent_material.rag_engine.db.pg.repositories import (
+    FencingRejectedError,
+    RowcountMismatchError,
+)
 from agent_material.observability.structured_logger import get_logger
 from agent_material.observability.metrics import (
     queue_depth,
@@ -23,6 +26,55 @@ from agent_material.observability.metrics import (
 logger = get_logger("worker")
 
 
+class LeaseLostError(RuntimeError):
+    """任务执行期间租约/所有权已丢失（WRK-004）：安全点检查发现取消信号。
+
+    不再执行后续写入或激活、不调 fail/complete 覆盖新 Worker 状态，
+    仅记录 lease_lost 事件后退出。
+    """
+
+
+def validate_ingest_chunk_quality(chunks) -> list[str]:
+    """对 loader 质量元数据做激活前的最后一道防线。
+
+    非 PDF 或旧 loader 没有质量字段时保持兼容；一旦 PDF 明确声明质量失败、
+    分片缺失，或需要 OCR 却没有执行 OCR，就拒绝该版本进入 store/activate。
+    """
+    problems: list[str] = []
+    pdf_metadata = [
+        chunk.metadata
+        for chunk in chunks
+        if chunk.metadata.get("file_type") == "pdf"
+        or str(chunk.metadata.get("source", "")).lower().endswith(".pdf")
+    ]
+    if not pdf_metadata:
+        return problems
+
+    statuses = {
+        meta.get("parse_quality_status")
+        for meta in pdf_metadata
+        if meta.get("parse_quality_status")
+    }
+    if "rejected" in statuses:
+        problems.append("PDF 解析质量门禁未通过")
+
+    failed_parts = max(int(meta.get("parts_failed") or 0) for meta in pdf_metadata)
+    if failed_parts > 0:
+        problems.append(f"PDF 存在 {failed_parts} 个失败分片")
+
+    if any(
+        meta.get("ocr_required") and not meta.get("ocr_route_selected")
+        for meta in pdf_metadata
+    ):
+        problems.append("PDF 包含扫描页但未路由到 OCR 能力解析器")
+    from agent_material.rag_engine.indexing.structured_artifacts import (
+        validate_artifact_documents,
+    )
+
+    problems.extend(validate_artifact_documents(chunks))
+    return problems
+
+
 class BackgroundWorker:
     """后台 Worker — 单 daemon 线程轮询队列并处理任务。
 
@@ -31,20 +83,15 @@ class BackgroundWorker:
     - 进程退出时自动终止（daemon 线程）
     """
 
-    def __init__(self, task_queue: TaskQueue | None = None, file_tracker=None,
-                 poll_interval: float = 2.0, max_retries: int = 3,
+    def __init__(self, poll_interval: float = 2.0, max_retries: int = 3,
                  on_activated: Callable[[], None] | None = None,
-                 version_registry=None,
                  task_repo=None, version_repo=None, file_state_repo=None,
                  kb_repo=None, lease_seconds: int = 300):
-        self._queue = task_queue
-        self._tracker = file_tracker
         self._poll_interval = poll_interval
         self._max_retries = max_retries
         self._on_activated = on_activated
-        self._version_registry = version_registry
-        # ── PG 控制面（Spec V2）：task_repo 非空即 pg 模式 ──
-        self._pg = task_repo is not None
+        if task_repo is None or version_repo is None or file_state_repo is None:
+            raise ValueError("BackgroundWorker 需要完整的 PostgreSQL 控制面仓储")
         self._task_repo = task_repo
         self._version_repo = version_repo
         self._file_state_repo = file_state_repo
@@ -59,6 +106,10 @@ class BackgroundWorker:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
+        # ── WRK-004 任务级执行上下文（每任务重置）──
+        self._cancel_event: threading.Event | None = None  # 租约丢失取消信号
+        self._lease_generation: int | None = None  # 当前任务 fencing token
+        self._task_completed_in_tx = False  # 任务是否已在激活/删除事务内 completed
 
         # 懒加载 — 避免模块导入时触发重量级初始化
         self._multi_index = None
@@ -67,69 +118,38 @@ class BackgroundWorker:
     # ── 生命周期 ──────────────────────────────────────────
 
     def start(self):
-        """启动后台 Worker 线程（幂等）。"""
+        """启动后台 Worker 线程（幂等）。启动后立即领取 pending /
+        租约过期任务（WRK-001：恢复不依赖新写请求）。"""
         if self._started:
             return
         self._thread = threading.Thread(
-            target=self._run_pg if self._pg else self._run,
+            target=self._run_pg,
             daemon=True,
             name="rag-worker",
         )
         self._started = True
-        if not self._pg:
-            # 启动前先恢复崩溃遗留的超时 processing 任务（OFF-004）
-            # pg 模式无需显式恢复：租约过期的 processing 任务会被 claim 自动回收
-            recovered = self._queue.recover_stale_processing()
-            if recovered > 0:
-                logger.info("worker_recovered_stale_tasks", extra={"count": recovered})
         self._thread.start()
         logger.info(
-            f"[Worker] 后台 Worker 已启动（{'PG' if self._pg else 'SQLite'} 控制面）"
+            "worker_started",
+            extra={"mode": "pg", "worker_id": self._worker_id},
         )
 
     def stop(self):
-        """请求停止 Worker（优雅退出）。"""
+        """请求停止 Worker（优雅退出）：停止领取新任务，当前任务在安全点退出。"""
         self._stop_event.set()
-        logger.info("[Worker] 收到停止信号")
+        logger.info("worker_stopping", extra={"worker_id": self._worker_id})
+
+    def join(self, timeout: float | None = None):
+        """等待 Worker 线程退出（shutdown 用）。"""
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+        if not self.is_running():
+            logger.info("worker_stopped", extra={"worker_id": self._worker_id})
 
     def is_running(self) -> bool:
         return self._started and self._thread is not None and self._thread.is_alive()
 
-    # ── 主循环 ────────────────────────────────────────────
-
-    def _run(self):
-        """Worker 主循环。"""
-        logger.info("worker_loop_started")
-        while not self._stop_event.is_set():
-            try:
-                # 更新队列深度指标
-                summary = self._queue.get_summary()
-                queue_depth.labels(status="pending").set(summary.get("pending", 0))
-                queue_depth.labels(status="processing").set(summary.get("processing", 0))
-                queue_depth.labels(status="failed").set(summary.get("failed", 0))
-                queue_depth.labels(status="completed").set(summary.get("completed", 0))
-
-                # 先复活可重试的失败任务
-                revived = self._queue.retry_failed(max_retries=self._max_retries)
-                if revived:
-                    logger.info("worker_revived_tasks", extra={"count": revived})
-
-                # 获取待处理任务
-                tasks = self._queue.dequeue(batch_size=1)
-                if tasks:
-                    queue_worker_idle.set(0)
-                for task in tasks:
-                    self._process(task)
-                if not tasks:
-                    queue_worker_idle.inc(self._poll_interval)
-            except Exception as e:
-                logger.error("worker_loop_error", extra={"error": str(e)})
-
-            self._stop_event.wait(self._poll_interval)
-
-        logger.info("worker_loop_exited")
-
-    # ── PG 控制面主循环（Spec 6.2）─────────────────────────
+    # ── PostgreSQL 控制面主循环（Spec 6.2）─────────────────
 
     def _run_pg(self):
         """PG 模式主循环：原子 claim + 处理期间心跳续租。"""
@@ -155,46 +175,116 @@ class BackgroundWorker:
 
         logger.info("worker_loop_exited", extra={"mode": "pg"})
 
-    def _heartbeat_loop(self, task_id: int, stop_event: threading.Event):
-        """长任务期间按 lease 的 1/3 间隔刷新租约（任务结束停止）。"""
+    def _heartbeat_loop(
+        self,
+        task_id: int,
+        generation: int,
+        stop_event: threading.Event,
+        cancel_event: threading.Event,
+    ):
+        """长任务期间按 lease 的 1/3 间隔刷新租约（任务结束停止）。
+
+        WRK-004 取消触发条件：
+        - heartbeat 返回 False（fencing 不匹配 → 锁已易主）；
+        - 心跳异常且已进入租约安全窗口，或连续 3 次异常。
+        触发后置位共享 cancel_event，任务线程在安全点退出。
+        """
         interval = max(self._lease_seconds / 3.0, 0.1)
+        safety_window = max(interval, 0.2)
+        lease_deadline = time.monotonic() + self._lease_seconds
+        consecutive_errors = 0
         while not stop_event.wait(interval):
             try:
                 ok = self._task_repo.heartbeat(
-                    task_id, self._worker_id, lease_seconds=self._lease_seconds
+                    task_id,
+                    self._worker_id,
+                    lease_seconds=self._lease_seconds,
+                    lease_generation=generation,
                 )
                 if not ok:
-                    # 锁已易主（租约曾被回收）—— 停止心跳，complete/fail 会落空并记日志
+                    # 锁已易主（租约被回收、generation 已递增）—— 置取消信号，
+                    # 任务线程在安全点停止，complete/fail 均不得再执行
+                    if stop_event.is_set():
+                        return  # 任务已结束（如事务内 completed），无需告警
                     logger.error(
                         "worker_heartbeat_lost",
-                        extra={"task_id": task_id, "worker_id": self._worker_id},
+                        extra={
+                            "task_id": task_id,
+                            "worker_id": self._worker_id,
+                            "lease_generation": generation,
+                        },
                     )
+                    cancel_event.set()
                     return
+                consecutive_errors = 0
+                lease_deadline = time.monotonic() + self._lease_seconds
             except Exception as e:
+                consecutive_errors += 1
                 logger.error(
                     "worker_heartbeat_error",
-                    extra={"task_id": task_id, "error": str(e)},
+                    extra={"task_id": task_id, "error": str(e),
+                           "consecutive_errors": consecutive_errors},
                 )
+                lease_remaining = lease_deadline - time.monotonic()
+                if consecutive_errors >= 3 or lease_remaining <= safety_window:
+                    # 不等到数据库租约实际过期才停写：进入安全窗口即失败关闭。
+                    logger.error(
+                        "worker_heartbeat_unconfirmed",
+                        extra={
+                            "task_id": task_id,
+                            "worker_id": self._worker_id,
+                            "lease_remaining_seconds": max(lease_remaining, 0.0),
+                        },
+                    )
+                    cancel_event.set()
+                    return
+
+    def _check_cancel(self):
+        """WRK-004 安全点检查：staging 清理/写入/validate/activate/delete 前调用。"""
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise LeaseLostError("任务租约已丢失（心跳发现易主或无法确认所有权）")
+        if self._stop_event.is_set():
+            raise LeaseLostError("Worker 收到停止信号，任务在安全点退出")
+
+    def _set_pg_stage(self, task_id: int, stage: str) -> None:
+        """更新本地和 PG 阶段；失去有效租约时立即停止后续写入。"""
+        self._task_stage = stage
+        updater = getattr(self._task_repo, "update_stage", None)
+        if updater is not None and not updater(
+            task_id,
+            self._worker_id,
+            stage,
+            lease_generation=self._lease_generation,
+        ):
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+            raise LeaseLostError(f"更新任务阶段时租约已失效: {stage}")
 
     def _process_pg(self, task: dict):
-        """处理单个 PG 任务（claim 返回的 dict）。"""
+        """处理单个 PG 任务（claim 返回的 dict，含 lease_generation fencing token）。"""
         t0 = time.time()
         task_id = task["task_id"]
         task_type = task["task_type"]
+        generation = task["lease_generation"]
         self._task_stage = None
+        self._lease_generation = generation
+        self._task_completed_in_tx = False
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
         logger.info(
             "worker_task_start",
             extra={
                 "task_id": task_id,
                 "task_type": task_type,
                 "mode": "pg",
+                "lease_generation": generation,
                 "payload": str(task.get("payload"))[:200],
             },
         )
         hb_stop = threading.Event()
         hb_thread = threading.Thread(
             target=self._heartbeat_loop,
-            args=(task_id, hb_stop),
+            args=(task_id, generation, hb_stop, cancel_event),
             daemon=True,
             name=f"rag-worker-hb-{task_id}",
         )
@@ -206,7 +296,7 @@ class BackgroundWorker:
                 self._handle_ingest_text(task)
             elif task_type == "delete_document":
                 self._handle_delete_pg(task)
-            elif task_type == TaskType.REINDEX_ALL.value:
+            elif task_type == "reindex_all":
                 self._handle_reindex_pg(task)
             elif task_type == "rebuild_bm25":
                 self._task_stage = "bm25_refresh"
@@ -214,68 +304,108 @@ class BackgroundWorker:
                     self._on_activated()
             else:
                 raise ValueError(f"未知任务类型: {task_type}")
-            self._task_repo.complete(task_id, self._worker_id)
+            if not self._task_completed_in_tx:
+                # ingest/delete 正常路径已在激活/删除事务内 completed（ACT-004 /
+                # DEL-002）；其余路径（幂等跳过、scan、bm25）由 Worker 带 fencing 完成
+                ok = self._task_repo.complete(
+                    task_id, self._worker_id, lease_generation=generation
+                )
+                if not ok:
+                    # fencing 不匹配：任务已易主，不得误报完成
+                    logger.error(
+                        "worker_task_complete_rejected",
+                        extra={"task_id": task_id, "lease_generation": generation},
+                    )
             elapsed = time.time() - t0
             queue_task_duration.labels(type=task_type).observe(elapsed)
             logger.info(
                 "worker_task_done",
                 extra={"task_id": task_id, "mode": "pg", "duration_ms": elapsed * 1000},
             )
-        except Exception as e:
+        except LeaseLostError as e:
+            # WRK-004：所有权已丢失，不调 fail/complete 覆盖新 Worker 状态
             elapsed = time.time() - t0
             queue_task_duration.labels(type=task_type).observe(elapsed)
-            new_status = self._task_repo.fail(
-                task_id, self._worker_id, str(e), stage=self._task_stage
-            )
             logger.error(
-                "worker_task_failed",
+                "lease_lost",
                 extra={
                     "task_id": task_id,
-                    "mode": "pg",
+                    "lease_generation": generation,
                     "stage": self._task_stage,
-                    "status": new_status,
+                    "reason": str(e),
+                    "duration_ms": elapsed * 1000,
+                },
+            )
+        except FencingRejectedError as e:
+            # WRK-003：事务内所有权校验失败 —— 已整体回滚，所有权丢失仅退出
+            elapsed = time.time() - t0
+            queue_task_duration.labels(type=task_type).observe(elapsed)
+            logger.error(
+                "fencing_rejected",
+                extra={
+                    "task_id": task_id,
+                    "lease_generation": generation,
+                    "stage": self._task_stage,
                     "error": str(e),
                     "duration_ms": elapsed * 1000,
                 },
             )
-        finally:
-            hb_stop.set()
-            hb_thread.join(timeout=5)
-
-    # ── 任务分发 ──────────────────────────────────────────
-
-    def _process(self, task):
-        """处理单个任务。"""
-        t0 = time.time()
-        task_type = task.task_type
-        logger.info(
-            "worker_task_start",
-            extra={"task_id": task.id, "task_type": task_type, "payload": str(task.payload)[:200]},
-        )
-        try:
-            if task_type == TaskType.INGEST_FILE.value:
-                self._handle_ingest(task)
-            elif task_type == TaskType.DELETE_FILE.value:
-                self._handle_delete(task)
-            elif task.task_type == TaskType.REINDEX_ALL.value:
-                self._handle_reindex(task)
-            else:
-                raise ValueError(f"未知任务类型: {task.task_type}")
-            self._queue.complete(task.id)
-            elapsed = time.time() - t0
-            queue_task_duration.labels(type=task_type).observe(elapsed)
-            logger.info(
-                "worker_task_done",
-                extra={"task_id": task.id, "duration_ms": elapsed * 1000},
-            )
-        except Exception as e:
+        except RowcountMismatchError as e:
+            # INV-005：发布条数与 validated 记录不一致 —— 已整体回滚，
+            # 本 Worker 仍持有所有权，走正常 retry/failed
             elapsed = time.time() - t0
             queue_task_duration.labels(type=task_type).observe(elapsed)
             logger.error(
-                "worker_task_failed",
-                extra={"task_id": task.id, "error": str(e), "duration_ms": elapsed * 1000},
+                "activation_rowcount_mismatch",
+                extra={
+                    "task_id": task_id,
+                    "lease_generation": generation,
+                    "stage": self._task_stage,
+                    "error": str(e),
+                    "duration_ms": elapsed * 1000,
+                },
             )
-            self._queue.fail(task.id, str(e))
+            self._fail_pg_task(task_id, generation, e)
+        except Exception as e:
+            elapsed = time.time() - t0
+            queue_task_duration.labels(type=task_type).observe(elapsed)
+            self._fail_pg_task(task_id, generation, e)
+        finally:
+            hb_stop.set()
+            hb_thread.join(timeout=5)
+            self._cancel_event = None
+
+    def _fail_pg_task(self, task_id: int, generation: int, exc: Exception):
+        """明确失败时 fail（WRK-006：仅持有效 fencing token 才增加 retries）。"""
+        new_status = self._task_repo.fail(
+            task_id,
+            self._worker_id,
+            str(exc),
+            stage=self._task_stage,
+            lease_generation=generation,
+        )
+        if new_status is None:
+            # fencing 不匹配：执行期间所有权已丢失，不得覆盖新 Worker 状态
+            logger.error(
+                "lease_lost",
+                extra={
+                    "task_id": task_id,
+                    "lease_generation": generation,
+                    "stage": self._task_stage,
+                    "reason": f"fail 被 fencing 拒绝: {exc}",
+                },
+            )
+            return
+        logger.error(
+            "worker_task_failed",
+            extra={
+                "task_id": task_id,
+                "mode": "pg",
+                "stage": self._task_stage,
+                "status": new_status,
+                "error": str(exc),
+            },
+        )
 
     # ── 具体处理逻辑 ──────────────────────────────────────
 
@@ -294,232 +424,13 @@ class BackgroundWorker:
             self._pipeline = ProcessingPipeline()
         return self._pipeline
 
-    def _get_registry(self):
-        """获取文档版本注册表（与任务队列同一 db）。"""
-        if self._version_registry is None:
-            from agent_material.rag_engine.db.version_registry import DocumentVersionRegistry
-            self._version_registry = DocumentVersionRegistry(db_path=self._queue.db_path)
-        return self._version_registry
-
-    def _versioned_ingest_enabled(self) -> bool:
-        from agent_material.utils.config_handler import vector_store_config
-        return vector_store_config.get("feature_flags", {}).get("versioned_ingest", True)
-
     def _handle_ingest(self, task):
-        """处理文件入库任务。"""
-        if self._pg:
-            return self._handle_ingest_pg(task)
-        if self._versioned_ingest_enabled():
-            return self._handle_ingest_versioned(task)
-
-        file_path = task.payload["file_path"]
-
-        # 阶段 1：Pipeline 处理（加载 + 清洗 + 切分 + 元数据增强）
-        pipeline = self._get_pipeline()
-        child_chunks = pipeline.process(file_path)
-        if not child_chunks:
-            logger.warning(f"[Worker] 文件处理后为空: {file_path}")
-            return
-
-        # 阶段 2：写入多粒度索引
-        multi_index = self._get_multi_index()
-        parent_ids = multi_index.insert(child_chunks, source=file_path)
-
-        # 阶段 3：更新文件追踪
-        if self._tracker:
-            self._tracker.record_indexed(file_path, parent_ids)
-
-        logger.info(
-            f"[Worker] 文件入库完成: {file_path} | "
-            f"子chunk数={len(child_chunks)} | 父chunk数={len(parent_ids) if parent_ids else 0}"
-        )
-
-    # ── 版本化入库流程（OFF-002 / OFF-003 / OFF-004）──────
-
-    def _handle_ingest_versioned(self, task):
-        """版本化入库：staging → validated → active，逐阶段可恢复。"""
-        from agent_material.rag_engine import versioning
-
-        file_path = task.payload["file_path"]
-        t0 = time.time()
-
-        # 读取文件字节，计算确定性 ID
-        with open(file_path, "rb") as f:
-            data = f.read()
-        content_hash = versioning.compute_content_hash(data)
-        multi_index = self._get_multi_index()
-        document_id = versioning.compute_document_id(
-            file_path, kb_id=multi_index.base_name
-        )
-        version_id = versioning.compute_version_id(content_hash)
-
-        registry = self._get_registry()
-        log_ctx = {
-            "task_id": task.id,
-            "document_id": document_id,
-            "version_id": version_id,
-        }
-
-        # 幂等跳过：相同内容版本已激活
-        active = registry.get_active(document_id)
-        if active and active["version_id"] == version_id:
-            if self._tracker:
-                self._tracker.record_indexed(
-                    file_path, None,
-                    **self._file_state_kwargs(file_path, task.payload),
-                )
-            logger.info("ingest_skip_idempotent", extra=log_ctx)
-            return
-
-        registry.register_staging(document_id, version_id, file_path, content_hash)
-
-        def _stage(stage: str, fn, mark_failed: bool = True):
-            """执行一个阶段；失败时按需标记 registry failed 后抛出。"""
-            st = time.time()
-            try:
-                result = fn()
-            except Exception as e:
-                if mark_failed:
-                    registry.mark_failed(document_id, version_id, stage, str(e))
-                logger.error(
-                    "ingest_stage_failed",
-                    extra={**log_ctx, "stage": stage, "error": str(e)},
-                )
-                raise
-            logger.info(
-                "ingest_stage_done",
-                extra={
-                    **log_ctx,
-                    "stage": stage,
-                    "duration_ms": (time.time() - st) * 1000,
-                    **({"detail": result} if isinstance(result, dict) else {}),
-                },
-            )
-            return result
-
-        # stage=pipeline：加载 + 清洗 + 切分 + 版本元数据
-        chunks = _stage(
-            "pipeline",
-            lambda: self._get_pipeline().process(
-                file_path,
-                version_context={"document_id": document_id, "version_id": version_id},
-            ),
-        )
-        if not chunks:
-            logger.warning(
-                "ingest_empty_chunks", extra={**log_ctx, "stage": "pipeline"}
-            )
-            return  # 空结果不标 failed
-
-        # stage=store：清理 staging 残留（重试幂等）→ 确定性写入
-        parent_ids = _stage(
-            "store",
-            lambda: (
-                multi_index.delete_by_version(document_id, version_id),
-                multi_index.insert(chunks, source=file_path, versioned=True),
-            )[1],
-        )
-
-        # stage=validate：OFF-003 最低校验条件
-        def _validate():
-            ok, stats = multi_index.validate_version(document_id, version_id)
-            if not ok:
-                raise ValueError(f"版本校验未通过: {stats}")
-            registry.mark_validated(
-                document_id, version_id,
-                stats["parent_count"], stats["child_count"],
-            )
-            return stats
-
-        _stage("validate", _validate)
-
-        # stage=activate：registry 事务翻牌 + PG is_active 翻牌
-        def _activate():
-            current = registry.get_active(document_id)
-            if current and current["version_id"] == version_id:
-                # 崩溃恢复幂等：registry 已激活，只需补 PG 翻牌
-                old = None
-                logger.info("ingest_activate_skip_registry", extra=log_ctx)
-            else:
-                try:
-                    old = registry.activate(document_id, version_id)
-                except Exception as e:
-                    registry.mark_failed(document_id, version_id, "activate", str(e))
-                    raise
-            # PG 失败时抛出但不标 failed：registry 已激活、PG 未翻牌 = 旧版本
-            # 继续在线服务，重试时上面的幂等分支可续跑
-            multi_index.set_active_version(document_id, version_id, old)
-
-        _stage("activate", _activate, mark_failed=False)
-
-        # stage=bm25_refresh：失败只记 error，不 fail 任务（6.3 降级表）
-        if self._atomic_bm25_refresh_enabled() and self._on_activated:
-            st = time.time()
-            try:
-                self._on_activated()
-                logger.info(
-                    "ingest_stage_done",
-                    extra={
-                        **log_ctx,
-                        "stage": "bm25_refresh",
-                        "duration_ms": (time.time() - st) * 1000,
-                    },
-                )
-            except Exception as e:
-                logger.error(
-                    "ingest_bm25_refresh_failed",
-                    extra={**log_ctx, "stage": "bm25_refresh", "error": str(e)},
-                )
-
-        # 激活成功后才更新 FileTracker（OFF-002）
-        if self._tracker:
-            self._tracker.record_indexed(
-                file_path,
-                parent_ids,
-                **self._file_state_kwargs(file_path, task.payload),
-            )
-
-        logger.info(
-            "ingest_versioned_done",
-            extra={
-                **log_ctx,
-                "parent_count": len(parent_ids) if parent_ids else 0,
-                "child_count": len(chunks),
-                "duration_ms": (time.time() - t0) * 1000,
-            },
-        )
+        """兼容内部调用名；所有任务均使用 PostgreSQL 版本化入库。"""
+        return self._handle_ingest_pg(task)
 
     def _atomic_bm25_refresh_enabled(self) -> bool:
         from agent_material.utils.config_handler import vector_store_config
         return vector_store_config.get("feature_flags", {}).get("atomic_bm25_refresh", True)
-
-    @staticmethod
-    def _file_state_kwargs(file_path: str, payload: dict) -> dict:
-        """从 payload 取 md5/mtime/size；缺失时现场 stat/算 md5 兜底。"""
-        md5_hash = payload.get("md5_hash")
-        file_mtime = payload.get("file_mtime")
-        file_size = payload.get("file_size")
-        if md5_hash and file_mtime is not None and file_size is not None:
-            return {
-                "md5_hash": md5_hash,
-                "file_mtime": file_mtime,
-                "file_size": file_size,
-            }
-        import os
-
-        from agent_material.rag_engine.db.file_tracker import _compute_md5
-        try:
-            stat = os.stat(file_path)
-            md5_hash = md5_hash or _compute_md5(file_path)
-            if md5_hash is None:
-                return {}
-            return {
-                "md5_hash": md5_hash,
-                "file_mtime": stat.st_mtime,
-                "file_size": stat.st_size,
-            }
-        except OSError:
-            return {}
 
     # ── PG 控制面入库流程（Spec V2 第 6/7 章）──────────────
 
@@ -534,14 +445,16 @@ class BackgroundWorker:
         """PG 模式文件入库。"""
         from agent_material.rag_engine import versioning
 
-        file_path = task["payload"]["file_path"]
+        payload = task["payload"]
+        file_path = payload["file_path"]  # 物理路径，仅用于读取文件
+        source = payload.get("source") or versioning.canonicalize_source(file_path)
         with open(file_path, "rb") as f:
             data = f.read()
         content_hash = versioning.compute_content_hash(data)
         stat = os.stat(file_path)
         self._run_pg_ingest(
             task,
-            source=file_path,
+            source=source,
             content_hash=content_hash,
             file_mtime=stat.st_mtime,
             file_size=stat.st_size,
@@ -613,11 +526,13 @@ class BackgroundWorker:
         document_id = versioning.compute_document_id(source, kb_id=multi_index.base_name)
         version_id = versioning.compute_version_id(content_hash)
         small_col, large_col = self._pg_collections(multi_index)
+        visual_col = getattr(multi_index, "visual_name", None)
         version_repo = self._version_repo
         log_ctx = {
             "task_id": task["task_id"],
             "document_id": document_id,
             "version_id": version_id,
+            "lease_generation": self._lease_generation,
         }
         t0 = time.time()
 
@@ -638,10 +553,17 @@ class BackgroundWorker:
         existing = version_repo.get(document_id, version_id)
         if existing and existing["status"] == "failed":
             version_repo.requeue_failed(document_id, version_id)
+        elif existing and existing["status"] == "retired":
+            document = version_repo.get_document(document_id)
+            if document and document["status"] == "deleted":
+                if not version_repo.requeue_retired_for_deleted(document_id, version_id):
+                    raise ValueError(
+                        f"已删除文档的版本无法重新进入 staging: {document_id}/{version_id}"
+                    )
 
         def _stage(stage: str, fn):
             st = time.time()
-            self._task_stage = stage
+            self._set_pg_stage(task["task_id"], stage)
             try:
                 result = fn()
             except Exception as e:
@@ -673,13 +595,32 @@ class BackgroundWorker:
             version_repo.mark_failed(document_id, version_id, "pipeline", reason)
             self._task_stage = "pipeline"
             raise ValueError(reason)
+        quality_problems = validate_ingest_chunk_quality(chunks)
+        if quality_problems:
+            reason = "; ".join(quality_problems)
+            version_repo.mark_failed(document_id, version_id, "pipeline", reason)
+            self._task_stage = "pipeline"
+            raise ValueError(reason)
+
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            artifact_rows_from_documents,
+        )
+        from agent_material.rag_engine.indexing.visual_vector_index import (
+            build_visual_index_documents,
+        )
+
+        artifact_rows = artifact_rows_from_documents(chunks)
+        expected_visual_count = (
+            len(build_visual_index_documents(chunks)) if visual_col else 0
+        )
 
         # stage=store：清 staging 残留（失败抛错终止）→ 确定性写入
         def _store():
             multi_index.delete_by_version(document_id, version_id)
+            version_repo.replace_staging_artifacts(
+                document_id, version_id, artifact_rows
+            )
             return multi_index.insert(chunks, source=source, versioned=True)
-
-        parent_ids = _stage("store", _store)
 
         # stage=validate：SQL 校验 + 预期/实际父子块数量比对（Spec 6.6）
         def _validate():
@@ -699,34 +640,76 @@ class BackgroundWorker:
                 problems.append(
                     f"子块数量不符: 预期 {expected_children} 实际 {stats.get('child_count')}"
                 )
+            if stats.get("visual_count", 0) != expected_visual_count:
+                problems.append(
+                    "图片向量数量不符: "
+                    f"预期 {expected_visual_count} 实际 {stats.get('visual_count', 0)}"
+                )
+            artifacts_ok, artifact_stats = version_repo.validate_artifacts(
+                document_id, version_id, len(artifact_rows)
+            )
+            if not artifacts_ok:
+                problems.append(f"图表实体校验未通过: {artifact_stats}")
             if problems:
                 reason = "; ".join(problems)
                 version_repo.mark_failed(document_id, version_id, "validate", reason)
                 raise ValueError(reason)
             version_repo.mark_validated(
-                document_id, version_id, stats["parent_count"], stats["child_count"]
+                document_id,
+                version_id,
+                stats["parent_count"],
+                stats["child_count"],
+                artifact_count=len(artifact_rows),
+                visual_count=expected_visual_count,
             )
-            return stats
+            return {**stats, **artifact_stats}
 
-        _stage("validate", _validate)
-
-        # stage=activate：单事务翻牌；失败整体回滚（仓储保证），任务进重试
+        # stage=activate：单事务翻牌（内含 fencing 校验、行数校验、任务
+        # completed）；失败整体回滚（仓储保证），任务进重试
         def _activate():
-            current = version_repo.get_active(document_id)
-            if current and current["version_id"] == version_id:
-                # 崩溃恢复幂等：已激活则跳过
-                logger.info("ingest_activate_skip", extra=log_ctx)
-                return {"skipped": True}
             old = version_repo.activate_version(
                 document_id, version_id, source, content_hash,
-                file_mtime, file_size, small_col, large_col,
+                file_mtime, file_size, small_col, large_col, visual_col,
+                task_id=task["task_id"], worker_id=self._worker_id,
+                lease_generation=self._lease_generation,
             )
+            # 任务已在激活事务内 completed（ACT-004），Worker 不再调 complete
+            self._task_completed_in_tx = True
             return {"old_version_id": old}
 
-        _stage("activate", _activate)
+        # ── staging 变更窗口（WRK-005 / INV-004）：文档级 advisory lock 串行化，
+        #    覆盖 staging cleanup → staging write → validate → activate；
+        #    每个阶段入口是 WRK-004 取消安全点，finally 释放锁 ──
+        self._check_cancel()  # staging 清理前
+        lock_t0 = time.time()
+        logger.info(
+            "document_lock_wait",
+            extra={**log_ctx, "kb_id": multi_index.base_name},
+        )
+        with version_repo.document_lock(multi_index.base_name, document_id):
+            logger.info(
+                "document_lock_acquired",
+                extra={
+                    **log_ctx,
+                    "wait_ms": (time.time() - lock_t0) * 1000,
+                },
+            )
+            # 锁内幂等复查：等待锁期间同版本可能已被其他 Worker 激活
+            current = version_repo.get_active(document_id)
+            if current and current["version_id"] == version_id:
+                logger.info("ingest_activate_skip", extra=log_ctx)
+                return
+            self._check_cancel()  # 父块/子块写入前
+            parent_ids = _stage("store", _store)
+            self._check_cancel()  # validate 前
+            _stage("validate", _validate)
+            self._check_cancel()  # activate 前
+            _stage("activate", _activate)
 
         # stage=bm25_refresh：失败只记 error，不 fail 任务（revision 兜底后续阶段实现）
         if self._atomic_bm25_refresh_enabled() and self._on_activated:
+            # 激活事务已把任务置为 completed；BM25 是事务后的 best-effort，
+            # 仅保留本地/日志阶段，不能再用 processing fencing 更新任务行。
             self._task_stage = "bm25_refresh"
             st = time.time()
             try:
@@ -756,27 +739,16 @@ class BackgroundWorker:
         )
 
     def _handle_delete(self, task):
-        """处理删除任务。"""
-        if self._pg:
-            return self._handle_delete_pg(task)
-        source = task.payload.get("source", task.payload.get("file_path", ""))
-        if not source:
-            logger.error("[Worker] 删除任务缺少 source")
-            return
-
-        multi_index = self._get_multi_index()
-        multi_index.delete_by_source(source)
-
-        if self._tracker:
-            self._tracker.remove_source(source)
-        logger.info(f"[Worker] 删除完成: {source}")
+        """兼容内部调用名；所有删除均走 PostgreSQL 逻辑删除事务。"""
+        return self._handle_delete_pg(task)
 
     def _handle_delete_pg(self, task: dict):
-        """PG 模式逻辑删除（Spec 8）：单事务，失败抛错且不更新文件状态。
+        """PG 模式逻辑删除（DEL-002/003）：单事务，失败抛错且不更新文件状态。
 
-        事务内含 is_active 下线 / 版本 retired / 文档 deleted /
-        file_state deleted / active_revision+1。失败直接抛出：事务整体回滚，
-        file_state 不变，任务进重试 —— 事务外不再触碰文件状态。
+        事务内含 fencing 校验 / is_active 下线（行数校验）/ 版本 retired /
+        文档 deleted / file_state deleted / active_revision+1 / 任务 completed。
+        失败直接抛出：事务整体回滚，file_state 不变，任务进重试 ——
+        事务外不再触碰文件状态。删除事务同样走文档级 advisory lock（INV-004）。
         """
         from agent_material.rag_engine import versioning
 
@@ -784,20 +756,43 @@ class BackgroundWorker:
         source = payload.get("source") or payload.get("file_path") or ""
         if not source:
             raise ValueError("删除任务缺少 source")
-        self._task_stage = "delete"
+        source = versioning.canonicalize_source(source)
+        self._set_pg_stage(task["task_id"], "delete")
         multi_index = self._get_multi_index()
         document_id = versioning.compute_document_id(source, kb_id=multi_index.base_name)
         small_col, large_col = self._pg_collections(multi_index)
+        visual_col = getattr(multi_index, "visual_name", None)
         log_ctx = {
             "task_id": task["task_id"],
             "document_id": document_id,
             "source": source,
+            "lease_generation": self._lease_generation,
         }
 
-        deleted = self._version_repo.delete_document(document_id, small_col, large_col)
-        if not deleted:
-            # 从未入库过 → 幂等成功（无需任何状态变更）
+        self._check_cancel()  # delete 前安全点（WRK-004）
+        lock_t0 = time.time()
+        logger.info(
+            "document_lock_wait",
+            extra={**log_ctx, "kb_id": multi_index.base_name},
+        )
+        with self._version_repo.document_lock(multi_index.base_name, document_id):
+            logger.info(
+                "document_lock_acquired",
+                extra={**log_ctx, "wait_ms": (time.time() - lock_t0) * 1000},
+            )
+            result = self._version_repo.delete_document(
+                document_id, small_col, large_col, visual_col,
+                task_id=task["task_id"], worker_id=self._worker_id,
+                lease_generation=self._lease_generation,
+            )
+        # 任务已在删除事务内 completed（含 not_found / already_deleted 幂等完成）
+        self._task_completed_in_tx = True
+        if result == "not_found":
+            # 从未入库过 → 幂等成功（no-op completed，current_stage=delete_noop）
             logger.info("delete_document_not_found", extra=log_ctx)
+            return
+        if result == "already_deleted":
+            logger.info("delete_document_idempotent", extra=log_ctx)
             return
         logger.info("delete_document_done", extra=log_ctx)
 
@@ -836,43 +831,8 @@ class BackgroundWorker:
         )
 
     def _handle_reindex(self, task):
-        """处理全量重索引任务（重新扫描目录）。"""
-        if self._pg:
-            return self._handle_reindex_pg(task)
-        from agent_material.utils.config_handler import vector_store_config
-
-        directory = task.payload.get("directory", vector_store_config.get("document_directory", "datas"))
-        allow_types = task.payload.get("allow_types", vector_store_config.get("allow_type", [".pdf", ".txt", ".md"]))
-
-        if not self._tracker:
-            logger.error("[Worker] FileTracker 未初始化，无法执行增量扫描")
-            return
-
-        versioned = self._versioned_ingest_enabled()
-        result = self._tracker.scan_directory(
-            directory, allow_types, defer_state_update=versioned
-        )
-        file_info = result.get("file_info", {})
-
-        enqueued = 0
-        # 新增和修改的文件入队
-        for path in result["new"] + result["modified"]:
-            payload = {"file_path": path}
-            if versioned:
-                payload.update(file_info.get(path, {}))
-            self._queue.enqueue(TaskType.INGEST_FILE, payload)
-            enqueued += 1
-
-        # 已删除的文件入队删除
-        for path in result["deleted"]:
-            self._queue.enqueue(TaskType.DELETE_FILE, {"source": path, "file_path": path})
-            enqueued += 1
-
-        logger.info(
-            f"[Worker] 扫描入队完成 | 新增 {len(result['new'])} | "
-            f"修改 {len(result['modified'])} | 未变 {len(result['unchanged'])} | "
-            f"已删 {len(result['deleted'])} | 共入队 {enqueued}"
-        )
+        """兼容内部调用名；所有重索引均使用 PostgreSQL 控制面。"""
+        return self._handle_reindex_pg(task)
 
 
 # ── PG 控制面目录扫描（Spec 6.1）───────────────────────────
@@ -897,20 +857,38 @@ def pg_scan_and_enqueue(
         成功入队的 task_id 列表（dedup 命中的重复任务返回 None，不计入）。
     """
     from agent_material.rag_engine import versioning
-    from agent_material.rag_engine.db.file_tracker import scan_directory_files
-
-    on_disk = scan_directory_files(directory, allow_types)
-    # 只比对扫描目录下的已追踪文件（目录外的追踪文件不属于本次扫描范围）
     from agent_material.utils.path_tools import get_abs_path
 
-    abs_dir = get_abs_path(directory)
+    physical_files: dict[str, dict] = {}
+    abs_scan_dir = get_abs_path(directory)
+    if os.path.isdir(abs_scan_dir):
+        allowed = {ext.lower() for ext in allow_types}
+        for root, _, files in os.walk(abs_scan_dir):
+            for name in files:
+                path = os.path.join(root, name)
+                if os.path.splitext(name)[1].lower() not in allowed:
+                    continue
+                try:
+                    stat = os.stat(path)
+                except OSError:
+                    continue
+                physical_files[path] = {"mtime": stat.st_mtime, "size": stat.st_size}
+    # source 是跨 Windows/WSL、REST/Worker/迁移脚本共享的逻辑主键；物理路径
+    # 仅用于本机 open/stat，不能直接进入控制面或向量 metadata。
+    on_disk = {
+        versioning.canonicalize_source(path): {**info, "file_path": path}
+        for path, info in physical_files.items()
+    }
+    # 只比对扫描目录下的已追踪文件（目录外的追踪文件不属于本次扫描范围）
+    abs_dir = versioning.canonicalize_source(get_abs_path(directory))
     tracked = {
-        row["source"]: row for row in file_state_repo.list_tracked(abs_dir)
+        versioning.canonicalize_source(row["source"]): row
+        for row in file_state_repo.list_tracked(abs_dir)
     }
 
     task_ids: list[int] = []
-    for path, info in on_disk.items():
-        row = tracked.get(path)
+    for source, info in on_disk.items():
+        row = tracked.get(source)
         if (
             row is not None
             and info["mtime"] == row["file_mtime"]
@@ -918,30 +896,30 @@ def pg_scan_and_enqueue(
         ):
             continue  # 快速路径：mtime + size 未变
         try:
-            with open(path, "rb") as f:
+            with open(info["file_path"], "rb") as f:
                 data = f.read()
         except OSError as e:
-            logger.warning(f"[pg_scan] 无法读取文件 {path}: {e}")
+            logger.warning(f"[pg_scan] 无法读取文件 {info['file_path']}: {e}")
             continue
         content_hash = versioning.compute_content_hash(data)
         if row is not None and row["content_hash"] == content_hash:
             continue  # mtime/size 变了但内容一致，无需重建
-        document_id = versioning.compute_document_id(path, kb_id=kb_id)
+        document_id = versioning.compute_document_id(source, kb_id=kb_id)
         task_id = task_repo.enqueue(
             "ingest_file",
-            {"file_path": path},
+            {"file_path": info["file_path"], "source": source},
             dedup_key=f"ingest:{document_id}:{content_hash}",
         )
         if task_id is not None:
             task_ids.append(task_id)
 
     # 消失的已追踪文件 → 删除任务（不提前标记 deleted）
-    for path in tracked:
-        if path not in on_disk:
-            document_id = versioning.compute_document_id(path, kb_id=kb_id)
+    for source in tracked:
+        if source not in on_disk:
+            document_id = versioning.compute_document_id(source, kb_id=kb_id)
             task_id = task_repo.enqueue(
                 "delete_document",
-                {"source": path},
+                {"source": source},
                 dedup_key=f"delete:{document_id}",
             )
             if task_id is not None:

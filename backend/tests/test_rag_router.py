@@ -9,12 +9,13 @@ mock 策略：
 - rag.py 模块级单例 _get_vector_store / _get_rag_service 用 monkeypatch
   替换为返回 fake 对象的函数（端点内部通过模块全局名调用，补丁生效）
 - /stats 读取的 vector_store_config（config_handler 模块级字典）同样
-  用 monkeypatch 替换为纯 dict，不触碰真实 yaml/ChromaDB
+  用 monkeypatch 替换为纯 dict，不触碰真实配置或 PGVector
 """
 
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,7 +33,21 @@ from agent_material.utils import config_handler  # noqa: E402
 
 
 def _fake_user() -> UserInfo:
-    return UserInfo(user_id="test-u", username="tester", created_at=time.time())
+    return UserInfo(
+        user_id="test-u",
+        username="tester",
+        created_at=time.time(),
+        is_admin=True,
+    )
+
+
+def _fake_standard_user() -> UserInfo:
+    return UserInfo(
+        user_id="test-standard",
+        username="standard",
+        created_at=time.time(),
+        is_admin=False,
+    )
 
 
 # ------------------------------------------------------------------
@@ -40,28 +55,19 @@ def _fake_user() -> UserInfo:
 # ------------------------------------------------------------------
 
 
-class FakeInnerVectorStore:
-    """add-chunks 端点直连的 store.vector_store（PGVector）。"""
-
-    def __init__(self):
-        self.added = []
-
-    def add_documents(self, docs):
-        self.added.extend(docs)
-
-
 class FakeVectorStore:
     """仅实现 rag.py 端点用到的 VectorStore 接口。"""
 
     def __init__(self, document_count: int = 42):
         self._document_count = document_count
-        self.vector_store = FakeInnerVectorStore()
-        self.all_documents = []
-        self._retrievers_initialized = True
         self.load_document_calls = 0
-        self.added_documents = []
-        self.deleted_sources = []
-        self.delete_fail_sources = set()  # 这些 source 删除时抛异常
+        self.enqueued_texts = []
+        self.enqueued_files = []
+        self.enqueued_deletes = []
+        self.enqueue_fail_sources = set()
+        self._next_task_id = 1000
+        self.retried_tasks = []
+        self.active_artifacts = {}
 
     def get_document_count(self):
         return self._document_count
@@ -71,8 +77,15 @@ class FakeVectorStore:
         self._document_count += 3  # 模拟加载了 3 条
         return [1, 2, 3]  # Spec V2：返回已入队 task_id 列表
 
-    def add_documents(self, docs):
-        self.added_documents.extend(docs)
+    def enqueue_ingest_text(self, text, source):
+        self._next_task_id += 1
+        self.enqueued_texts.append((text, source))
+        return self._next_task_id
+
+    def enqueue_ingest_file(self, file_path):
+        self._next_task_id += 1
+        self.enqueued_files.append(file_path)
+        return self._next_task_id
 
     def get_all_sources(self):
         return [
@@ -80,10 +93,40 @@ class FakeVectorStore:
             {"source": "data/b.pdf", "count": 5},
         ]
 
-    def delete_documents_by_source(self, source):
-        if source in self.delete_fail_sources:
-            raise RuntimeError(f"删除失败: {source}")
-        self.deleted_sources.append(source)
+    def enqueue_delete_by_source(self, source):
+        """pg 模式删除入口（ENT-003）：模拟创建 delete_document 任务。"""
+        if source in self.enqueue_fail_sources:
+            raise RuntimeError(f"创建删除任务失败: {source}")
+        self._next_task_id += 1
+        self.enqueued_deletes.append(source)
+        return {
+            "source": source,
+            "canonical_source": f"manual://{source}",
+            "task_id": self._next_task_id,
+            "status": "accepted",
+        }
+
+    def enqueue_batch_delete(self, sources):
+        results = []
+        for s in sources:
+            try:
+                results.append(self.enqueue_delete_by_source(s))
+            except Exception as e:
+                results.append({
+                    "source": s,
+                    "canonical_source": None,
+                    "task_id": None,
+                    "status": "failed",
+                    "error": str(e),
+                })
+        return results
+
+    def retry_failed_task(self, task_id):
+        self.retried_tasks.append(task_id)
+        return {"task_id": task_id, "status": "pending", "retries": 0}
+
+    def get_active_artifact(self, artifact_id):
+        return self.active_artifacts.get(artifact_id)
 
 
 class FakeRagService:
@@ -98,12 +141,36 @@ class FakeRagService:
         ]
         self._stream_chunks = stream_chunks if stream_chunks is not None else ["你好", "世界"]
         self.retriever_queries = []
+        self.search_calls = []
 
     # ── 新路径（single_retrieval_sse 开启）──
 
     def prepare(self, query, enable_rewrite=False, rewrite_strategy=""):
         self.retriever_queries.append(query)
         return FakeRequestContext(query, self._docs)
+
+    def search(self, query, enable_rewrite=False, rewrite_strategy=""):
+        self.search_calls.append((query, enable_rewrite, rewrite_strategy))
+        ctx = self.prepare(query, enable_rewrite, rewrite_strategy)
+        results = []
+        for index, doc in enumerate(ctx.context_docs, start=1):
+            metadata = dict(doc.metadata)
+            results.append(
+                {
+                    "index": index,
+                    "rank": index,
+                    "source": metadata.get("source", "未知来源"),
+                    "score": metadata.get("score", 0.0),
+                    "snippet": doc.page_content,
+                    "page_content": doc.page_content,
+                    "metadata": metadata,
+                }
+            )
+        return SimpleNamespace(
+            results=tuple(results),
+            count=len(results),
+            degradation_events=tuple(ctx.degradation_events),
+        )
 
     def stream_answer(self, ctx):
         yield from self._stream_chunks
@@ -174,6 +241,15 @@ def authed_client(client):
 
 
 @pytest.fixture()
+def standard_user_client(client):
+    app.dependency_overrides[get_current_user] = _fake_standard_user
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture()
 def fake_store(monkeypatch):
     """替换 _get_vector_store 单例工厂，返回 FakeVectorStore。"""
     store = FakeVectorStore()
@@ -220,6 +296,11 @@ class TestRagAuth:
     def test_sources_unauthenticated_401(self, client):
         assert client.get("/api/v1/rag/sources").status_code == 401
 
+    def test_artifact_asset_unauthenticated_401(self, client):
+        artifact_id = "a" * 32
+        response = client.get(f"/api/v1/rag/artifacts/{artifact_id}/asset")
+        assert response.status_code == 401
+
     def test_delete_by_source_unauthenticated_401(self, client):
         resp = client.post("/api/v1/rag/delete-by-source", json={"source": "a.pdf"})
         assert resp.status_code == 401
@@ -227,6 +308,28 @@ class TestRagAuth:
     def test_delete_sources_unauthenticated_401(self, client):
         resp = client.post("/api/v1/rag/delete-sources", json={"sources": ["a.pdf"]})
         assert resp.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("method", "path", "kwargs"),
+        [
+            ("post", "/api/v1/rag/load-documents", {}),
+            (
+                "post",
+                "/api/v1/rag/add-documents",
+                {"json": {"documents": ["x"]}},
+            ),
+            (
+                "post",
+                "/api/v1/rag/delete-by-source",
+                {"json": {"source": "a.pdf"}},
+            ),
+        ],
+    )
+    def test_knowledge_base_mutation_requires_admin(
+        self, standard_user_client, method, path, kwargs
+    ):
+        response = getattr(standard_user_client, method)(path, **kwargs)
+        assert response.status_code == 403
 
 
 # ------------------------------------------------------------------
@@ -272,6 +375,69 @@ class TestRagStats:
         assert "获取统计信息失败" in resp.json()["detail"]
 
 
+class TestRagArtifactAsset:
+    def test_active_figure_asset_is_served_without_path_leakage(
+        self, authed_client, fake_store, tmp_path, monkeypatch
+    ):
+        from agent_material.rag_engine.indexing import structured_artifacts
+
+        artifact_id = "a" * 32
+        target = tmp_path / "doc" / "v1" / "figure.png"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"\x89PNG\r\n\x1a\npreview")
+        fake_store.active_artifacts[artifact_id] = {
+            "artifact_id": artifact_id,
+            "artifact_type": "figure",
+            "asset_uri": "rag-asset://doc/v1/figure.png",
+            "status": "active",
+        }
+        test_config = {"structured_index": {"artifact_root": str(tmp_path)}}
+        monkeypatch.setattr(config_handler, "vector_store_config", test_config)
+        monkeypatch.setattr(structured_artifacts, "vector_store_config", test_config)
+
+        response = authed_client.get(
+            f"/api/v1/rag/artifacts/{artifact_id}/asset"
+        )
+
+        assert response.status_code == 200
+        assert response.content == target.read_bytes()
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert str(tmp_path) not in str(response.headers)
+
+    @pytest.mark.parametrize("artifact_id", ["not-an-id", "b" * 32])
+    def test_invalid_or_inactive_asset_is_not_found(
+        self, authed_client, fake_store, artifact_id
+    ):
+        response = authed_client.get(
+            f"/api/v1/rag/artifacts/{artifact_id}/asset"
+        )
+        assert response.status_code == 404
+
+    def test_asset_uri_cannot_escape_artifact_root(
+        self, authed_client, fake_store, tmp_path, monkeypatch
+    ):
+        from agent_material.rag_engine.indexing import structured_artifacts
+
+        artifact_id = "c" * 32
+        fake_store.active_artifacts[artifact_id] = {
+            "artifact_id": artifact_id,
+            "artifact_type": "figure",
+            "asset_uri": "rag-asset://../secret.png",
+            "status": "active",
+        }
+        test_config = {"structured_index": {"artifact_root": str(tmp_path)}}
+        monkeypatch.setattr(config_handler, "vector_store_config", test_config)
+        monkeypatch.setattr(structured_artifacts, "vector_store_config", test_config)
+
+        response = authed_client.get(
+            f"/api/v1/rag/artifacts/{artifact_id}/asset"
+        )
+
+        assert response.status_code == 404
+        assert str(tmp_path) not in response.text
+
+
 # ------------------------------------------------------------------
 # POST /search
 # ------------------------------------------------------------------
@@ -293,6 +459,20 @@ class TestRagSearch:
         assert item["snippet"] == "β-Ga2O3 的热导率研究片段"
         assert item["metadata"]["source"] == "data/ga2o3.pdf"
         assert fake_service.retriever_queries == ["热导率"]
+
+    def test_search_forwards_rewrite_options(self, authed_client, fake_service):
+        resp = authed_client.post(
+            "/api/v1/rag/search",
+            json={
+                "query": "热导率",
+                "enable_rewrite": True,
+                "rewrite_strategy": "step_back+expand",
+            },
+        )
+        assert resp.status_code == 200
+        assert fake_service.search_calls == [
+            ("热导率", True, "step_back+expand")
+        ]
 
     def test_search_empty_results(self, authed_client, monkeypatch):
         service = FakeRagService(docs=[])
@@ -360,7 +540,8 @@ class TestRagQuery:
         assert resp.status_code == 200  # SSE 流内错误，HTTP 仍 200
         body = resp.text
         assert "event: error" in body
-        assert "检索爆炸" in body
+        assert "检索或生成失败" in body
+        assert "检索爆炸" not in body
         assert "event: done" not in body
 
 
@@ -399,15 +580,6 @@ class TestRagLoadDocuments:
 
 
 class TestRagAddDocuments:
-    @pytest.fixture(autouse=True)
-    def _legacy_mode(self, monkeypatch):
-        """pg_control_plane 关闭 → 旧同步直写路径（回滚语义）。"""
-        monkeypatch.setattr(
-            config_handler,
-            "vector_store_config",
-            {"feature_flags": {"pg_control_plane": False}},
-        )
-
     def test_add_documents_with_sources(self, authed_client, fake_store):
         resp = authed_client.post(
             "/api/v1/rag/add-documents",
@@ -416,8 +588,9 @@ class TestRagAddDocuments:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        assert body["data"] == {"added": 2}
-        assert [d.metadata["source"] for d in fake_store.added_documents] == ["s1", "s2"]
+        assert body["data"]["accepted"] == 2
+        assert body["data"]["deduplicated"] == 0
+        assert fake_store.enqueued_texts == [("文本一", "s1"), ("文本二", "s2")]
 
     def test_add_documents_auto_sources(self, authed_client, fake_store):
         resp = authed_client.post(
@@ -425,10 +598,10 @@ class TestRagAddDocuments:
             json={"documents": ["文本一", "文本二"]},
         )
         assert resp.status_code == 200
-        assert resp.json()["data"] == {"added": 2}
-        assert [d.metadata["source"] for d in fake_store.added_documents] == [
-            "manual_0",
-            "manual_1",
+        assert resp.json()["data"]["accepted"] == 2
+        assert fake_store.enqueued_texts == [
+            ("文本一", "manual_0"),
+            ("文本二", "manual_1"),
         ]
 
     def test_add_documents_sources_length_mismatch_400(self, authed_client, fake_store):
@@ -450,16 +623,7 @@ class TestRagAddDocuments:
 
 
 class TestRagAddChunks:
-    @pytest.fixture(autouse=True)
-    def _enable_add_chunks(self, monkeypatch):
-        """P0 默认 410 关闭；这些用例显式开启旧直写逻辑（内部/回滚用）。"""
-        monkeypatch.setattr(
-            config_handler,
-            "vector_store_config",
-            {"feature_flags": {"enable_add_chunks": True}},
-        )
-
-    def test_add_chunks_success(self, authed_client, fake_store):
+    def test_add_chunks_removed(self, authed_client, fake_store):
         resp = authed_client.post(
             "/api/v1/rag/add-chunks",
             json={
@@ -468,45 +632,20 @@ class TestRagAddChunks:
                 "metadatas": [{"page": 1}, {"page": 2}],
             },
         )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["code"] == 200
-        assert body["data"] == {"added": 2}
-        # 直接走底层 vector_store，不经二次切分
-        assert len(fake_store.vector_store.added) == 2
-        assert fake_store.vector_store.added[0].metadata == {"page": 1, "source": "doc1.pdf"}
-        # all_documents 同步扩展并标记 retriever 失效
-        assert len(fake_store.all_documents) == 2
-        assert fake_store._retrievers_initialized is False
-
-    def test_add_chunks_auto_sources(self, authed_client, fake_store):
-        resp = authed_client.post(
-            "/api/v1/rag/add-chunks",
-            json={"chunks": ["chunk-a", "chunk-b"]},
-        )
-        assert resp.status_code == 200
-        sources = [d.metadata["source"] for d in fake_store.vector_store.added]
-        assert sources == ["chunk_batch_0", "chunk_batch_1"]
-
-    def test_add_chunks_metadatas_length_mismatch_400(self, authed_client, fake_store):
-        resp = authed_client.post(
-            "/api/v1/rag/add-chunks",
-            json={"chunks": ["a", "b"], "metadatas": [{"page": 1}]},
-        )
-        assert resp.status_code == 400
-        assert "metadatas 长度必须与 chunks 一致" in resp.json()["detail"]
-
-    def test_add_chunks_sources_length_mismatch_400(self, authed_client, fake_store):
-        resp = authed_client.post(
-            "/api/v1/rag/add-chunks",
-            json={"chunks": ["a", "b"], "sources": ["only-one"]},
-        )
-        assert resp.status_code == 400
-        assert "sources 长度必须与 chunks 一致" in resp.json()["detail"]
+        assert resp.status_code == 410
+        assert "已移除" in resp.json()["detail"]
 
     def test_add_chunks_empty_list_422(self, authed_client):
         resp = authed_client.post("/api/v1/rag/add-chunks", json={"chunks": []})
         assert resp.status_code == 422
+
+
+class TestRagTaskRetry:
+    def test_retry_failed_task_returns_pending(self, authed_client, fake_store):
+        resp = authed_client.post("/api/v1/rag/tasks/77/retry")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "pending"
+        assert fake_store.retried_tasks == [77]
 
 
 # ------------------------------------------------------------------
@@ -541,15 +680,23 @@ class TestRagSources:
 
 
 class TestRagDeleteBySource:
-    def test_delete_by_source_success(self, authed_client, fake_store):
+    def test_delete_by_source_accepted(self, authed_client, fake_store):
+        """pg 模式：返回 accepted + task_id，不同步物理删除（T-ENT-02）。"""
         resp = authed_client.post(
             "/api/v1/rag/delete-by-source", json={"source": "data/a.pdf"}
         )
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        assert body["data"] == {"source": "data/a.pdf"}
-        assert fake_store.deleted_sources == ["data/a.pdf"]
+        # INV-008：异步接口不误报完成 —— "已接收"而非"已删除"
+        assert "已接收" in body["message"]
+        assert "已删除" not in body["message"]
+        data = body["data"]
+        assert data["source"] == "data/a.pdf"
+        assert data["status"] == "accepted"
+        assert isinstance(data["task_id"], int)
+        # 创建了删除任务，但未同步物理删除
+        assert fake_store.enqueued_deletes == ["data/a.pdf"]
 
     def test_delete_by_source_empty_string_422(self, authed_client):
         resp = authed_client.post("/api/v1/rag/delete-by-source", json={"source": ""})
@@ -566,7 +713,8 @@ class TestRagDeleteBySource:
 
 
 class TestRagDeleteSources:
-    def test_delete_sources_all_success(self, authed_client, fake_store):
+    def test_delete_sources_all_accepted(self, authed_client, fake_store):
+        """pg 模式：每个 source 独立任务，返回明细 + task_id（T-ENT-03）。"""
         resp = authed_client.post(
             "/api/v1/rag/delete-sources",
             json={"sources": ["data/a.pdf", "data/b.pdf"]},
@@ -574,12 +722,24 @@ class TestRagDeleteSources:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        assert body["data"]["success"] == 2
-        assert body["data"]["failed"] == []
-        assert fake_store.deleted_sources == ["data/a.pdf", "data/b.pdf"]
+        assert "已接收" in body["message"]
+        assert "已删除" not in body["message"]
+        data = body["data"]
+        assert data["accepted"] == 2
+        assert data["deduplicated"] == 0
+        assert data["failed"] == []
+        results = data["results"]
+        assert len(results) == 2
+        assert {r["source"] for r in results} == {"data/a.pdf", "data/b.pdf"}
+        # 每个 source 独立的 task_id
+        task_ids = [r["task_id"] for r in results]
+        assert all(isinstance(tid, int) for tid in task_ids)
+        assert len(set(task_ids)) == 2
+        # 不同步物理删除
 
     def test_delete_sources_partial_failure(self, authed_client, fake_store):
-        fake_store.delete_fail_sources = {"data/bad.pdf"}
+        """pg 模式：单个 source 创建任务失败不影响其他 source。"""
+        fake_store.enqueue_fail_sources = {"data/bad.pdf"}
         resp = authed_client.post(
             "/api/v1/rag/delete-sources",
             json={"sources": ["data/good.pdf", "data/bad.pdf"]},
@@ -587,10 +747,12 @@ class TestRagDeleteSources:
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 200
-        assert body["data"]["success"] == 1
-        assert len(body["data"]["failed"]) == 1
-        assert body["data"]["failed"][0]["source"] == "data/bad.pdf"
-        assert "1 篇失败" in body["message"]
+        data = body["data"]
+        assert data["accepted"] == 1
+        assert len(data["failed"]) == 1
+        assert data["failed"][0]["source"] == "data/bad.pdf"
+        assert data["failed"][0]["status"] == "failed"
+        assert "1 个创建失败" in body["message"]
 
     def test_delete_sources_empty_list_422(self, authed_client):
         resp = authed_client.post("/api/v1/rag/delete-sources", json={"sources": []})
@@ -599,6 +761,134 @@ class TestRagDeleteSources:
     def test_delete_sources_missing_field_422(self, authed_client):
         resp = authed_client.post("/api/v1/rag/delete-sources", json={})
         assert resp.status_code == 422
+
+
+# ------------------------------------------------------------------
+# POST /upload（文件上传入库）
+# ------------------------------------------------------------------
+
+
+@pytest.fixture()
+def upload_dir(tmp_path, monkeypatch):
+    """把 document_directory 指到临时目录，allow_type 限定 .pdf。"""
+    monkeypatch.setattr(
+        config_handler,
+        "vector_store_config",
+        {
+            "document_directory": str(tmp_path),
+            "allow_type": [".pdf"],
+        },
+    )
+    return tmp_path
+
+
+class TestRagUpload:
+    def test_upload_unauthenticated_401(self, client):
+        resp = client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+        assert resp.status_code == 401
+
+    def test_upload_pdf_accepted(self, authed_client, fake_store, upload_dir):
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("paper.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["code"] == 200
+        data = body["data"]
+        assert data["accepted"] == 1
+        f = data["files"][0]
+        assert f["filename"] == "paper.pdf"
+        assert f["status"] == "accepted"
+        assert f["task_id"] is not None
+        # 文件落盘到 document_directory 且入队路径一致
+        saved = upload_dir / "paper.pdf"
+        assert saved.read_bytes() == b"%PDF-1.4 fake"
+        assert fake_store.enqueued_files == [str(saved)]
+
+    def test_upload_rejects_bad_extension(self, authed_client, fake_store, upload_dir):
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("notes.txt", b"hello", "text/plain")},
+        )
+        assert resp.status_code == 200
+        f = resp.json()["data"]["files"][0]
+        assert f["status"] == "rejected"
+        assert "不支持的文件类型" in f["reason"]
+        assert fake_store.enqueued_files == []
+        assert not (upload_dir / "notes.txt").exists()
+
+    def test_upload_rejects_empty_file(self, authed_client, fake_store, upload_dir):
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("empty.pdf", b"", "application/pdf")},
+        )
+        assert resp.status_code == 200
+        f = resp.json()["data"]["files"][0]
+        assert f["status"] == "rejected"
+        assert f["reason"] == "空文件"
+        assert fake_store.enqueued_files == []
+
+    def test_upload_rejects_fake_pdf(self, authed_client, fake_store, upload_dir):
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("fake.pdf", b"not actually a pdf", "application/pdf")},
+        )
+        assert resp.status_code == 200
+        f = resp.json()["data"]["files"][0]
+        assert f["status"] == "rejected"
+        assert f["reason"] == "文件内容不是有效的 PDF"
+        assert fake_store.enqueued_files == []
+        assert not (upload_dir / "fake.pdf").exists()
+
+    def test_upload_sanitizes_filename(self, authed_client, fake_store, upload_dir):
+        """路径穿越成分被剥离，文件只落在 document_directory 内。"""
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("../../evil.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+        assert resp.status_code == 200
+        f = resp.json()["data"]["files"][0]
+        assert f["status"] == "accepted"
+        assert f["filename"] == "evil.pdf"
+        assert (upload_dir / "evil.pdf").exists()
+        assert fake_store.enqueued_files == [str(upload_dir / "evil.pdf")]
+
+    def test_upload_deduplicated(self, authed_client, fake_store, upload_dir, monkeypatch):
+        """入队返回 None 时（内容未变化）状态为 deduplicated。"""
+        monkeypatch.setattr(
+            fake_store.__class__, "enqueue_ingest_file", lambda self, p: None
+        )
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("same.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["accepted"] == 0
+        assert data["files"][0]["status"] == "deduplicated"
+
+    def test_upload_restores_previous_file_when_enqueue_fails(
+        self, authed_client, fake_store, upload_dir, monkeypatch
+    ):
+        previous = upload_dir / "paper.pdf"
+        previous.write_bytes(b"%PDF-1.4 previous")
+
+        def _raise(_self, _path):
+            raise RuntimeError("queue unavailable")
+
+        monkeypatch.setattr(fake_store.__class__, "enqueue_ingest_file", _raise)
+        resp = authed_client.post(
+            "/api/v1/rag/upload",
+            files={"files": ("paper.pdf", b"%PDF-1.4 replacement", "application/pdf")},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["files"][0]["status"] == "failed"
+        assert previous.read_bytes() == b"%PDF-1.4 previous"
 
 
 if __name__ == "__main__":

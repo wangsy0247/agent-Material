@@ -1,10 +1,5 @@
-"""版本化离线索引集成测试（OFF-002 / OFF-003 / OFF-004 / OFF-007 / ONL-009）。
+"""版本化块写入、校验、BM25 刷新和父块回溯测试。"""
 
-全部使用 fake/mock：不连接真实 PG，不调用真实 Embedding API。
-Worker 流程使用 tmp_path 下的真实 sqlite（registry / tracker / queue）。
-"""
-
-import hashlib
 import threading
 import uuid
 from unittest import mock
@@ -14,10 +9,6 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict
 
-from agent_material.rag_engine.db.file_tracker import FileTracker
-from agent_material.rag_engine.db.task_queue import TaskQueue, TaskType, Task
-from agent_material.rag_engine.db.version_registry import DocumentVersionRegistry
-from agent_material.rag_engine.db.worker import BackgroundWorker
 from agent_material.rag_engine.indexing.multi_granularity import MultiGranularityIndex
 from agent_material.rag_engine.indexing.multi_gran_retriever import (
     MultiGranularityRetriever,
@@ -269,283 +260,6 @@ class TestValidateVersion:
         assert stats["duplicate_chunk_id"] == 2
 
 
-# ── 任务 2/3：Worker 版本化流程 ───────────────────────────
-
-
-class _FakePipeline:
-    def __init__(self, chunks):
-        self._chunks = chunks
-        self.calls = 0
-
-    def process(self, file_path, version_context=None, **kwargs):
-        self.calls += 1
-        self.last_version_context = version_context
-        return self._chunks
-
-
-class _FakeMultiIndex:
-    base_name = "agent"
-
-    def __init__(self):
-        self.insert_calls = 0
-        self.delete_calls: list[tuple] = []
-        self.set_active_calls: list[tuple] = []
-        self.fail_store = False
-        self.fail_set_active = False
-        self.on_set_active = None  # 可选钩子（断言调用时 tracker 状态）
-
-    def delete_by_version(self, document_id, version_id):
-        self.delete_calls.append((document_id, version_id))
-
-    def insert(self, chunks, source="", versioned=False):
-        if self.fail_store:
-            raise RuntimeError("store boom")
-        self.insert_calls += 1
-        assert versioned is True
-        return ["pid-1"]
-
-    def validate_version(self, document_id, version_id):
-        return True, {"parent_count": 1, "child_count": 2}
-
-    def set_active_version(self, document_id, new_version_id, old_version_id):
-        if self.on_set_active:
-            self.on_set_active()
-        self.set_active_calls.append((document_id, new_version_id, old_version_id))
-        if self.fail_set_active:
-            raise RuntimeError("pg boom")
-
-
-def _make_task(file_path, **extra_payload):
-    return Task(
-        id=1,
-        task_type=TaskType.INGEST_FILE.value,
-        payload={"file_path": str(file_path), **extra_payload},
-        status="processing",
-        retries=0,
-        error_msg=None,
-        created_at="",
-    )
-
-
-@pytest.fixture()
-def worker_env(tmp_path):
-    db_path = str(tmp_path / "q.db")
-    queue = TaskQueue(db_path=db_path)
-    tracker = FileTracker(db_path=db_path)
-    registry = DocumentVersionRegistry(db_path=db_path)
-
-    doc_file = tmp_path / "a.pdf"
-    doc_file.write_bytes(b"hello v1")
-
-    fake_index = _FakeMultiIndex()
-    pipeline = _FakePipeline(_versioned_chunks())
-    activated_calls = []
-
-    worker = BackgroundWorker(
-        task_queue=queue,
-        file_tracker=tracker,
-        on_activated=lambda: activated_calls.append(1),
-        version_registry=registry,
-    )
-    worker._pipeline = pipeline
-    worker._multi_index = fake_index
-
-    return {
-        "tmp_path": tmp_path,
-        "file": doc_file,
-        "queue": queue,
-        "tracker": tracker,
-        "registry": registry,
-        "worker": worker,
-        "pipeline": pipeline,
-        "index": fake_index,
-        "activated_calls": activated_calls,
-    }
-
-
-def _doc_ver(env):
-    from agent_material.rag_engine import versioning
-
-    data = env["file"].read_bytes()
-    content_hash = versioning.compute_content_hash(data)
-    document_id = versioning.compute_document_id(str(env["file"]), kb_id="agent")
-    return document_id, versioning.compute_version_id(content_hash)
-
-
-class TestWorkerVersionedIngest:
-    def test_happy_path(self, worker_env):
-        env = worker_env
-        document_id, version_id = _doc_ver(env)
-
-        # set_active 调用时 tracker 必须尚未记录（OFF-002：激活后才更新 FileTracker）
-        file_path = str(env["file"])
-
-        def _assert_tracker_not_recorded():
-            state = env["tracker"].get_by_path(file_path)
-            assert state is None or state["last_indexed_at"] is None
-
-        env["index"].on_set_active = _assert_tracker_not_recorded
-
-        env["worker"]._handle_ingest(_make_task(file_path))
-
-        row = env["registry"].get(document_id, version_id)
-        assert row["status"] == "active"
-        assert row["parent_count"] == 1
-        assert row["child_count"] == 2
-        assert env["activated_calls"] == [1]
-
-        # pipeline 收到 version_context
-        assert env["pipeline"].last_version_context == {
-            "document_id": document_id,
-            "version_id": version_id,
-        }
-
-        # tracker 在激活后落库（md5/mtime/size + parent_ids）
-        state = env["tracker"].get_by_path(file_path)
-        assert state is not None
-        assert state["last_indexed_at"] is not None
-        assert state["md5_hash"] == hashlib.md5(b"hello v1").hexdigest()
-        assert state["parent_ids"] == ["pid-1"]
-
-        # store 阶段先清 staging 残留再写入
-        assert env["index"].delete_calls == [(document_id, version_id)]
-
-    def test_idempotent_skip_same_content(self, worker_env):
-        env = worker_env
-        file_path = str(env["file"])
-        env["worker"]._handle_ingest(_make_task(file_path))
-        env["worker"]._handle_ingest(_make_task(file_path))
-
-        # 第二次：相同内容已激活 → 幂等跳过，pipeline 不再调用
-        assert env["pipeline"].calls == 1
-        assert env["index"].insert_calls == 1
-
-    def test_store_failure_marks_failed_and_recovers(self, worker_env):
-        env = worker_env
-        file_path = str(env["file"])
-        document_id, version_id = _doc_ver(env)
-
-        env["index"].fail_store = True
-        with pytest.raises(RuntimeError, match="store boom"):
-            env["worker"]._handle_ingest(_make_task(file_path))
-
-        row = env["registry"].get(document_id, version_id)
-        assert row["status"] == "failed"
-        assert row["failure_stage"] == "store"
-        assert "store boom" in row["failure_reason"]
-        # 失败时不得更新 tracker
-        state = env["tracker"].get_by_path(file_path)
-        assert state is None or state["last_indexed_at"] is None
-
-        # 重新投递 → 从头安全重试并恢复
-        env["index"].fail_store = False
-        env["worker"]._handle_ingest(_make_task(file_path))
-        assert env["registry"].get(document_id, version_id)["status"] == "active"
-        assert env["index"].insert_calls == 1
-
-    def test_activate_idempotent_recovery(self, worker_env):
-        env = worker_env
-        file_path = str(env["file"])
-        document_id, version_id = _doc_ver(env)
-
-        # 模拟崩溃：registry 已激活、PG 翻牌失败
-        activate_spy = mock.patch.object(
-            env["registry"], "activate", wraps=env["registry"].activate
-        )
-        env["index"].fail_set_active = True
-        with activate_spy as spy:
-            with pytest.raises(RuntimeError, match="pg boom"):
-                env["worker"]._handle_ingest(_make_task(file_path))
-            assert spy.call_count == 1
-
-            # registry 已 active（旧版本继续在线服务的另一侧：新版本 registry 已翻牌）
-            assert env["registry"].get_active(document_id)["version_id"] == version_id
-
-            # 重试：不再调 registry.activate，直接补 PG 翻牌（old=None）
-            env["index"].fail_set_active = False
-            env["worker"]._handle_ingest(_make_task(file_path))
-            assert spy.call_count == 1
-            assert env["index"].set_active_calls[-1] == (document_id, version_id, None)
-
-    def test_bm25_refresh_failure_does_not_fail_task(self, worker_env):
-        env = worker_env
-
-        def _boom():
-            raise RuntimeError("bm25 boom")
-
-        env["worker"]._on_activated = _boom
-        # 不应抛出：BM25 刷新失败只记 error，任务仍完成
-        env["worker"]._handle_ingest(_make_task(str(env["file"])))
-        document_id, version_id = _doc_ver(env)
-        assert env["registry"].get(document_id, version_id)["status"] == "active"
-
-    def test_empty_chunks_not_failed(self, worker_env):
-        env = worker_env
-        env["pipeline"]._chunks = []
-        env["worker"]._handle_ingest(_make_task(str(env["file"])))
-        document_id, version_id = _doc_ver(env)
-        # 空结果：不标 failed（保持 staging），不写 store
-        row = env["registry"].get(document_id, version_id)
-        assert row["status"] == "staging"
-        assert env["index"].insert_calls == 0
-
-
-# ── 任务 3：FileTracker 延迟落库 ──────────────────────────
-
-
-class TestFileTrackerDefer:
-    def test_scan_defer_does_not_upsert(self, tmp_path):
-        tracker = FileTracker(db_path=str(tmp_path / "t.db"))
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        f = docs / "a.md"
-        f.write_text("内容", encoding="utf-8")
-
-        result = tracker.scan_directory(str(docs), [".md"], defer_state_update=True)
-        assert result["new"] == [str(f)]
-        # 延迟落库：file_states 不写，但 file_info 携带 md5/mtime/size
-        assert tracker.get_by_path(str(f)) is None
-        info = result["file_info"][str(f)]
-        assert info["md5_hash"] == hashlib.md5("内容".encode()).hexdigest()
-        assert info["file_size"] == f.stat().st_size
-
-        # 再次扫描仍是 new（状态未落库）
-        result2 = tracker.scan_directory(str(docs), [".md"], defer_state_update=True)
-        assert result2["new"] == [str(f)]
-
-    def test_scan_default_upserts(self, tmp_path):
-        tracker = FileTracker(db_path=str(tmp_path / "t.db"))
-        docs = tmp_path / "docs"
-        docs.mkdir()
-        f = docs / "a.md"
-        f.write_text("内容", encoding="utf-8")
-
-        result = tracker.scan_directory(str(docs), [".md"])
-        assert result["new"] == [str(f)]
-        assert tracker.get_by_path(str(f)) is not None
-
-    def test_record_indexed_upserts_state(self, tmp_path):
-        tracker = FileTracker(db_path=str(tmp_path / "t.db"))
-        f = tmp_path / "a.md"
-        f.write_text("内容", encoding="utf-8")
-        tracker.record_indexed(
-            str(f),
-            ["pid-1"],
-            md5_hash="abc",
-            file_mtime=1.0,
-            file_size=100,
-        )
-        state = tracker.get_by_path(str(f))
-        assert state["md5_hash"] == "abc"
-        assert state["file_size"] == 100
-        assert state["last_indexed_at"] is not None
-        assert state["parent_ids"] == ["pid-1"]
-
-        # parent_ids=None 时保留已存 parent_ids
-        tracker.record_indexed(str(f), None, md5_hash="abc", file_mtime=2.0, file_size=100)
-        assert tracker.get_by_path(str(f))["parent_ids"] == ["pid-1"]
-
-
 # ── 任务 4：refresh_documents 原子替换 ────────────────────
 
 
@@ -662,6 +376,35 @@ class TestFetchParents:
         assert docs == []
         assert missing == ["p1", "p2"]
 
+    def test_cross_document_parent_id_disambiguated(self, monkeypatch):
+        """legacy 存量 parent_id 跨文档撞库：按子块 scope 取同文档父块。"""
+        self._patch_pg_rows(
+            monkeypatch,
+            [
+                ("文档A父块", {"parent_id": "p1", "document_id": "docA", "version_id": "vA"}),
+                ("文档B父块", {"parent_id": "p1", "document_id": "docB", "version_id": "vB"}),
+            ],
+        )
+        retriever = _make_retriever([])
+        docs, missing = retriever._fetch_parents(
+            ["p1"], {"p1": ("docB", "vB")}
+        )
+        assert missing == []
+        assert [d.page_content for d in docs] == ["文档B父块"]
+
+    def test_scoped_parent_missing_not_cross_document(self, monkeypatch):
+        """子块有 scope 但本文档无此父块：不得引用其他文档的同 id 父块。"""
+        self._patch_pg_rows(
+            monkeypatch,
+            [("文档A父块", {"parent_id": "p1", "document_id": "docA", "version_id": "vA"})],
+        )
+        retriever = _make_retriever([])
+        docs, missing = retriever._fetch_parents(
+            ["p1"], {"p1": ("docB", "vB")}
+        )
+        assert docs == []
+        assert missing == ["p1"]
+
     def test_missing_parent_falls_back_to_child(self):
         retriever = _make_retriever([])
         child1 = Document(page_content="子块1", metadata={"parent_id": "p1"})
@@ -669,7 +412,7 @@ class TestFetchParents:
         parent1 = Document(page_content="父块1", metadata={"parent_id": "p1"})
 
         retriever._hybrid_search = lambda q: [child1, child2]
-        retriever._fetch_parents = lambda ids: ([parent1], ["p2"])
+        retriever._fetch_parents = lambda ids, scopes=None: ([parent1], ["p2"])
 
         docs = retriever._get_relevant_documents("query")
         assert len(docs) == 2

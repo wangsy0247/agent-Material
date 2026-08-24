@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -7,12 +8,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agent_material.config.extensions_config import ExtensionsConfig, get_extensions_config, reload_extensions_config
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import get_current_admin, get_current_user
 from ..auth.schemas import UserInfo
 from ..schemas import MCPStatusResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["mcp"])
+
+_ALLOW_RUNTIME_CONFIG = os.environ.get(
+    "AGENT_ALLOW_RUNTIME_MCP_CONFIG", "false"
+).lower() in {"1", "true", "yes"}
 
 
 class McpOAuthConfigResponse(BaseModel):
@@ -147,7 +152,7 @@ def _merge_preserving_secrets(
     description="Retrieve the current Model Context Protocol (MCP) server configurations.",
 )
 async def get_mcp_configuration(
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_admin),
 ) -> McpConfigResponse:
     """Get the current MCP configuration."""
     config = get_extensions_config()
@@ -193,7 +198,7 @@ async def mcp_status(
 )
 async def update_mcp_configuration(
     request: McpConfigUpdateRequest,
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_admin),
 ) -> McpConfigResponse:
     """Update the MCP configuration.
 
@@ -202,6 +207,15 @@ async def update_mcp_configuration(
     2. Reload the configuration cache
     3. Reset MCP tools cache to trigger reinitialization
     """
+    if not _ALLOW_RUNTIME_CONFIG:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "运行时 MCP 配置修改默认关闭；请修改 extensions_config.json "
+                "并重启服务"
+            ),
+        )
+
     try:
         config_path = ExtensionsConfig.resolve_config_path()
 
@@ -247,4 +261,4 @@ async def update_mcp_configuration(
 
     except Exception as e:
         logger.error(f"Failed to update MCP configuration: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to update MCP configuration: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update MCP configuration")

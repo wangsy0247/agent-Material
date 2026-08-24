@@ -14,6 +14,7 @@ const state = {
     abortController: null,
     selectedDocs: new Set(),
     allDocs: [],
+    artifactObjectUrls: new Set(),
 };
 
 // DOM 缓存
@@ -45,7 +46,11 @@ const authCtx = AppCommon.createAuthContext({
 
 async function apiFetch(path, options = {}) {
     await authCtx.ensureTokenValid();
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = {};
+    // FormData 由浏览器自动带 multipart boundary，不能手动设 Content-Type
+    if (!(options.body instanceof FormData)) {
+        headers['Content-Type'] = 'application/json';
+    }
     if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
     const res = await fetch(`${API_BASE}${path}`, { headers, ...options });
     if (res.status === 401) {
@@ -70,6 +75,23 @@ async function apiFetch(path, options = {}) {
     return res.json();
 }
 
+async function apiFetchBlob(path) {
+    await authCtx.ensureTokenValid();
+    const headers = {};
+    if (state.token) headers.Authorization = `Bearer ${state.token}`;
+    const res = await fetch(`${API_BASE}${path}`, { headers });
+    if (res.status === 401 && state.refreshToken) {
+        await authCtx.refresh();
+        return apiFetchBlob(path);
+    }
+    if (!res.ok) {
+        const error = new Error(await res.text());
+        error.status = res.status;
+        throw error;
+    }
+    return res.blob();
+}
+
 // ============================================
 // 工具函数
 // ============================================
@@ -84,6 +106,48 @@ function setError(el, text) {
 
 function setSuccess(el, text) {
     el.innerHTML = `<div class="rag-success">✅ ${AppCommon.escapeHtml(text)}</div>`;
+}
+
+function releaseArtifactPreviews() {
+    state.artifactObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+    state.artifactObjectUrls.clear();
+}
+
+function resultCard(item, compact = false) {
+    const isFigure = item.content_type === 'figure' && item.artifact_id;
+    const preview = isFigure ? `
+        <div class="rag-artifact-preview" data-artifact-preview="${AppCommon.escapeHtml(String(item.artifact_id))}">
+            <div class="rag-artifact-loading">图表预览加载中...</div>
+        </div>` : '';
+    return `
+        <div class="rag-result-item${compact ? ' rag-result-item-compact' : ''}">
+            <div class="rag-result-header">
+                <span class="rag-result-source">#${AppCommon.escapeHtml(String(item.index))} ${AppCommon.escapeHtml(item.source)}</span>
+                <span class="rag-result-score">相似度 ${((item.score || 0) * 100).toFixed(1)}%</span>
+            </div>
+            ${preview}
+            <div class="rag-result-snippet">${AppCommon.escapeHtml(item.snippet || item.caption || '')}</div>
+        </div>`;
+}
+
+async function loadArtifactPreviews(root) {
+    const previews = root.querySelectorAll('[data-artifact-preview]');
+    await Promise.all(Array.from(previews).map(async (preview) => {
+        const artifactId = preview.dataset.artifactPreview;
+        try {
+            const blob = await apiFetchBlob(`/rag/artifacts/${encodeURIComponent(artifactId)}/asset`);
+            const objectUrl = URL.createObjectURL(blob);
+            state.artifactObjectUrls.add(objectUrl);
+            const image = document.createElement('img');
+            image.className = 'rag-artifact-image';
+            image.alt = '检索命中的图表证据';
+            image.loading = 'lazy';
+            image.src = objectUrl;
+            preview.replaceChildren(image);
+        } catch {
+            preview.remove();
+        }
+    }));
 }
 
 // ============================================
@@ -180,6 +244,7 @@ async function doSearch() {
     const status = $('searchStatus');
     const results = $('searchResults');
     setLoading(status, '检索中...');
+    releaseArtifactPreviews();
     results.innerHTML = '';
     try {
         const res = await apiFetch('/rag/search', {
@@ -192,15 +257,8 @@ async function doSearch() {
             results.innerHTML = '<div class="rag-empty">未检索到相关文档</div>';
             return;
         }
-        results.innerHTML = data.map((item) => `
-            <div class="rag-result-item">
-                <div class="rag-result-header">
-                    <span class="rag-result-source">#${AppCommon.escapeHtml(String(item.index))} ${AppCommon.escapeHtml(item.source)}</span>
-                    <span class="rag-result-score">相似度 ${((item.score || 0) * 100).toFixed(1)}%</span>
-                </div>
-                <div class="rag-result-snippet">${AppCommon.escapeHtml(item.snippet)}</div>
-            </div>
-        `).join('');
+        results.innerHTML = data.map((item) => resultCard(item)).join('');
+        await loadArtifactPreviews(results);
     } catch (e) {
         status.innerHTML = '';
         setError(results, AppCommon.formatError(e));
@@ -222,6 +280,7 @@ async function doQuery() {
     state.abortController = new AbortController();
     setLoading(status, '检索并生成中...');
 
+    releaseArtifactPreviews();
     resultEl.innerHTML = `
         <div class="rag-answer" id="queryAnswer"></div>
         <div class="rag-sources-inline" id="querySources" style="display:none;">
@@ -306,15 +365,8 @@ function createQueryEventHandler(answerEl, sourcesWrap, sourcesList, statusEl) {
                 const sources = Array.isArray(event.content) ? event.content : [];
                 if (sources.length) {
                     sourcesWrap.style.display = 'block';
-                    sourcesList.innerHTML = sources.map((s) => `
-                        <div class="rag-result-item" style="margin-bottom:6px;padding:10px;">
-                            <div class="rag-result-header">
-                                <span class="rag-result-source">#${AppCommon.escapeHtml(String(s.index))} ${AppCommon.escapeHtml(s.source)}</span>
-                                <span class="rag-result-score">相似度 ${((s.score || 0) * 100).toFixed(1)}%</span>
-                            </div>
-                            <div class="rag-result-snippet">${AppCommon.escapeHtml(s.snippet)}</div>
-                        </div>
-                    `).join('');
+                    sourcesList.innerHTML = sources.map((s) => resultCard(s, true)).join('');
+                    void loadArtifactPreviews(sourcesList);
                 }
                 break;
             }
@@ -365,6 +417,8 @@ function createQueryEventHandler(answerEl, sourcesWrap, sourcesList, statusEl) {
     }
     return { handler, typewriter };
 }
+
+window.addEventListener('beforeunload', releaseArtifactPreviews);
 
 // ============================================
 // 文档管理
@@ -468,6 +522,7 @@ function bindEvents() {
 
     // 文档管理
     $('btnLoadDocs').addEventListener('click', doLoadDocuments);
+    setupUploadUI();
     $('btnAddDocs').addEventListener('click', doAddDocuments);
     $('btnDeleteSource').addEventListener('click', doDeleteBySource);
 
@@ -476,9 +531,6 @@ function bindEvents() {
     $('checkAllDocs').addEventListener('change', toggleSelectAll);
     $('checkAllDocsHeader').addEventListener('change', toggleSelectAll);
     $('btnBatchDeleteDocs').addEventListener('click', doBatchDelete);
-
-    // 批量入库 chunks
-    $('btnAddChunks').addEventListener('click', doAddChunks);
 }
 
 // ============================================
@@ -518,7 +570,7 @@ async function loadDocsList() {
             <tr data-source="${AppCommon.escapeHtml(item.source)}">
                 <td class="col-check"><input type="checkbox" class="rag-doc-checkbox doc-checkbox" data-source="${AppCommon.escapeHtml(item.source)}"></td>
                 <td class="col-num">${i + 1}</td>
-                <td class="rag-doc-source">${AppCommon.escapeHtml(item.source)}</td>
+                <td class="rag-doc-source" title="${AppCommon.escapeHtml(item.source)}">${AppCommon.escapeHtml(sourceDisplayName(item.source))}</td>
                 <td class="col-count">${AppCommon.escapeHtml(String(item.chunk_count ?? '-'))}</td>
                 <td class="col-action">
                     <button class="rag-btn-small rag-btn-danger-small btn-delete-doc" data-source="${AppCommon.escapeHtml(item.source)}">删除</button>
@@ -612,32 +664,87 @@ async function doBatchDelete() {
     }
 }
 
-async function doAddChunks() {
-    const text = $('addChunksText').value.trim();
-    const prefix = $('addChunksSource').value.trim();
-    const result = $('addChunksResult');
-    if (!text) {
-        setError(result, '请输入要入库的 chunks');
+// 文献来源显示名：剥离目录路径与 manual:// 前缀，只保留文件名
+// （完整 source 仍保留在 data-source 中用于删除契约）
+function sourceDisplayName(source) {
+    if (!source) return '未知来源';
+    return String(source).replace(/^manual:\/\//, '').split(/[\\/]/).pop() || source;
+}
+
+// 上传区交互：点击/键盘/拖拽选择文件，实时展示待传文件列表
+function setupUploadUI() {
+    const dropzone = $('uploadDropzone');
+    const input = $('uploadFiles');
+    dropzone.addEventListener('click', () => input.click());
+    dropzone.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            input.click();
+        }
+    });
+    dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) {
+            input.files = e.dataTransfer.files;
+            renderUploadFileList();
+        }
+    });
+    input.addEventListener('change', renderUploadFileList);
+    $('btnUpload').addEventListener('click', doUploadFiles);
+}
+
+function formatFileSize(bytes) {
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+function renderUploadFileList() {
+    const input = $('uploadFiles');
+    const list = $('uploadFileList');
+    const files = Array.from(input.files || []);
+    list.innerHTML = files.map((f) => `
+        <div class="rag-upload-fileitem">
+            <span class="file-name">📄 ${AppCommon.escapeHtml(f.name)}</span>
+            <span class="file-size">${formatFileSize(f.size)}</span>
+        </div>
+    `).join('');
+    $('btnUpload').disabled = files.length === 0;
+}
+
+async function doUploadFiles() {
+    const input = $('uploadFiles');
+    const result = $('uploadResult');
+    if (!input.files || !input.files.length) {
+        setError(result, '请先选择要上传的文件');
         return;
     }
-    const chunks = text.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
-    if (!chunks.length) {
-        setError(result, '没有有效的 chunks');
-        return;
-    }
-    const btn = $('btnAddChunks');
+    const formData = new FormData();
+    Array.from(input.files).forEach((f) => formData.append('files', f));
+    const btn = $('btnUpload');
     btn.disabled = true;
-    setLoading(result, `正在入库 ${chunks.length} 条 chunks...`);
+    setLoading(result, `正在上传 ${input.files.length} 个文件...`);
     try {
-        const sources = prefix ? chunks.map((_, i) => `${prefix}_${i + 1}`) : undefined;
-        const res = await apiFetch('/rag/add-chunks', {
+        const res = await apiFetch('/rag/upload', {
             method: 'POST',
-            body: JSON.stringify({ chunks, sources }),
+            body: formData,
         });
-        setSuccess(result, res.message);
-        $('addChunksText').value = '';
-        $('addChunksSource').value = '';
-        if (state.currentTab === 'overview') loadStats();
+        const files = (res.data && res.data.files) || [];
+        const lines = files.map((f) => {
+            if (f.status === 'accepted') return `✅ ${f.filename}：已接收入库任务（#${f.task_id}）`;
+            if (f.status === 'deduplicated') return `⏭️ ${f.filename}：内容未变化，已跳过`;
+            return `❌ ${f.filename}：${f.reason || '已拒绝'}`;
+        });
+        result.innerHTML = lines
+            .map((l) => `<div style="font-size:13px;margin:4px 0;">${AppCommon.escapeHtml(l)}</div>`)
+            .join('');
+        input.value = '';
+        renderUploadFileList();
         if (state.currentTab === 'docs') loadDocsList();
     } catch (e) {
         setError(result, AppCommon.formatError(e));

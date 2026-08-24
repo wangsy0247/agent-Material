@@ -31,7 +31,7 @@ class _FakeRetriever:
         self._parents = parents
         self._missing = missing or []
 
-    def _fetch_parents(self, parent_ids: list[str]):
+    def _fetch_parents(self, parent_ids: list[str], parent_scopes=None):
         found = [self._parents[p] for p in parent_ids if p in self._parents]
         missing = [p for p in parent_ids if p not in self._parents]
         return found, missing

@@ -51,6 +51,32 @@ class TestWeightedRrf:
         assert ids[0] == "c1"        # 累加贡献后排第一
         assert fused[0].metadata["rrf_score"] > fused[1].metadata["rrf_score"]
 
+    def test_duplicate_artifact_within_one_visual_branch_contributes_once(self):
+        main = Document(
+            page_content="main",
+            metadata={
+                "artifact_id": "fig-1",
+                "retrieval_channel": "visual",
+                "visual_entity_id": "fig-1:main",
+            },
+        )
+        panel = Document(
+            page_content="panel",
+            metadata={
+                "artifact_id": "fig-1",
+                "retrieval_channel": "visual",
+                "visual_entity_id": "fig-1:panel:a",
+                "panel_id": "a",
+                "visual_asset_uri": "rag-asset://doc/v/a.png",
+            },
+        )
+
+        fused = weighted_rrf([([main, panel], 1.0)], rrf_k=60)
+
+        assert len(fused) == 1
+        assert fused[0].metadata["rrf_score"] == pytest.approx(1.0 / 61.0)
+        assert fused[0].metadata["matched_panel_id"] == "a"
+
     def test_input_order_determinism(self):
         # 相同分支以相同顺序输入，多次运行结果一致
         b1 = [_doc("a", "c1"), _doc("b", "c2")]

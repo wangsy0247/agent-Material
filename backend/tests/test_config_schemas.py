@@ -68,6 +68,11 @@ class TestPathTools:
 
 
 class TestConfigHandler:
+    def test_vector_store_connection_string_expands_environment(self, monkeypatch):
+        expected = "postgresql+psycopg://user:pass@db.example:5432/rag"
+        monkeypatch.setenv("PGVECTOR_URL", expected)
+        assert get_vector_store_config()["connection_string"] == expected
+
     def test_rag_config_loads_with_embedding_model(self):
         config = get_rag_config()
         assert isinstance(config, dict)
@@ -115,8 +120,8 @@ class TestConfigHandler:
         config = get_queue_config()
         assert isinstance(config, dict)
         assert "queue" in config
-        assert "db_path" in config["queue"]
         assert "poll_interval" in config["queue"]
+        assert "lease_seconds" in config["queue"]
 
     def test_sc_config_empty_file_returns_empty_dict(self):
         # config/sc_config.yaml 仅有注释无配置项，get_sc_config 兜底为空 dict

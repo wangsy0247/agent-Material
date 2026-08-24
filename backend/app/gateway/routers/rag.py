@@ -10,15 +10,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+import tempfile
 import threading
-import traceback
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..auth.dependencies import get_current_user
+from ..auth.dependencies import get_current_admin, get_current_user
 from ..auth.schemas import UserInfo
 from ..schemas import BaseResponse
 from ..sse import HEARTBEAT_INTERVAL, format_heartbeat, format_sse_event as _sse
@@ -30,19 +33,29 @@ logger = logging.getLogger("rag_router")
 
 router = APIRouter(prefix="/rag", tags=["RAG 知识库"])
 
+_MAX_UPLOAD_FILES = 10
+_MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+_UPLOAD_CHUNK_SIZE = 1024 * 1024
+_upload_commit_lock = asyncio.Lock()
+_ARTIFACT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_PREVIEW_MEDIA_TYPES = {
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
 
-def _single_retrieval_enabled() -> bool:
-    """single_retrieval_sse 开关：开启时 /rag/query 与 /rag/search 走单次检索新路径。"""
-    try:
-        from agent_material.utils import config_handler
 
-        return bool(
-            config_handler.vector_store_config.get("feature_flags", {}).get(
-                "single_retrieval_sse", False
-            )
-        )
-    except Exception:
-        return False
+def _internal_error(message: str, error: Exception) -> HTTPException:
+    """记录内部异常，但不向 API 客户端暴露路径、SQL 或堆栈。"""
+    error_id = uuid.uuid4().hex
+    logger.exception("%s error_id=%s", message, error_id, exc_info=error)
+    return HTTPException(
+        status_code=500,
+        detail=f"{message}，错误编号: {error_id}",
+    )
 
 
 def _feature_flag(name: str, default: bool = False) -> bool:
@@ -82,9 +95,10 @@ def _get_vector_store():
                 "或手动执行: export LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7"
             )
 
-        from agent_material.rag_engine.vector_store import VectorStore
+        from agent_material.rag_engine.vector_store import get_vector_store
 
-        _VectorStore = VectorStore()
+        # 进程内统一单例（WRK-001）：与 Agent Tool / RagService 共享同一实例
+        _VectorStore = get_vector_store()
     return _VectorStore
 
 
@@ -104,10 +118,22 @@ def _get_rag_service():
 
 class RAGSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000, description="检索查询")
+    enable_rewrite: bool = Field(default=False, description="是否启用查询改写")
+    rewrite_strategy: str = Field(
+        default="",
+        max_length=100,
+        description="查询改写策略；默认空值表示不改写，启用时应显式指定策略",
+    )
 
 
 class RAGQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000, description="用户问题")
+    enable_rewrite: bool = Field(default=False, description="是否启用查询改写")
+    rewrite_strategy: str = Field(
+        default="",
+        max_length=100,
+        description="查询改写策略；默认空值表示不改写，启用时应显式指定策略",
+    )
 
 
 class RAGAddDocumentsRequest(BaseModel):
@@ -170,7 +196,49 @@ async def rag_stats(current_user: UserInfo = Depends(get_current_user)):
         }
         return BaseResponse(code=200, message="success", data=stats)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取统计信息失败: {e}")
+        raise _internal_error("获取统计信息失败", e)
+
+
+@router.get("/artifacts/{artifact_id}/asset", summary="预览已激活的图表资源")
+async def rag_artifact_asset(
+    artifact_id: str,
+    current_user: UserInfo = Depends(get_current_user),
+):
+    """通过不可猜测的图表 ID 返回资源，不接受客户端提供的文件路径或 URI。"""
+    if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+        raise HTTPException(status_code=404, detail="图表资源不存在")
+    try:
+        artifact = _get_vector_store().get_active_artifact(artifact_id)
+        if (
+            not artifact
+            or artifact.get("artifact_type") != "figure"
+            or not artifact.get("asset_uri")
+        ):
+            raise HTTPException(status_code=404, detail="图表资源不存在")
+
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            ArtifactStore,
+        )
+
+        path = ArtifactStore().resolve(str(artifact["asset_uri"]))
+        media_type = _PREVIEW_MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None or not path.is_file():
+            raise HTTPException(status_code=404, detail="图表资源不存在")
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=404, detail="图表资源不存在") from None
+    except Exception as e:
+        raise _internal_error("读取图表资源失败", e)
 
 
 @router.post("/search", summary="检索相关文档", response_model=BaseResponse)
@@ -180,78 +248,32 @@ async def rag_search(
 ):
     """根据查询内容从向量数据库检索最相关的文档片段。
 
-    single_retrieval_sse 开关开启时走 service.prepare 的请求级检索管道
-    （不生成回答），返回 resolved_parents（父块级，与 /rag/query 的生成上下文
-    同源；无父块时回退 reranked_children 子块），并附带溯源字段与降级事件。
+    始终调用 ``RagService.search`` 统一入口，不生成回答。返回内容与
+    ``/rag/query`` 实际进入 Prompt 的冻结文档同源，并附带溯源字段与降级事件。
     """
     try:
         service = _get_rag_service()
-
-        # ── 新路径：请求级检索管道（单次检索，含全局 Rerank 与父块回溯）──
-        if _single_retrieval_enabled():
-            ctx = await asyncio.to_thread(service.prepare, request.query)
-            docs = ctx.resolved_parents or ctx.reranked_children
-            if not docs:
-                return BaseResponse(code=200, message="未检索到相关文档", data=[])
-
-            results = []
-            for i, doc in enumerate(docs, start=1):
-                m = doc.metadata or {}
-                source = m.get("source", "未知来源")
-                results.append(
-                    {
-                        "index": i,
-                        "rank": i,
-                        "chunk_id": m.get("chunk_id"),
-                        "parent_id": m.get("parent_id"),
-                        "document_id": m.get("document_id"),
-                        "version_id": m.get("version_id"),
-                        "source": source,
-                        "source_filename": m.get("source_filename")
-                        or (os.path.basename(source) if isinstance(source, str) else None),
-                        "page_start": m.get("page_start"),
-                        "page_end": m.get("page_end"),
-                        "page_unknown": bool(m.get("page_unknown", False)),
-                        "heading_path": m.get("heading_path"),
-                        "rerank_score": m.get("rerank_score"),
-                        "score": m.get(
-                            "rerank_score", m.get("rrf_score", m.get("score", 0.0))
-                        ),
-                        "snippet": doc.page_content[:300] + "..."
-                        if len(doc.page_content) > 300
-                        else doc.page_content,
-                        "metadata": m,
-                    }
-                )
-            resp = BaseResponse(
-                code=200, message="success", data=results, total=len(results)
-            )
-            if ctx.degradation_events:
-                resp.degradation_events = ctx.degradation_events
-            logger.info("rag_search_summary %s", ctx.summary())
-            return resp
-
-        # ── 旧路径（回滚兼容）──
-        docs = service.retriever_docx(request.query)
-        if not docs:
+        result = await asyncio.to_thread(
+            service.search,
+            request.query,
+            request.enable_rewrite,
+            request.rewrite_strategy,
+        )
+        if not result.results:
             return BaseResponse(code=200, message="未检索到相关文档", data=[])
-
-        results = []
-        for i, doc in enumerate(docs, start=1):
-            source = doc.metadata.get("source", "未知来源")
-            score = doc.metadata.get("score", 0.0)
-            results.append(
-                {
-                    "index": i,
-                    "source": source,
-                    "score": score,
-                    "snippet": doc.page_content,
-                    "metadata": doc.metadata,
-                }
-            )
-        return BaseResponse(code=200, message="success", data=results, total=len(results))
+        return BaseResponse(
+            code=200,
+            message="success",
+            data=list(result.results),
+            total=result.count,
+            degradation_events=(
+                list(result.degradation_events)
+                if result.degradation_events
+                else None
+            ),
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"检索失败: {e}")
+        raise _internal_error("检索失败", e)
 
 
 @router.post("/query", summary="RAG 问答（SSE 流式）")
@@ -295,34 +317,19 @@ async def rag_query(
         try:
             # RagService 首次初始化是重量级同步操作，放线程避免阻塞 event loop
             service = await asyncio.to_thread(_get_rag_service)
-            use_new = _single_retrieval_enabled()
-
             # 1. 阶段事件：开始检索
             yield next_sse("status", {"phase": "retrieving"})
-
-            if use_new:
-                # 新路径（ONL-002）：全程只调一次 service.prepare，
-                # sources 与 LLM 上下文来自同一份冻结上下文
-                ctx = await asyncio.to_thread(service.prepare, request.query)
-                # chat/irrelevant 无检索结果；rag 空结果发空 sources 数组
-                no_context = ctx.route_decision == "rag" and not ctx.final_context
-                sources = ctx.sources
-            else:
-                # 旧路径（回滚兼容）：先检索一次构造 sources
-                docs = await asyncio.to_thread(service.retriever_docx, request.query)
-                no_context = not docs
-                sources = []
-                for i, doc in enumerate(docs, start=1):
-                    source = doc.metadata.get("source", "未知来源")
-                    score = doc.metadata.get("score", 0.0)
-                    sources.append(
-                        {
-                            "index": i,
-                            "source": source,
-                            "score": score,
-                            "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
-                        }
-                    )
+            # 所有 REST/Agent 问答入口都只调用一次 prepare；配置回滚逻辑封装在
+            # RagService.prepare 内部，路由层不再直接依赖旧 retriever 方法。
+            ctx = await asyncio.to_thread(
+                service.prepare,
+                request.query,
+                request.enable_rewrite,
+                request.rewrite_strategy,
+            )
+            # chat/irrelevant 无检索结果但仍需交给 stream_answer 生成直答/拒答。
+            no_context = ctx.route_decision == "rag" and not ctx.final_context
+            sources = ctx.sources
 
             # 2. 发送 start 事件
             yield next_sse("start", {"query": request.query})
@@ -351,11 +358,8 @@ async def rag_query(
             def _consume_stream():
                 stream = None
                 try:
-                    if use_new:
-                        # 不再检索，仅消费冻结上下文
-                        stream = service.stream_answer(ctx)
-                    else:
-                        stream = service.get_summary_stream(request.query)
+                    # 不再检索，仅消费冻结上下文。
+                    stream = service.stream_answer(ctx)
                     for chunk in stream:
                         if cancel_event.is_set():
                             logger.info("[RAG] 检测到取消标志，终止后台 LLM 流式生成")
@@ -407,9 +411,13 @@ async def rag_query(
                 pass
             raise
         except Exception as e:
-            traceback_str = traceback.format_exc()
+            error_id = uuid.uuid4().hex
+            logger.exception("RAG 流式问答失败 error_id=%s", error_id, exc_info=e)
             # error 为终态：发完 error 帧直接结束，不再依赖连接关闭收尾
-            yield next_sse("error", {"message": str(e), "detail": traceback_str})
+            yield next_sse(
+                "error",
+                {"message": "检索或生成失败", "error_id": error_id},
+            )
             return
 
     return StreamingResponse(
@@ -423,7 +431,7 @@ async def rag_query(
 
 
 @router.post("/load-documents", summary="扫描并加载文档", response_model=BaseResponse)
-async def rag_load_documents(current_user: UserInfo = Depends(get_current_user)):
+async def rag_load_documents(current_user: UserInfo = Depends(get_current_admin)):
     """扫描配置的 data/ 目录，为新增/修改/消失的文档创建索引任务（异步执行）。
 
     Spec V2 11：返回"任务已接收"语义 —— data 含 task_ids，
@@ -442,15 +450,15 @@ async def rag_load_documents(current_user: UserInfo = Depends(get_current_user))
             },
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"加载文档失败: {e}")
+        raise _internal_error("加载文档失败", e)
 
 
 @router.get("/tasks/{task_id}", summary="查询索引任务状态", response_model=BaseResponse)
 async def rag_task_status(
     task_id: int,
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_admin),
 ):
-    """查询后台索引任务状态（pg 模式查 PG 任务表，sqlite 模式查 SQLite 队列）。
+    """查询 PostgreSQL 控制面的后台索引任务状态。
 
     返回任务类型、状态、当前阶段、重试次数、失败原因等（可运维性要求）。
     """
@@ -463,31 +471,41 @@ async def rag_task_status(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询任务状态失败: {e}")
+        raise _internal_error("查询任务状态失败", e)
+
+
+@router.post("/tasks/{task_id}/retry", summary="重试失败的索引任务", response_model=BaseResponse)
+async def rag_retry_task(
+    task_id: int,
+    current_user: UserInfo = Depends(get_current_admin),
+):
+    """显式重置 failed 任务的重试预算并重新入队；非 failed 状态返回 409。"""
+    try:
+        task = _get_vector_store().retry_failed_task(task_id)
+        return BaseResponse(code=200, message="任务已重新入队", data=task)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _internal_error("重试任务失败", e)
 
 
 @router.get("/kb-state", summary="查询知识库 revision 状态", response_model=BaseResponse)
-async def rag_kb_state(current_user: UserInfo = Depends(get_current_user)):
-    """返回 rag_kb_state 的 active_revision / bm25_revision（Spec 15 可运维性）。
-
-    pg_control_plane 关闭（SQLite 回滚路径）时无 kb_state，data 返回 None。
-    """
+async def rag_kb_state(current_user: UserInfo = Depends(get_current_admin)):
+    """返回 rag_kb_state 的 active_revision / bm25_revision。"""
     try:
         store = _get_vector_store()
         state = store.get_kb_state()
-        if state is None:
-            return BaseResponse(
-                code=200,
-                message="pg_control_plane 未开启（SQLite 控制面无 rag_kb_state）",
-                data=None,
-            )
         return BaseResponse(code=200, message="success", data=state)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询知识库状态失败: {e}")
+        raise _internal_error("查询知识库状态失败", e)
 
 
 @router.get("/consistency-check", summary="在线数据一致性检测", response_model=BaseResponse)
-async def rag_consistency_check(current_user: UserInfo = Depends(get_current_user)):
+async def rag_consistency_check(current_user: UserInfo = Depends(get_current_admin)):
     """执行一致性检测 SQL（Spec 15 可运维性），结果均应为 0：
 
     - multiple_active_version_documents：同一 document_id 多个 active version 的文档数
@@ -498,20 +516,19 @@ async def rag_consistency_check(current_user: UserInfo = Depends(get_current_use
         result = await asyncio.to_thread(store.run_consistency_check)
         return BaseResponse(code=200, message="success", data=result)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"一致性检测失败: {e}")
+        raise _internal_error("一致性检测失败", e)
 
 
 @router.post("/add-documents", summary="手动添加文档", response_model=BaseResponse)
 async def rag_add_documents(
     request: RAGAddDocumentsRequest,
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_admin),
 ):
     """手动向向量库添加文本内容。
 
-    pg_control_plane 开启（Spec V2 11）：文本封装为 ingest_text 任务进入
-    统一版本化索引队列（切分 → staging → validate → activate），
-    返回 task_ids，最终结果通过 /rag/tasks/{task_id} 查询；
-    关闭时保持旧的同步直写行为（回滚路径）。
+    文本封装为 ingest_text 任务进入统一版本化索引队列
+    （切分 → staging → validate → activate），返回 task_ids，
+    最终结果通过 /rag/tasks/{task_id} 查询。
     """
     try:
         sources = request.sources or [f"manual_{i}" for i in range(len(request.documents))]
@@ -520,84 +537,191 @@ async def rag_add_documents(
 
         store = _get_vector_store()
 
-        if _feature_flag("pg_control_plane"):
-            task_ids = []
-            for text, src in zip(request.documents, sources):
-                task_id = store.enqueue_ingest_text(text, src)
-                if task_id is not None:
-                    task_ids.append(task_id)
-            return BaseResponse(
-                code=200,
-                message=f"已接收 {len(task_ids)} 个文本入库任务，后台异步执行，"
-                        "结果请通过 /rag/tasks/{task_id} 查询",
-                data={"task_ids": task_ids, "accepted": len(task_ids)},
-            )
-
-        # ── 旧路径（pg_control_plane 关闭时回滚）──
-        from langchain_core.documents import Document
-
-        docs = [
-            Document(page_content=text, metadata={"source": src})
-            for text, src in zip(request.documents, sources)
-        ]
-        store.add_documents(docs)
+        task_ids = []
+        for text, src in zip(request.documents, sources):
+            task_id = store.enqueue_ingest_text(text, src)
+            if task_id is not None:
+                task_ids.append(task_id)
         return BaseResponse(
             code=200,
-            message=f"成功添加 {len(docs)} 条文档到向量库",
-            data={"added": len(docs)},
+            message=f"已接收 {len(task_ids)} 个文本入库任务，后台异步执行，"
+                    "结果请通过 /rag/tasks/{task_id} 查询",
+            data={
+                "task_ids": task_ids,
+                "accepted": len(task_ids),
+                "deduplicated": len(request.documents) - len(task_ids),
+            },
         )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"添加文档失败: {e}")
+        raise _internal_error("添加文档失败", e)
 
 
-@router.post("/add-chunks", summary="批量添加已切分的 chunks（P0 已默认关闭）", response_model=BaseResponse)
+@router.post("/upload", summary="上传文件加入知识库", response_model=BaseResponse)
+async def rag_upload_files(
+    files: list[UploadFile] = File(...),
+    current_user: UserInfo = Depends(get_current_admin),
+):
+    """上传文件（PDF 等 allow_type 白名单类型）加入知识库。
+
+    文件保存到配置的 document_directory（data/）后封装 ingest_file 任务
+    进入统一版本化索引队列（解析 → 切分 → staging → validate → activate），
+    与目录扫描同一 canonical/dedup 契约：同名同内容幂等跳过，同名不同
+    内容产生新版本并原子替换旧版本。返回逐文件明细与 task_ids。
+    """
+    from agent_material.utils.config_handler import vector_store_config
+    from agent_material.utils.path_tools import get_abs_path
+
+    if len(files) > _MAX_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"单次最多上传 {_MAX_UPLOAD_FILES} 个文件",
+        )
+
+    allow_types = {
+        ext.lower() for ext in vector_store_config.get("allow_type", [".pdf"])
+    }
+    doc_dir = Path(
+        get_abs_path(vector_store_config.get("document_directory", "data"))
+    ).resolve()
+    doc_dir.mkdir(parents=True, exist_ok=True)
+
+    store = _get_vector_store()
+    results = []
+    for uf in files:
+        # 同时处理 POSIX 与 Windows 客户端传来的路径分隔符。
+        filename = (uf.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not filename or filename.startswith(".") or ".." in filename:
+            results.append(
+                {"filename": uf.filename, "status": "rejected",
+                 "reason": "文件名非法"}
+            )
+            continue
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in allow_types:
+            results.append(
+                {"filename": filename, "status": "rejected",
+                 "reason": f"不支持的文件类型 {ext}，允许: {sorted(allow_types)}"}
+            )
+            continue
+
+        temp_path: Path | None = None
+        backup_path: Path | None = None
+        try:
+            size = 0
+            header = bytearray()
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=".upload-",
+                suffix=".tmp",
+                dir=doc_dir,
+                delete=False,
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
+                while chunk := await uf.read(_UPLOAD_CHUNK_SIZE):
+                    size += len(chunk)
+                    if size > _MAX_UPLOAD_SIZE:
+                        break
+                    if len(header) < 1024:
+                        header.extend(chunk[: 1024 - len(header)])
+                    temp_file.write(chunk)
+
+            if size == 0:
+                results.append(
+                    {"filename": filename, "status": "rejected", "reason": "空文件"}
+                )
+                continue
+            if size > _MAX_UPLOAD_SIZE:
+                results.append(
+                    {
+                        "filename": filename,
+                        "status": "rejected",
+                        "reason": f"文件超过 {_MAX_UPLOAD_SIZE // (1024 * 1024)}MB 上限",
+                    }
+                )
+                continue
+            if ext == ".pdf" and b"%PDF-" not in bytes(header):
+                results.append(
+                    {
+                        "filename": filename,
+                        "status": "rejected",
+                        "reason": "文件内容不是有效的 PDF",
+                    }
+                )
+                continue
+
+            save_path = (doc_dir / filename).resolve()
+            if save_path.parent != doc_dir:
+                results.append(
+                    {"filename": filename, "status": "rejected", "reason": "文件名非法"}
+                )
+                continue
+
+            # 替换与入队视为一个临界区；入队失败时恢复原文件。
+            async with _upload_commit_lock:
+                if save_path.exists():
+                    backup_path = doc_dir / f".{filename}.{uuid.uuid4().hex}.bak"
+                    os.replace(save_path, backup_path)
+                try:
+                    os.replace(temp_path, save_path)
+                    temp_path = None
+                    task_id = await asyncio.to_thread(
+                        store.enqueue_ingest_file, str(save_path)
+                    )
+                except Exception:
+                    save_path.unlink(missing_ok=True)
+                    if backup_path is not None and backup_path.exists():
+                        os.replace(backup_path, save_path)
+                        backup_path = None
+                    raise
+                else:
+                    if backup_path is not None:
+                        backup_path.unlink(missing_ok=True)
+                        backup_path = None
+
+            results.append(
+                {
+                    "filename": filename,
+                    "status": "accepted" if task_id is not None else "deduplicated",
+                    "task_id": task_id,
+                }
+            )
+        except Exception:
+            logger.exception("文件上传入队失败: %s", filename)
+            results.append(
+                {
+                    "filename": filename,
+                    "status": "failed",
+                    "reason": "文件保存或索引任务创建失败",
+                }
+            )
+        finally:
+            await uf.close()
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            if backup_path is not None:
+                logger.error("上传回滚未完成，保留备份文件: %s", backup_path)
+
+    accepted = [r["task_id"] for r in results if r.get("task_id") is not None]
+    return BaseResponse(
+        code=200,
+        message=f"已接收 {len(accepted)} 个索引任务，后台异步执行，"
+                "结果请通过 /rag/tasks/{task_id} 查询",
+        data={"files": results, "task_ids": accepted, "accepted": len(accepted)},
+    )
+
+
+@router.post("/add-chunks", summary="已移除：禁止直接写入 chunks", response_model=BaseResponse)
 async def rag_add_chunks(
     request: RAGAddChunksRequest,
     current_user: UserInfo = Depends(get_current_user),
 ):
-    """将已切分好的文本片段直接转为向量并批量写入向量库，不做额外切分。
-
-    P0 阶段该接口无法满足父子/版本契约（Spec V2 11），默认关闭（HTTP 410）；
-    feature_flags.enable_add_chunks=true 时走旧直写逻辑（仅内部/回滚用）。
-    """
-    if not _feature_flag("enable_add_chunks"):
-        raise HTTPException(
-            status_code=410,
-            detail="该接口已在 P0 版本关闭（无法满足父子/版本契约），"
-                   "请使用 /rag/add-documents",
-        )
-    try:
-        from langchain_core.documents import Document
-
-        if request.metadatas and len(request.metadatas) != len(request.chunks):
-            raise HTTPException(status_code=400, detail="metadatas 长度必须与 chunks 一致")
-
-        sources = request.sources or [f"chunk_batch_{i}" for i in range(len(request.chunks))]
-        if len(sources) != len(request.chunks):
-            raise HTTPException(status_code=400, detail="sources 长度必须与 chunks 一致")
-
-        docs: list[Document] = []
-        for i, text in enumerate(request.chunks):
-            meta = dict(request.metadatas[i]) if request.metadatas and i < len(request.metadatas) else {}
-            meta["source"] = sources[i]
-            docs.append(Document(page_content=text, metadata=meta))
-
-        store = _get_vector_store()
-        # 直接走 PGVector，不再经过 VectorStore.add_documents 的二次切分
-        store.vector_store.add_documents(docs)
-        store.all_documents.extend(docs)
-        store._retrievers_initialized = False
-        return BaseResponse(
-            code=200,
-            message=f"成功入库 {len(docs)} 条 chunks",
-            data={"added": len(docs)},
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"入库失败: {e}")
+    """该入口无法满足父子/版本契约，永久返回 HTTP 410。"""
+    raise HTTPException(
+        status_code=410,
+        detail="直接写入 chunks 的接口已移除，请使用 /rag/add-documents",
+    )
 
 
 @router.get("/sources", summary="获取所有文献来源", response_model=BaseResponse)
@@ -613,49 +737,63 @@ async def rag_sources(current_user: UserInfo = Depends(get_current_user)):
             total=len(sources),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取文献列表失败: {e}")
+        raise _internal_error("获取文献列表失败", e)
 
 
 @router.post("/delete-by-source", summary="按来源删除文档", response_model=BaseResponse)
 async def rag_delete_by_source(
     request: RAGDeleteRequest,
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_admin),
 ):
-    """根据来源路径删除向量库中的文档片段。"""
+    """根据来源路径删除向量库中的文档片段。
+
+    创建 delete_document 任务并返回 task_id；实际删除由后台 Worker
+    异步执行，source 不存在时任务幂等完成。
+    """
     try:
         store = _get_vector_store()
-        store.delete_documents_by_source(request.source)
+        result = store.enqueue_delete_by_source(request.source)
         return BaseResponse(
             code=200,
-            message=f"已删除来源为 '{request.source}' 的文档",
-            data={"source": request.source},
+            message=f"已接收来源为 '{request.source}' 的删除任务，后台异步执行，"
+                    "结果请通过 /rag/tasks/{task_id} 查询",
+            data=result,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除文档失败: {e}")
+        raise _internal_error("删除文档失败", e)
 
 
 @router.post("/delete-sources", summary="批量删除文献", response_model=BaseResponse)
 async def rag_delete_sources(
     request: RAGBatchDeleteRequest,
-    current_user: UserInfo = Depends(get_current_user),
+    current_user: UserInfo = Depends(get_current_admin),
 ):
-    """批量删除向量库中的文献。"""
+    """批量删除向量库中的文献。
+
+    每个 source 独立创建 delete_document 任务，返回 accepted、
+    deduplicated 和 failed 明细，不同步执行物理删除。
+    """
     try:
         store = _get_vector_store()
-        failed = []
-        for source in request.sources:
-            try:
-                store.delete_documents_by_source(source)
-            except Exception as e:
-                failed.append({"source": source, "error": str(e)})
-        success_count = len(request.sources) - len(failed)
-        msg = f"成功删除 {success_count} 篇文献"
+        results = store.enqueue_batch_delete(request.sources)
+        accepted = sum(1 for r in results if r["status"] == "accepted")
+        deduplicated = sum(1 for r in results if r["status"] == "deduplicated")
+        failed = [r for r in results if r["status"] == "failed"]
+        msg = f"已接收 {accepted} 个删除任务"
+        if deduplicated:
+            msg += f"，{deduplicated} 个与进行中任务重复（去重）"
         if failed:
-            msg += f"，{len(failed)} 篇失败"
+            msg += f"，{len(failed)} 个创建失败"
+        msg += "，后台异步执行，结果请通过 /rag/tasks/{task_id} 查询"
         return BaseResponse(
             code=200,
             message=msg,
-            data={"success": success_count, "failed": failed},
+            data={
+                "results": results,
+                "accepted": accepted,
+                "deduplicated": deduplicated,
+                "failed": failed,
+            },
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"批量删除失败: {e}")
+        raise _internal_error("批量删除失败", e)

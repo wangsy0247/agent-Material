@@ -1,0 +1,14 @@
+{
+  "schema_version": "visual-rag-predictions-v1",
+  "predictions": [
+    {
+      "question_id": "synthetic-1",
+      "retrieved_artifact_ids": ["synthetic-figure-a"],
+      "retrieved_visual_statuses": ["completed"],
+      "answer": "该合成曲线整体上升。",
+      "answer_mode": "multimodal",
+      "latency_ms": 12.5,
+      "degradation_events": []
+    }
+  ]
+}

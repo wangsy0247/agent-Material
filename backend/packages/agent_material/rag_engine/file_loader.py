@@ -121,33 +121,89 @@ def pptx_loader(path: str) -> list:
         return []
 
 
-def mineru_pdf_loader(path: str) -> list[Document]:
+def mineru_pdf_loader(
+    path: str, *, version_context: dict | None = None
+) -> list[Document]:
     """使用 MinerU 加载 PDF → 清洗 Markdown → 返回结构化 Document。
 
     流程: MinerU API → Markdown → MarkdownCleaner → list[Document]
-    失败时回退到 pdf_text_loader（纯文本提取）。
+    原生文本 PDF 失败时可回退到纯文本提取；扫描版、混合型或无法判断的 PDF
+    必须依赖 OCR，禁止回退为可能缺页的纯文本结果。
     """
+    def _native_text_fallback(reason: str) -> list[Document]:
+        from agent_material.rag_engine.mineru_loader import (
+            PARSED_MIN_CHARS,
+            inspect_pdf,
+        )
+
+        try:
+            profile = inspect_pdf(path)
+        except (OSError, ValueError) as exc:
+            logger.error(f"[MinerU] PDF 预检失败，拒绝降级: {path} | {exc}")
+            return []
+        if profile.ocr_required:
+            logger.error(
+                f"[MinerU] {profile.pdf_mode} PDF 需要 OCR，{reason}后拒绝纯文本回退: {path}"
+            )
+            return []
+
+        fallback_docs = pdf_text_loader(path)
+        visible_chars = sum(
+            len("".join((doc.page_content or "").split())) for doc in fallback_docs
+        )
+        if visible_chars < PARSED_MIN_CHARS:
+            logger.error(f"[MinerU] 纯文本回退内容过少，拒绝入库: {path}")
+            return []
+
+        profile_meta = profile.to_metadata()
+        for doc in fallback_docs:
+            doc.metadata.update(
+                {
+                    "file_type": "pdf",
+                    "loader": "pdf_text_fallback",
+                    "content_format": "text",
+                    "ocr_route_selected": False,
+                    "parse_quality_status": "fallback_text",
+                    "parse_quality_reason": reason,
+                    "parse_visible_chars": visible_chars,
+                    "parse_success_ratio": 1.0,
+                    "parts": 1,
+                    "parts_ok": 1,
+                    "parts_failed": 0,
+                    **profile_meta,
+                }
+            )
+        logger.warning(f"[MinerU] 原生文本 PDF 已降级到纯文本加载: {path} | {reason}")
+        return fallback_docs
+
     try:
         from agent_material.rag_engine.mineru_loader import mineru_pdf_loader as _mineru_load
         from agent_material.rag_engine.cleaner.markdown_cleaner import MarkdownCleaner
 
-        docs = _mineru_load(path)
+        docs = (
+            _mineru_load(path, version_context=version_context)
+            if version_context is not None
+            else _mineru_load(path)
+        )
         if not docs:
-            logger.warning(f"[MinerU] 解析失败，回退到纯文本提取: {path}")
-            return pdf_text_loader(path)
+            return _native_text_fallback("MinerU 解析失败或质量门禁未通过")
+
+        from agent_material.rag_engine.indexing.structured_artifacts import (
+            is_artifact_document,
+        )
 
         cleaner = MarkdownCleaner()
-        cleaned = cleaner.clean(docs)
+        artifacts = [doc for doc in docs if is_artifact_document(doc)]
+        cleaned = cleaner.clean([doc for doc in docs if not is_artifact_document(doc)])
+        cleaned.extend(artifacts)
         if cleaned:
             logger.info(f"[MinerU] 加载+清洗成功: {path} | {len(cleaned)} 篇文档")
             return cleaned
 
-        logger.warning(f"[MinerU] 清洗后为空，回退到纯文本提取: {path}")
-        return pdf_text_loader(path)
+        return _native_text_fallback("MinerU 清洗后为空")
 
     except ImportError as e:
-        logger.warning(f"[MinerU] 依赖未安装，回退到纯文本提取: {e}")
-        return pdf_text_loader(path)
+        return _native_text_fallback(f"MinerU 依赖不可用: {e}")
     except Exception as e:
-        logger.error(f"[MinerU] 加载失败，回退到纯文本提取: {e}")
-        return pdf_text_loader(path)
+        logger.error(f"[MinerU] 加载异常: {e}")
+        return _native_text_fallback(f"MinerU 加载异常: {e}")

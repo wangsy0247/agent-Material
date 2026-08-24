@@ -15,9 +15,6 @@ NC='\033[0m' # No Color
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# 修复 Anaconda libffi 与系统 libffi 版本冲突（影响 psycopg）
-export LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7
-
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  材料科学 LLM Agent API 服务启动脚本${NC}"
 echo -e "${GREEN}============================================${NC}"
@@ -34,8 +31,8 @@ echo -e "${GREEN}✓ Python 版本: $PYTHON_VERSION${NC}"
 # 检查依赖
 echo -e "\n${YELLOW}[2/4] 检查依赖...${NC}"
 if ! python -c "import fastapi" 2>/dev/null; then
-    echo -e "${YELLOW}! 未找到 fastapi，正在安装依赖...${NC}"
-    pip install fastapi uvicorn sse-starlette python-multipart -q
+    echo -e "${RED}错误: 依赖未安装，请先执行 make setup${NC}"
+    exit 1
 fi
 echo -e "${GREEN}✓ 依赖检查完成${NC}"
 
@@ -43,7 +40,10 @@ echo -e "${GREEN}✓ 依赖检查完成${NC}"
 echo -e "\n${YELLOW}[3/4] 检查环境变量...${NC}"
 if [ -f ".env" ]; then
     echo -e "${GREEN}✓ 发现 .env 文件${NC}"
-    export $(grep -v '^#' .env | xargs)
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
 else
     echo -e "${YELLOW}! 未找到 .env 文件，请确保已配置环境变量${NC}"
     echo -e "  需要的环境变量: MP_API_KEY, LANGCHAIN_API_KEY 等"
@@ -54,8 +54,8 @@ echo -e "\n${YELLOW}[4/4] 启动服务...${NC}"
 echo -e "${GREEN}============================================${NC}"
 
 # 读取端口（环境变量 ）
-PORT=${AGENT_API_PORT}
-HOST=${AGENT_API_HOST}
+PORT=${AGENT_API_PORT:-8000}
+HOST=${AGENT_API_HOST:-127.0.0.1}
 
 echo -e "  ${GREEN}绑定地址: ${HOST}:${PORT}${NC}"
 
@@ -64,7 +64,8 @@ MODE=${1:-dev}
 
 if [ "$MODE" == "prod" ]; then
     echo -e "${GREEN}启动模式: 生产环境${NC}"
-    uvicorn backend.app.gateway.app:app --host ${HOST} --port ${PORT} --workers 4
+    # SSE 续传缓冲区目前为进程内状态，公开版固定单 worker。
+    uvicorn backend.app.gateway.app:app --host "${HOST}" --port "${PORT}" --workers 1
 elif [ "$MODE" == "docker" ]; then
     echo -e "${GREEN}启动模式: Docker${NC}"
     echo -e "${YELLOW}构建 Docker 镜像...${NC}"
@@ -87,5 +88,5 @@ else
     echo -e "  API 地址: http://localhost:${PORT}"
     echo -e "  文档地址: http://localhost:${PORT}/docs"
     echo -e "  ${YELLOW}按 Ctrl+C 停止服务${NC}\n"
-    uvicorn backend.app.gateway.app:app --host ${HOST} --port ${PORT} --reload
+    uvicorn backend.app.gateway.app:app --host "${HOST}" --port "${PORT}" --reload
 fi

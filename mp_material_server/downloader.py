@@ -3,7 +3,9 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime
+from pathlib import Path
 
 # numpy 必须在 pymatgen 之前导入，避免循环导入
 import numpy  # noqa: F401
@@ -16,6 +18,14 @@ logger = logging.getLogger(__name__)
 MP_API_KEY: str = os.environ.get("MP_API_KEY", "")
 DOWNLOAD_DIR: str = os.environ.get("MP_DOWNLOAD_DIR", "./downloads")
 # HISTORY_FILE: str = os.environ.get("MP_HISTORY_FILE", "./downloads/history.txt")
+
+_UNSAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9._+-]+")
+
+
+def _safe_path_component(value: object, *, fallback: str) -> str:
+    """把外部 API 或用户输入转换为不可越界的目录名。"""
+    component = _UNSAFE_PATH_CHARS.sub("-", str(value)).strip(".-")[:80]
+    return component or fallback
 
 
 class MaterialsProjectDownloader:
@@ -167,19 +177,28 @@ class MaterialsProjectDownloader:
 
     def _save_files(self, formula: str, properties: dict) -> str:
         structure = properties.pop("Structure")
-        save_dir = os.path.join(self.workspace_dir, f"dataset{self.time_str}", formula)
-        os.makedirs(save_dir, exist_ok=True)
+        workspace = Path(self.workspace_dir).resolve()
+        safe_formula = _safe_path_component(formula, fallback="material")
+        safe_mp_id = _safe_path_component(properties.get("MP_ID"), fallback="unknown")
+        save_dir = (
+            workspace / f"dataset{self.time_str}" / f"{safe_formula}_{safe_mp_id}"
+        ).resolve()
+        try:
+            save_dir.relative_to(workspace)
+        except ValueError as exc:
+            raise ValueError("下载目录越界") from exc
+        save_dir.mkdir(parents=True, exist_ok=True)
 
-        poscar_path = os.path.join(save_dir, "POSCAR")
+        poscar_path = save_dir / "POSCAR"
         sga = SpacegroupAnalyzer(structure)
         conv_struct = sga.get_conventional_standard_structure()
-        conv_struct.to(fmt="poscar", filename=poscar_path)
+        conv_struct.to(fmt="poscar", filename=str(poscar_path))
 
-        json_path = os.path.join(save_dir, "properties.json")
+        json_path = save_dir / "properties.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(properties, f, ensure_ascii=False, indent=4)
 
-        return os.path.abspath(save_dir)
+        return str(save_dir)
 
     def download(self, formula: str) -> str:
         if not self.api_key:

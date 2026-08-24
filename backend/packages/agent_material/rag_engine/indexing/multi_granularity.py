@@ -12,6 +12,11 @@ from langchain_core.documents import Document
 
 from agent_material.utils.config_handler import vector_store_config
 from agent_material.rag_engine.models import embedding_model
+from agent_material.rag_engine.indexing.visual_vector_index import (
+    VisualVectorIndex,
+    visual_collection_name,
+    visual_embedding_enabled,
+)
 from agent_material.utils.logger import logger
 
 
@@ -38,12 +43,15 @@ class MultiGranularityIndex:
 
         self._small_name = self._base_name + self._small_suffix
         self._large_name = self._base_name + self._large_suffix
+        self._visual_enabled = visual_embedding_enabled()
+        self._visual_name = visual_collection_name()
 
         self._conn_str = vector_store_config.get("connection_string", "")
 
         # 延迟初始化
         self._small_store: PGVector | None = None
         self._large_store: PGVector | None = None
+        self._visual_index: VisualVectorIndex | None = None
 
         if self._enabled:
             logger.info(
@@ -66,6 +74,22 @@ class MultiGranularityIndex:
     @property
     def base_name(self) -> str:
         return self._base_name
+
+    @property
+    def visual_enabled(self) -> bool:
+        return self._visual_enabled
+
+    @property
+    def visual_name(self) -> str | None:
+        return self._visual_name if self._visual_enabled else None
+
+    @property
+    def visual_index(self) -> VisualVectorIndex:
+        if not self._visual_enabled:
+            raise RuntimeError("图片向量索引未启用")
+        if self._visual_index is None:
+            self._visual_index = VisualVectorIndex()
+        return self._visual_index
 
     # ── 向量库懒初始化 ────────────────────────────────────
 
@@ -259,6 +283,9 @@ class MultiGranularityIndex:
         parent_docs: list[Document] = []
         for pid, (ptext, pmeta) in parent_map.items():
             meta = pmeta
+            # 大字段保存在 rag_artifacts 控制表，避免在父/子向量 metadata 中复制。
+            meta.pop("structured_content", None)
+            meta.pop("mineru_image_path", None)
             meta["chunk_type"] = "parent"
             meta["source"] = source or meta.get("source", "unknown")
             meta["parent_id"] = pid
@@ -269,6 +296,8 @@ class MultiGranularityIndex:
             meta = doc.metadata.copy()
             meta.pop("parent_doc", None)
             meta.pop("parent_metadata", None)
+            meta.pop("structured_content", None)
+            meta.pop("mineru_image_path", None)
             meta["chunk_type"] = "child"
             meta["source"] = source or meta.get("source", "unknown")
             slim_children.append(Document(page_content=doc.page_content, metadata=meta))
@@ -316,6 +345,14 @@ class MultiGranularityIndex:
                 f"[MultiIndex] 版本化写入 {len(slim_children)} 子chunks → {self._small_name}"
             )
 
+        visual_count = 0
+        if self._visual_enabled:
+            visual_count = self.visual_index.insert_versioned(child_chunks)
+            logger.info(
+                f"[MultiIndex] 版本化写入 {visual_count} 个图片/Panel 向量 "
+                f"→ {self._visual_name}"
+            )
+
         logger.info(
             f"[MultiIndex] 版本化入库完成 | 父={len(parent_docs)} 子={len(slim_children)} | "
             f"共 {len(all_texts)} 条文本 1 次 embedding 调用"
@@ -346,6 +383,8 @@ class MultiGranularityIndex:
             if self._enabled
             else [self._base_name]
         )
+        if self._visual_enabled:
+            collections.append(self._visual_name)
 
         try:
             conn = psycopg.connect(psycopg_conn_str)
@@ -391,6 +430,8 @@ class MultiGranularityIndex:
             if self._enabled
             else [self._base_name]
         )
+        if self._visual_enabled:
+            collections.append(self._visual_name)
 
         try:
             conn = psycopg.connect(self._psycopg_conn_str())
@@ -446,6 +487,8 @@ class MultiGranularityIndex:
             "duplicate_parent": 0,
             "empty_text": 0,
             "duplicate_chunk_id": 0,
+            "visual_count": 0,
+            "invalid_visual": 0,
         }
 
         conn = psycopg.connect(self._psycopg_conn_str())
@@ -541,6 +584,27 @@ class MultiGranularityIndex:
             row = cur.fetchone()
             stats["missing_parent"] = row[1]
             stats["duplicate_parent"] = row[2]
+
+            if self._visual_enabled:
+                cur.execute(
+                    """
+                    SELECT COUNT(*),
+                           COUNT(*) FILTER (
+                               WHERE e.cmetadata->>'visual_entity_id' IS NULL
+                                  OR e.cmetadata->>'artifact_id' IS NULL
+                                  OR e.cmetadata->>'visual_asset_uri' IS NULL
+                           )
+                    FROM langchain_pg_embedding e
+                    JOIN langchain_pg_collection c ON e.collection_id = c.uuid
+                    WHERE c.name = %s
+                      AND e.cmetadata->>'document_id' = %s
+                      AND e.cmetadata->>'version_id' = %s
+                    """,
+                    (self._visual_name, document_id, version_id),
+                )
+                visual_row = cur.fetchone()
+                stats["visual_count"] = visual_row[0]
+                stats["invalid_visual"] = visual_row[1]
         finally:
             cur.close()
             conn.close()
@@ -553,6 +617,7 @@ class MultiGranularityIndex:
             and stats["duplicate_parent"] == 0
             and stats["empty_text"] == 0
             and stats["duplicate_chunk_id"] == 0
+            and stats["invalid_visual"] == 0
         )
         return ok, stats
 
@@ -635,16 +700,21 @@ class MultiGranularityIndex:
         )
 
         result: dict[str, int] = {}
+        active_only = vector_store_config.get("feature_flags", {}).get(
+            "active_version_filter", True
+        )
+        active_clause = " AND e.cmetadata->>'is_active' = 'true'" if active_only else ""
         try:
             conn = psycopg.connect(psycopg_conn_str)
             cur = conn.cursor()
             for col_name in collections:
                 cur.execute(
-                    """
+                    f"""
                     SELECT COUNT(*)
                     FROM langchain_pg_embedding e
                     JOIN langchain_pg_collection c ON e.collection_id = c.uuid
                     WHERE c.name = %s
+                    {active_clause}
                     """,
                     (col_name,),
                 )
@@ -674,16 +744,21 @@ class MultiGranularityIndex:
         )
 
         source_map: dict[str, int] = {}
+        active_only = vector_store_config.get("feature_flags", {}).get(
+            "active_version_filter", True
+        )
+        active_clause = " AND e.cmetadata->>'is_active' = 'true'" if active_only else ""
         try:
             conn = psycopg.connect(psycopg_conn_str)
             cur = conn.cursor()
             for col_name in collections:
                 cur.execute(
-                    """
+                    f"""
                     SELECT e.cmetadata->>'source' AS source, COUNT(*) AS chunk_count
                     FROM langchain_pg_embedding e
                     JOIN langchain_pg_collection c ON e.collection_id = c.uuid
                     WHERE c.name = %s AND e.cmetadata->>'source' IS NOT NULL
+                    {active_clause}
                     GROUP BY e.cmetadata->>'source'
                     """,
                     (col_name,),

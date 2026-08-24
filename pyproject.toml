@@ -6,7 +6,19 @@ build-backend = "setuptools.build_meta"
 name = "agent-material-project"
 version = "0.1.0"
 description = "材料科学领域 LLM Agent 项目（参照 DeerFlow 层级架构）"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [{name = "Agent Material contributors"}]
 requires-python = ">=3.10"
+keywords = ["agent", "rag", "langgraph", "materials-science", "pgvector"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     # 核心框架（editable install: backend/packages/agent_material）
     # 网关层
@@ -15,13 +27,30 @@ dependencies = [
     "sse-starlette>=2.0.0",
     "python-multipart>=0.0.9",
     # 认证模块
-    "python-jose[cryptography]>=3.3.0",
+    "PyJWT[crypto]>=2.9.0",
     "bcrypt>=4.0.0",
     "email-validator>=2.0.0",
-    # 测试
+]
+
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "ruff>=0.9.0",
+    "pip-audit>=2.7.0",
 ]
+
+[project.optional-dependencies]
+materials-project = [
+    "mp-api>=0.40.0",
+    "pymatgen>=2024.0.0",
+    "numpy>=1.26.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/wangsy0247/agent-Material"
+Repository = "https://github.com/wangsy0247/agent-Material"
+Issues = "https://github.com/wangsy0247/agent-Material/issues"
 
 [tool.setuptools]
 # 根项目仅用于聚合依赖与 pytest 配置，不包含可分发的 Python 包
@@ -37,3 +66,13 @@ addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.uv.workspace]
+members = ["backend/packages/agent_material"]

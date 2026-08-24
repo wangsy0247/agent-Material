@@ -20,7 +20,7 @@ from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+import jwt
 
 from .schemas import TokenPayload, UserInfo
 from agent_material.utils.config_handler import get_abs_path
@@ -59,11 +59,27 @@ def _get_config_value(key: str, default: Any = None) -> Any:
     return cfg.get(key, default)
 
 
-SECRET_KEY: str = _get_config_value("secret_key", "change-me-in-production")
+_INSECURE_SECRET_KEYS = {
+    "",
+    "change-me-in-production",
+    "your-super-secret-jwt-key-change-this-in-production",
+}
+
+SECRET_KEY: str | None = _get_config_value("secret_key")
 ALGORITHM: str = _get_config_value("algorithm", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES: int = _get_config_value("access_token_expire_minutes", 60)
 REFRESH_TOKEN_EXPIRE_DAYS: int = _get_config_value("refresh_token_expire_days", 7)
 ALLOW_ANONYMOUS: bool = _get_config_value("allow_anonymous", False)
+
+
+def validate_auth_configuration() -> str:
+    """校验 JWT 密钥并返回可用值。"""
+    secret = (SECRET_KEY or "").strip()
+    if secret in _INSECURE_SECRET_KEYS or len(secret) < 32:
+        raise RuntimeError(
+            "AUTH_SECRET_KEY 未配置或强度不足；请设置至少 32 个字符的随机密钥"
+        )
+    return secret
 
 # ---- 密码工具 ----
 import bcrypt
@@ -93,7 +109,7 @@ def create_access_token(user_id: str, username: str) -> str:
         "type": "access",
         "exp": expire,
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(payload, validate_auth_configuration(), algorithm=ALGORITHM)
 
 
 def create_refresh_token(user_id: str, username: str) -> str:
@@ -105,13 +121,15 @@ def create_refresh_token(user_id: str, username: str) -> str:
         "type": "refresh",
         "exp": expire,
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(payload, validate_auth_configuration(), algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> TokenPayload | None:
     """解码并验证 JWT Token"""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token, validate_auth_configuration(), algorithms=[ALGORITHM]
+        )
         user_id: str = payload.get("sub")
         username: str = payload.get("username")
         token_type: str = payload.get("type")
@@ -123,7 +141,7 @@ def decode_token(token: str) -> TokenPayload | None:
             type=token_type,  # type: ignore[arg-type]
             exp=payload.get("exp"),
         )
-    except JWTError:
+    except jwt.InvalidTokenError:
         return None
 
 
@@ -250,24 +268,6 @@ class UserStore:
             is_admin=bool(user["is_admin"]),
         )
 
-    def ensure_default_admin(self) -> None:
-        """如果配置了默认管理员且不存在，则自动创建"""
-        cfg = _load_auth_config()
-        admin_cfg = cfg.get("default_admin", {})
-        if not admin_cfg or not admin_cfg.get("username"):
-            return
-        username = admin_cfg["username"]
-        password = admin_cfg["password"]
-        email = admin_cfg.get("email")
-
-        existing = self.get_user_by_username(username)
-        if existing:
-            return
-
-        self.create_user(username, password, email, is_admin=True)
-        logger.info(f"[UserStore] 自动创建默认管理员: {username}")
-
-
 # 全局用户存储实例（懒加载）
 _user_store: UserStore | None = None
 _user_store_lock: threading.Lock = threading.Lock()
@@ -280,7 +280,6 @@ def get_user_store() -> UserStore:
         with _user_store_lock:
             if _user_store is None:
                 _user_store = UserStore()
-                _user_store.ensure_default_admin()
     return _user_store
 
 
@@ -333,6 +332,18 @@ async def get_current_user(
         )
 
     return user
+
+
+async def get_current_admin(
+    current_user: UserInfo = Depends(get_current_user),
+) -> UserInfo:
+    """要求当前用户具备管理员权限。"""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="该操作需要管理员权限",
+        )
+    return current_user
 
 
 async def get_current_user_optional(

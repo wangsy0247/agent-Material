@@ -12,7 +12,7 @@ Materials Science LLM Agent (材料科学领域 LLM Agent) — a FastAPI + LangG
 # Initialization (install deps, create .env, validate configs, create runtime dirs)
 make setup
 
-# Start API server (hot reload by default; set AGENT_API_RELOAD=false to disable)
+# Start API server (reload is disabled by default)
 make run
 
 # Manual start
@@ -28,8 +28,7 @@ python -m pytest backend/tests
 # Run a single test file
 python -m pytest backend/tests/test_sse_protocol.py
 
-# WSL/Anaconda note: if psycopg/libffi conflicts, the scripts already export:
-#   LD_PRELOAD=/lib/x86_64-linux-gnu/libffi.so.7
+# WSL/Anaconda-specific libffi troubleshooting is documented in docs/deployment.md.
 ```
 
 ## Architecture
@@ -106,7 +105,7 @@ Session lifecycle: `MemoryManager.create_session()` → `load_session()` → mes
 
 ### RAG Pipeline
 
-`rag_engine/` contains the full pipeline: document loading (`file_loader.py` for txt/md/html/docx/pptx; `mineru_loader.py` for PDF via MinerU API → Markdown), text splitting (`text_spliter.py` with recursive/semantic/parent/markdown-header strategies), multi-granularity vector indexing (small + large chunk collections in PGVector), hybrid retrieval (`vector_store.py` with PGVector vector search + BM25 keyword search fused via RRF), DashScope reranking (`dashscope_reranker.py`, with local CrossEncoder fallback), query rewriting (`query_rewriter.py` — expand/hyde/step_back/decompose, pipelined with `+`), and query routing (`query_router.py` — chat detection, irrelevant-question interception, classification). `RagService` (`rag_service.py`) is the main entry point. A SQLite task queue (`db/task_queue.py`, stored as `rag_queue.db`) handles async document indexing with retries; MD5-based file tracking prevents re-indexing unchanged files.
+`rag_engine/` contains the full pipeline: document loading (`file_loader.py` for txt/md/html/docx/pptx; `mineru_loader.py` for PDF via MinerU API → Markdown), text splitting (`text_spliter.py` with recursive/semantic/parent/markdown-header strategies), multi-granularity vector indexing (small + large chunk collections in PGVector), hybrid retrieval (`vector_store.py` with PGVector vector search + BM25 keyword search fused via RRF), DashScope reranking (`dashscope_reranker.py`, with local CrossEncoder fallback), query rewriting (`query_rewriter.py` — expand/hyde/step_back/decompose, pipelined with `+`), and query routing (`query_router.py` — chat detection, irrelevant-question interception, classification). `RagService` (`rag_service.py`) is the main query entry point; `RagIndexingService` and the PostgreSQL repositories are the only RAG write/control plane. PostgreSQL stores indexing tasks, document versions, file state, and knowledge-base revisions.
 
 ### MCP Tool System
 
@@ -121,11 +120,11 @@ MCP servers are configured in `extensions_config.json`. `mcp/client.py` uses `la
 
 ### Infrastructure & Database Ports
 
-- **pgvector**: Docker Compose service on host port **5433** (container 5432, to avoid conflicts with other projects on 5432). DB credentials: `postgres/postgres`, database `langgraph` for checkpointer, `postgres` for vector store.
+- **pgvector**: Docker Compose service on loopback host port **5433** (container 5432). Development credentials are declared in `.env.example`; non-local deployments must override them.
 - **API server**: default port 8000 (`AGENT_API_PORT`)
-- **Auth DB**: SQLite at `logs/auth_users.db` (default admin: `admin/admin123`, flagged by `make setup`)
+- **Auth DB**: SQLite at `logs/auth_users.db`; no default administrator is created. Use `scripts/create_admin.py`.
 - **Memory DB**: SQLite at `logs/memory_sessions.db` (WAL mode, stores session metadata + messages)
-- **RAG task queue**: SQLite at `rag_queue.db`
+- **RAG control plane**: PostgreSQL tables for tasks, document versions, file states, and revisions
 
 ### Multi-Tenancy & Heavy-Import Avoidance
 
@@ -151,7 +150,7 @@ Three-layer system in `observability/`:
 2. OpenTelemetry tracing (auto-instruments FastAPI, manual spans for graph nodes and MCP calls)
 3. Prometheus metrics at `/metrics` (request counters, latency histograms, agent iteration counts)
 
-LangSmith and Langfuse integrations are available via environment variables (see `.env.example`).
+Langfuse integration is available via environment variables (see `.env.example`); OpenTelemetry export remains opt-in.
 
 ## Additional Context
 

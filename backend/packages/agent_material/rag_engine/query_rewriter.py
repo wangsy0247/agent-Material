@@ -6,16 +6,20 @@
 - step_back:   退一步提问，抽象查询 + 原始查询 → 双路检索 → 融合
 - decompose:   查询分解，多跳问题拆解为子问题 → 逐路检索 → 综合
 
-所有策略通过 RagService._retrieve_with_strategy() 集成到现有检索管线。
+所有线上策略通过 RagService.prepare()/search() 集成到统一检索管线。
 """
 
 from __future__ import annotations
 
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
 
-from agent_material.rag_engine.models import chat_model
-from agent_material.utils.config_handler import vector_store_config, prompt_config
+from agent_material.utils.config_handler import (
+    agent_config,
+    prompt_config,
+    vector_store_config,
+)
 from agent_material.utils.prompt_loader import get_prompts
 from agent_material.utils.path_tools import get_abs_path
 from agent_material.utils.logger import get_logger
@@ -28,12 +32,27 @@ class QueryRewriter:
     执行多路检索并融合结果。
     """
 
-    def __init__(self):
-        self._model = chat_model
+    def __init__(self, model=None):
         self._config = vector_store_config.get("query_rewriting", {})
+        self._model = model or self._create_model()
         self._logger = get_logger("query_rewriter")
         # 延迟加载所有 prompt
         self._prompts: dict[str, PromptTemplate] = {}
+
+    def _create_model(self):
+        """创建查询改写专用模型，默认关闭思考与流式输出。"""
+        model_cfg = self._config.get("model", {})
+        model_name = model_cfg.get("name") or agent_config.get(
+            "chat_model_name", "qwen3.5-flash"
+        )
+        return ChatOpenAI(
+            model_name=model_name,
+            max_tokens=int(model_cfg.get("max_tokens", 1024)),
+            streaming=False,
+            extra_body={
+                "enable_thinking": bool(model_cfg.get("enable_thinking", False))
+            },
+        )
 
     def _load_prompt(self, config_key: str, default_path: str) -> PromptTemplate:
         """从配置文件加载 PromptTemplate（带缓存）。"""

@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "material-project": {
-      "enabled": true,
+      "enabled": false,
       "type": "stdio",
-      "command": "python",
+      "command": "{python}",
       "args": ["-m", "mp_material_server"],
       "env": {
         "MP_API_KEY": "$MP_API_KEY"
